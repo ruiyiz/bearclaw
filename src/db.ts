@@ -5,6 +5,7 @@ import path from 'path';
 import { proto } from '@whiskeysockets/baileys';
 
 import { STORE_DIR } from './config.js';
+import { transcribeAudioMessage } from './transcribe.js';
 import { NewMessage, ScheduledTask, TaskRunLog } from './types.js';
 
 let db: Database.Database;
@@ -170,20 +171,34 @@ export function setLastGroupSync(): void {
  * Store a message with full content.
  * Only call this for registered groups where message history is needed.
  */
-export function storeMessage(
+export async function storeMessage(
   msg: proto.IWebMessageInfo,
   chatJid: string,
   isFromMe: boolean,
   pushName?: string,
-): void {
+): Promise<void> {
   if (!msg.key) return;
 
-  const content =
+  let content =
     msg.message?.conversation ||
     msg.message?.extendedTextMessage?.text ||
     msg.message?.imageMessage?.caption ||
     msg.message?.videoMessage?.caption ||
     '';
+
+  // Handle voice messages (PTT = Push-to-Talk)
+  if (!content && msg.message?.audioMessage?.ptt) {
+    try {
+      const transcription = await transcribeAudioMessage(msg);
+      if (transcription) {
+        content = `[Voice message] ${transcription}`;
+      } else {
+        content = '[Voice message - transcription failed]';
+      }
+    } catch (err) {
+      content = '[Voice message - transcription error]';
+    }
+  }
 
   const timestamp = new Date(Number(msg.messageTimestamp) * 1000).toISOString();
   const sender = msg.key.participant || msg.key.remoteJid || '';
