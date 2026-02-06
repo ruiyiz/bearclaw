@@ -183,7 +183,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
   const group = registeredGroups[msg.chat_jid];
   if (!group) return;
 
-  const content = msg.content.trim();
+  let content = msg.content.trim();
   const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
 
   // Main group responds to all messages; other groups check per-group trigger
@@ -194,6 +194,24 @@ async function processMessage(msg: NewMessage): Promise<void> {
       if (!triggerPattern.test(content)) return;
     }
     // Empty trigger means respond to all messages in that group
+  }
+
+  // Handle /new command - clear session and start fresh
+  if (content === '/new' || content.toLowerCase().startsWith('/new ')) {
+    delete sessions[group.folder];
+    saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
+    logger.info({ group: group.name }, 'Session cleared by user');
+
+    // If just "/new" with no follow-up, send confirmation and return
+    const followUp = content.slice(4).trim();
+    if (!followUp) {
+      await sendMessage(msg.chat_jid, `${ASSISTANT_NAME}: Session cleared! Starting fresh. 🧹`);
+      lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
+      saveState();
+      return;
+    }
+    // Otherwise, continue processing with the follow-up text as a new session
+    content = followUp;
   }
 
   // Get all messages since last agent interaction so the session has full context
