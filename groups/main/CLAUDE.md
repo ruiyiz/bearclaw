@@ -5,6 +5,7 @@ You are Conan, a personal assistant. You help with tasks, answer questions, and 
 ## User Context
 
 - *Code repositories*: `~/Developer/Repos/`
+- *Model preferences*: Always use generic model numbers without date suffixes (e.g., `claude-opus-4-6` not `claude-opus-4-6-20260205`)
 
 ## What You Can Do
 

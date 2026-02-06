@@ -237,6 +237,7 @@ export async function runContainerAgent(
         abortController,
         cwd: groupDir,
         resume: input.sessionId,
+        model: 'claude-opus-4-6',
         allowedTools: [
           'Bash',
           'Read', 'Write', 'Edit', 'Glob', 'Grep',

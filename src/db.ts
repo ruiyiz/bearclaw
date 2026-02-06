@@ -5,6 +5,7 @@ import path from 'path';
 import { proto } from '@whiskeysockets/baileys';
 
 import { STORE_DIR } from './config.js';
+import { logger } from './logger.js';
 import { transcribeAudioMessage } from './transcribe.js';
 import { NewMessage, ScheduledTask, TaskRunLog } from './types.js';
 
@@ -192,11 +193,14 @@ export async function storeMessage(
       const transcription = await transcribeAudioMessage(msg);
       if (transcription) {
         content = `[Voice message] ${transcription}`;
+        logger.info({ length: transcription.length }, 'Voice message transcribed');
       } else {
         content = '[Voice message - transcription failed]';
+        logger.warn('Voice transcription returned null');
       }
     } catch (err) {
       content = '[Voice message - transcription error]';
+      logger.error({ err }, 'Voice transcription error');
     }
   }
 

@@ -760,12 +760,28 @@ async function connectWhatsApp(): Promise<void> {
 
       // Only store full message content for registered groups
       if (registeredGroups[chatJid]) {
-        await storeMessage(
-          msg,
-          chatJid,
-          msg.key.fromMe || false,
-          msg.pushName || undefined,
-        );
+        // Filter out protocol/system messages (reactions, receipts, etc.)
+        const hasUserContent =
+          msg.message?.conversation ||
+          msg.message?.extendedTextMessage ||
+          msg.message?.imageMessage ||
+          msg.message?.videoMessage ||
+          msg.message?.audioMessage ||
+          msg.message?.documentMessage ||
+          msg.message?.stickerMessage;
+
+        if (hasUserContent) {
+          await storeMessage(
+            msg,
+            chatJid,
+            msg.key.fromMe || false,
+            msg.pushName || undefined,
+          );
+        } else {
+          // Log filtered message types for debugging
+          const msgTypes = msg.message ? Object.keys(msg.message) : [];
+          logger.debug({ msgTypes }, 'Filtered out non-user message');
+        }
       }
     }
   });
