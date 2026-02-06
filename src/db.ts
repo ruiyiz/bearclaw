@@ -225,22 +225,23 @@ export async function storeMessage(
 export function getNewMessages(
   jids: string[],
   lastTimestamp: string,
-  botPrefix: string,
+  botPrefixes: string[],
 ): { messages: NewMessage[]; newTimestamp: string } {
   if (jids.length === 0) return { messages: [], newTimestamp: lastTimestamp };
 
   const placeholders = jids.map(() => '?').join(',');
   // Filter out bot's own messages by checking content prefix (not is_from_me, since user shares the account)
+  const prefixFilters = botPrefixes.map(() => 'content NOT LIKE ?').join(' AND ');
   const sql = `
     SELECT id, chat_jid, sender, sender_name, content, timestamp
     FROM messages
-    WHERE timestamp > ? AND chat_jid IN (${placeholders}) AND content NOT LIKE ?
+    WHERE timestamp > ? AND chat_jid IN (${placeholders}) AND ${prefixFilters}
     ORDER BY timestamp
   `;
 
   const rows = db
     .prepare(sql)
-    .all(lastTimestamp, ...jids, `${botPrefix}:%`) as NewMessage[];
+    .all(lastTimestamp, ...jids, ...botPrefixes.map(p => `${p}:%`)) as NewMessage[];
 
   let newTimestamp = lastTimestamp;
   for (const row of rows) {
@@ -253,18 +254,19 @@ export function getNewMessages(
 export function getMessagesSince(
   chatJid: string,
   sinceTimestamp: string,
-  botPrefix: string,
+  botPrefixes: string[],
 ): NewMessage[] {
   // Filter out bot's own messages by checking content prefix
+  const prefixFilters = botPrefixes.map(() => 'content NOT LIKE ?').join(' AND ');
   const sql = `
     SELECT id, chat_jid, sender, sender_name, content, timestamp
     FROM messages
-    WHERE chat_jid = ? AND timestamp > ? AND content NOT LIKE ?
+    WHERE chat_jid = ? AND timestamp > ? AND ${prefixFilters}
     ORDER BY timestamp
   `;
   return db
     .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`) as NewMessage[];
+    .all(chatJid, sinceTimestamp, ...botPrefixes.map(p => `${p}:%`)) as NewMessage[];
 }
 
 export function createTask(

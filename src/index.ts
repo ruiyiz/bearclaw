@@ -217,10 +217,13 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   // Get all messages since last agent interaction so the session has full context
   const sinceTimestamp = lastAgentTimestamp[msg.chat_jid] || '';
+  const botPrefixes = DISPLAY_NAME !== ASSISTANT_NAME
+    ? [DISPLAY_NAME, ASSISTANT_NAME]
+    : [ASSISTANT_NAME];
   const missedMessages = getMessagesSince(
     msg.chat_jid,
     sinceTimestamp,
-    DISPLAY_NAME,
+    botPrefixes,
   );
 
   const lines = missedMessages.map((m) => {
@@ -246,10 +249,21 @@ async function processMessage(msg: NewMessage): Promise<void> {
   const response = await runAgent(group, prompt, msg.chat_jid);
   await setTyping(msg.chat_jid, false);
 
-  if (response) {
+  if (response && !isNonResponse(response)) {
     lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
     await sendMessage(msg.chat_jid, `${DISPLAY_NAME}: ${response}`);
   }
+}
+
+function isNonResponse(text: string): boolean {
+  const normalized = text.trim().toLowerCase().replace(/[.\s]+$/g, '');
+  const suppressPatterns = [
+    'no response requested',
+    'no response needed',
+    'no response necessary',
+    'no response required',
+  ];
+  return suppressPatterns.includes(normalized);
 }
 
 async function runAgent(
@@ -817,7 +831,10 @@ async function startMessageLoop(): Promise<void> {
   while (true) {
     try {
       const jids = Object.keys(registeredGroups);
-      const { messages } = getNewMessages(jids, lastTimestamp, DISPLAY_NAME);
+      const botPrefixes = DISPLAY_NAME !== ASSISTANT_NAME
+        ? [DISPLAY_NAME, ASSISTANT_NAME]
+        : [ASSISTANT_NAME];
+      const { messages } = getNewMessages(jids, lastTimestamp, botPrefixes);
 
       if (messages.length > 0)
         logger.info({ count: messages.length }, 'New messages');
