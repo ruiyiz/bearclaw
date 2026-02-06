@@ -203,3 +203,20 @@ When scheduling tasks for other groups, use the `target_group` parameter:
 - `schedule_task(prompt: "...", schedule_type: "cron", schedule_value: "0 9 * * 1", target_group: "family-chat")`
 
 The task will run in that group's context with access to their files and memory.
+
+---
+
+## iMessage Groups
+
+- Sweet Family → chat-id `1` — always append 🐹 to messages
+
+## Clawspace Todos
+
+Check the clawspace list in Apple Reminders (`remindctl list Clawspace --json`).
+
+If there's an incomplete todo:
+1. Pick one to work on
+2. Ping Mike with the task and ask clarifying questions
+3. Run an interactive design session to flesh out requirements before executing
+4. Save design notes in reminders for future reference
+5. Don't start work until the design is agreed upon
