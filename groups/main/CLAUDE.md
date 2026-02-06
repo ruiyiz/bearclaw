@@ -180,6 +180,12 @@ Read `/workspace/project/data/registered_groups.json` and format it nicely.
 
 ---
 
+## Email Channel
+
+Emails sent to `ruiyizhang+conan@gmail.com` are automatically processed by the email channel under `groups/email/`. Each email thread gets its own session. The email channel polls every hour.
+
+---
+
 ## Global Memory
 
 You can read and write to `/workspace/project/groups/global/CLAUDE.md` for facts that should apply to all groups. Only update global memory when explicitly asked to "remember this globally" or similar.

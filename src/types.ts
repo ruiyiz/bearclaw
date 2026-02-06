@@ -38,6 +38,15 @@ export interface ScheduledTask {
   created_at: string;
 }
 
+export interface EmailMessage {
+  id: string;
+  threadId: string;
+  from: string;
+  subject: string;
+  body: string;
+  date: string;
+}
+
 export interface TaskRunLog {
   task_id: string;
   run_at: string;
