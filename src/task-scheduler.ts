@@ -9,7 +9,7 @@ import {
   SCHEDULER_POLL_INTERVAL,
   TIMEZONE,
 } from './config.js';
-import { runContainerAgent, writeTasksSnapshot } from './container-runner.js';
+import { runContainerAgent, writeTasksSnapshot } from './agent-runner.js';
 import {
   getAllTasks,
   getDueTasks,

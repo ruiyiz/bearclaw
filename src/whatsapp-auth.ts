@@ -66,8 +66,14 @@ async function authenticate(): Promise<void> {
         console.log('\n✗ Logged out. Delete store/auth and try again.');
         process.exit(1);
       } else {
-        console.log('\n✗ Connection failed. Please try again.');
-        process.exit(1);
+        // Transient error (e.g. 515 stream error) — retry after brief delay
+        console.log('\n⟳ Connection interrupted, retrying in 2s...\n');
+        setTimeout(() => {
+          authenticate().catch((err) => {
+            console.error('Authentication failed:', err.message);
+            process.exit(1);
+          });
+        }, 2000);
       }
     }
 

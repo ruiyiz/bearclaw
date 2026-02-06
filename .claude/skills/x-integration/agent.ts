@@ -1,23 +1,15 @@
 /**
- * X Integration - MCP Tool Definitions (Agent/Container Side)
+ * X Integration - MCP Tool Definitions (Agent Side)
  *
- * These tools run inside the container and communicate with the host via IPC.
+ * These tools run in-process and communicate with the host via IPC.
  * The host-side implementation is in host.ts.
- *
- * Note: This file is compiled in the container, not on the host.
- * The @ts-ignore is needed because the SDK is only available in the container.
  */
 
-// @ts-ignore - SDK available in container environment only
+// @ts-ignore - SDK available in agent environment only
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
-
-// IPC directories (inside container)
-const IPC_DIR = '/workspace/ipc';
-const TASKS_DIR = path.join(IPC_DIR, 'tasks');
-const RESULTS_DIR = path.join(IPC_DIR, 'x_results');
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -29,8 +21,8 @@ function writeIpcFile(dir: string, data: object): string {
   return filename;
 }
 
-async function waitForResult(requestId: string, maxWait = 60000): Promise<{ success: boolean; message: string }> {
-  const resultFile = path.join(RESULTS_DIR, `${requestId}.json`);
+async function waitForResult(resultsDir: string, requestId: string, maxWait = 60000): Promise<{ success: boolean; message: string }> {
+  const resultFile = path.join(resultsDir, `${requestId}.json`);
   const pollInterval = 1000;
   let elapsed = 0;
 
@@ -54,13 +46,16 @@ async function waitForResult(requestId: string, maxWait = 60000): Promise<{ succ
 export interface SkillToolsContext {
   groupFolder: string;
   isMain: boolean;
+  ipcDir: string;
 }
 
 /**
  * Create X integration MCP tools
  */
 export function createXTools(ctx: SkillToolsContext) {
-  const { groupFolder, isMain } = ctx;
+  const { groupFolder, isMain, ipcDir } = ctx;
+  const tasksDir = path.join(ipcDir, 'tasks');
+  const resultsDir = path.join(ipcDir, 'x_results');
 
   return [
     tool(
@@ -88,7 +83,7 @@ Make sure the content is appropriate and within X's character limit (280 chars f
         }
 
         const requestId = `xpost-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeIpcFile(TASKS_DIR, {
+        writeIpcFile(tasksDir, {
           type: 'x_post',
           requestId,
           content: args.content,
@@ -96,7 +91,7 @@ Make sure the content is appropriate and within X's character limit (280 chars f
           timestamp: new Date().toISOString()
         });
 
-        const result = await waitForResult(requestId);
+        const result = await waitForResult(resultsDir, requestId);
         return {
           content: [{ type: 'text', text: result.message }],
           isError: !result.success
@@ -121,7 +116,7 @@ Provide the tweet URL or tweet ID to like.`,
         }
 
         const requestId = `xlike-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeIpcFile(TASKS_DIR, {
+        writeIpcFile(tasksDir, {
           type: 'x_like',
           requestId,
           tweetUrl: args.tweet_url,
@@ -129,7 +124,7 @@ Provide the tweet URL or tweet ID to like.`,
           timestamp: new Date().toISOString()
         });
 
-        const result = await waitForResult(requestId);
+        const result = await waitForResult(resultsDir, requestId);
         return {
           content: [{ type: 'text', text: result.message }],
           isError: !result.success
@@ -155,7 +150,7 @@ Provide the tweet URL and your reply content.`,
         }
 
         const requestId = `xreply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeIpcFile(TASKS_DIR, {
+        writeIpcFile(tasksDir, {
           type: 'x_reply',
           requestId,
           tweetUrl: args.tweet_url,
@@ -164,7 +159,7 @@ Provide the tweet URL and your reply content.`,
           timestamp: new Date().toISOString()
         });
 
-        const result = await waitForResult(requestId);
+        const result = await waitForResult(resultsDir, requestId);
         return {
           content: [{ type: 'text', text: result.message }],
           isError: !result.success
@@ -189,7 +184,7 @@ Provide the tweet URL to retweet.`,
         }
 
         const requestId = `xretweet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeIpcFile(TASKS_DIR, {
+        writeIpcFile(tasksDir, {
           type: 'x_retweet',
           requestId,
           tweetUrl: args.tweet_url,
@@ -197,7 +192,7 @@ Provide the tweet URL to retweet.`,
           timestamp: new Date().toISOString()
         });
 
-        const result = await waitForResult(requestId);
+        const result = await waitForResult(resultsDir, requestId);
         return {
           content: [{ type: 'text', text: result.message }],
           isError: !result.success
@@ -223,7 +218,7 @@ Retweet with your own comment added.`,
         }
 
         const requestId = `xquote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeIpcFile(TASKS_DIR, {
+        writeIpcFile(tasksDir, {
           type: 'x_quote',
           requestId,
           tweetUrl: args.tweet_url,
@@ -232,7 +227,7 @@ Retweet with your own comment added.`,
           timestamp: new Date().toISOString()
         });
 
-        const result = await waitForResult(requestId);
+        const result = await waitForResult(resultsDir, requestId);
         return {
           content: [{ type: 'text', text: result.message }],
           isError: !result.success

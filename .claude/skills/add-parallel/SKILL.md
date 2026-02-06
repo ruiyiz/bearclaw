@@ -6,14 +6,13 @@ Adds Parallel AI MCP integration to NanoClaw for advanced web research capabilit
 
 - **Quick Search** - Fast web lookups using Parallel Search API (free to use)
 - **Deep Research** - Comprehensive analysis using Parallel Task API (asks permission)
-- **Non-blocking Design** - Uses NanoClaw scheduler for result polling (no container blocking)
+- **Non-blocking Design** - Uses NanoClaw scheduler for result polling
 
 ## Prerequisites
 
 User must have:
 1. Parallel AI API key from https://platform.parallel.ai
 2. NanoClaw already set up and running
-3. Container system working (Apple Container or Docker)
 
 ## Implementation Steps
 
@@ -63,25 +62,17 @@ Verify:
 grep "PARALLEL_API_KEY" .env | head -c 50
 ```
 
-### 3. Update Container Runner
+### 3. Environment Variable Access
 
-Add `PARALLEL_API_KEY` to allowed environment variables in `src/container-runner.ts`:
+Environment variables from `.env` are available directly via `process.env` at runtime. No additional filtering or allowlisting is needed -- the agent process inherits the full host environment.
 
-Find the line:
-```typescript
-const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
-```
-
-Replace with:
-```typescript
-const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'PARALLEL_API_KEY'];
-```
+Verify `.env` is loaded at startup by checking `src/index.ts` for a `dotenv` or similar import.
 
 ### 4. Configure MCP Servers in Agent Runner
 
-Update `container/agent-runner/src/index.ts`:
+Update `src/agent-runner.ts`:
 
-Find the section where `mcpServers` is configured (around line 237-252):
+Find the section where `mcpServers` is configured:
 ```typescript
 const mcpServers: Record<string, any> = {
   nanoclaw: ipcMcp
@@ -105,7 +96,7 @@ if (parallelApiKey) {
     }
   };
   mcpServers['parallel-task'] = {
-    type: 'http',  // REQUIRED: Must specify type for HTTP MCP servers  
+    type: 'http',  // REQUIRED: Must specify type for HTTP MCP servers
     url: 'https://task-mcp.parallel.ai/mcp',
     headers: {
       'Authorization': `Bearer ${parallelApiKey}`
@@ -117,7 +108,7 @@ if (parallelApiKey) {
 }
 ```
 
-Also update the `allowedTools` array to include Parallel MCP tools (around line 242-248):
+Also update the `allowedTools` array to include Parallel MCP tools:
 ```typescript
 allowedTools: [
   'Bash',
@@ -216,27 +207,9 @@ I can do deep research on [topic] using Parallel's Task API. This will take
 **Default behavior:** Prefer search for most questions. Only suggest deep research when the topic genuinely requires comprehensive analysis.
 ```
 
-### 6. Rebuild Container
+### 6. Rebuild and Restart
 
-Build the container with updated agent runner:
-
-```bash
-./container/build.sh
-```
-
-The build script will automatically:
-- Try Apple Container first
-- Fall back to Docker if Rosetta is required
-- Import to Apple Container
-
-Verify the build:
-```bash
-echo '{}' | container run -i --entrypoint /bin/echo nanoclaw-agent:latest "Container OK"
-```
-
-### 7. Restart Service
-
-Rebuild the main app and restart:
+Build the main app and restart:
 
 ```bash
 npm run build
@@ -249,7 +222,7 @@ sleep 3
 launchctl list | grep nanoclaw
 ```
 
-### 8. Test Integration
+### 7. Test Integration
 
 Tell the user to test:
 > Send a message to your assistant: `@[YourAssistantName] what's the latest news about AI?`
@@ -269,15 +242,15 @@ Look for: `Parallel AI MCP servers configured`
 
 ## Troubleshooting
 
-**Container hangs or times out:**
+**Agent hangs or times out:**
 - Check that `type: 'http'` is specified in MCP server config
 - Verify API key is correct in .env
-- Check container logs: `cat groups/main/logs/container-*.log | tail -50`
+- Check logs: `tail -50 logs/nanoclaw.log`
 
 **MCP servers not loading:**
 - Ensure PARALLEL_API_KEY is in .env
-- Verify container-runner.ts includes PARALLEL_API_KEY in allowedVars
-- Check agent-runner logs for "Parallel AI MCP servers configured" message
+- Verify `.env` is loaded at startup (check for dotenv import in `src/index.ts`)
+- Check logs for "Parallel AI MCP servers configured" message
 
 **Task polling not working:**
 - Verify scheduled task was created: `sqlite3 store/messages.db "SELECT * FROM scheduled_tasks"`
@@ -289,7 +262,7 @@ Look for: `Parallel AI MCP servers configured`
 To remove Parallel AI integration:
 
 1. Remove from .env: `sed -i.bak '/PARALLEL_API_KEY/d' .env`
-2. Revert changes to container-runner.ts and agent-runner/src/index.ts
+2. Revert changes to `src/agent-runner.ts` (remove Parallel MCP server config and allowedTools entries)
 3. Remove Web Research Tools section from groups/main/CLAUDE.md
-4. Rebuild: `./container/build.sh && npm run build`
+4. Rebuild: `npm run build`
 5. Restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`

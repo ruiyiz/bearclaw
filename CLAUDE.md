@@ -4,7 +4,7 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 ## Quick Context
 
-Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running in Apple Container (Linux VMs). Each group has isolated filesystem and memory.
+Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running directly on the host. Each group has its own working directory and memory.
 
 ## Key Files
 
@@ -12,7 +12,9 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 |------|---------|
 | `src/index.ts` | Main app: WhatsApp connection, message routing, IPC |
 | `src/config.ts` | Trigger pattern, paths, intervals |
-| `src/container-runner.ts` | Spawns agent containers with mounts |
+| `src/agent-runner.ts` | Runs Claude Agent SDK in-process |
+| `src/ipc-mcp.ts` | MCP tools for agent ↔ host communication |
+| `src/email-channel.ts` | Gmail email polling and processing |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
@@ -23,7 +25,7 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 |-------|-------------|
 | `/setup` | First-time installation, authentication, service configuration |
 | `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Container issues, logs, troubleshooting |
+| `/debug` | Agent issues, logs, troubleshooting |
 
 ## Development
 
@@ -32,7 +34,6 @@ Run commands directly—don't tell the user to run them.
 ```bash
 npm run dev          # Run with hot reload
 npm run build        # Compile TypeScript
-./container/build.sh # Rebuild agent container
 ```
 
 Service management:

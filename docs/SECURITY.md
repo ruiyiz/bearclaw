@@ -6,114 +6,79 @@
 |--------|-------------|-----------|
 | Main group | Trusted | Private self-chat, admin control |
 | Non-main groups | Untrusted | Other users may be malicious |
-| Container agents | Sandboxed | Isolated execution environment |
+| Agent execution | Host process | Runs directly on host, has filesystem access |
 | WhatsApp messages | User input | Potential prompt injection |
 
 ## Security Boundaries
 
-### 1. Container Isolation (Primary Boundary)
+### 1. Session Isolation
 
-Agents execute in Apple Container (lightweight Linux VMs), providing:
-- **Process isolation** - Container processes cannot affect the host
-- **Filesystem isolation** - Only explicitly mounted directories are visible
-- **Non-root execution** - Runs as unprivileged `node` user (uid 1000)
-- **Ephemeral containers** - Fresh environment per invocation (`--rm`)
+Each group runs with its own working directory (`groups/{folder}/`) and conversation session:
+- **Working directory isolation** - Agent's `cwd` is set to the group's folder
+- **Session isolation** - Each group has its own session ID in `data/sessions.json`
+- **Memory isolation** - Each group has its own `CLAUDE.md`
 
-This is the primary security boundary. Rather than relying on application-level permission checks, the attack surface is limited by what's mounted.
+**Important:** This is application-level isolation, not OS-level. Agents running on the host have full filesystem access. A determined prompt injection could access files outside the group folder.
 
-### 2. Mount Security
-
-**External Allowlist** - Mount permissions stored at `~/.config/nanoclaw/mount-allowlist.json`, which is:
-- Outside project root
-- Never mounted into containers
-- Cannot be modified by agents
-
-**Default Blocked Patterns:**
-```
-.ssh, .gnupg, .aws, .azure, .gcloud, .kube, .docker,
-credentials, .env, .netrc, .npmrc, id_rsa, id_ed25519,
-private_key, .secret
-```
-
-**Protections:**
-- Symlink resolution before validation (prevents traversal attacks)
-- Container path validation (rejects `..` and absolute paths)
-- `nonMainReadOnly` option forces read-only for non-main groups
-
-### 3. Session Isolation
-
-Each group has isolated Claude sessions at `data/sessions/{group}/.claude/`:
-- Groups cannot see other groups' conversation history
-- Session data includes full message history and file contents read
-- Prevents cross-group information disclosure
-
-### 4. IPC Authorization
+### 2. IPC Authorization
 
 Messages and task operations are verified against group identity:
 
 | Operation | Main Group | Non-Main Group |
 |-----------|------------|----------------|
-| Send message to own chat | ✓ | ✓ |
-| Send message to other chats | ✓ | ✗ |
-| Schedule task for self | ✓ | ✓ |
-| Schedule task for others | ✓ | ✗ |
-| View all tasks | ✓ | Own only |
-| Manage other groups | ✓ | ✗ |
+| Send message to own chat | Yes | Yes |
+| Send message to other chats | Yes | No |
+| Schedule task for self | Yes | Yes |
+| Schedule task for others | Yes | No |
+| View all tasks | Yes | Own only |
+| Manage other groups | Yes | No |
 
-### 5. Credential Handling
+### 3. Credential Handling
 
-**Mounted Credentials:**
-- Claude auth tokens (filtered from `.env`, read-only)
+**Environment Variables:**
+On bare metal, `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` are available directly via `process.env` from the `.env` file. The agent process inherits the host environment.
 
-**NOT Mounted:**
-- WhatsApp session (`store/auth/`) - host only
-- Mount allowlist - external, never mounted
-- Any credentials matching blocked patterns
-
-**Credential Filtering:**
-Only these environment variables are exposed to containers:
-```typescript
-const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
-```
-
-> **Note:** Anthropic credentials are mounted so that Claude Code can authenticate when the agent runs. However, this means the agent itself can discover these credentials via Bash or file operations. Ideally, Claude Code would authenticate without exposing credentials to the agent's execution environment, but I couldn't figure this out. **PRs welcome** if you have ideas for credential isolation.
+> **Note:** Since agents run in-process, they can discover credentials via Bash or file operations. This is a trade-off of the bare metal approach.
 
 ## Privilege Comparison
 
 | Capability | Main Group | Non-Main Group |
 |------------|------------|----------------|
-| Project root access | `/workspace/project` (rw) | None |
-| Group folder | `/workspace/group` (rw) | `/workspace/group` (rw) |
-| Global memory | Implicit via project | `/workspace/global` (ro) |
-| Additional mounts | Configurable | Read-only unless allowed |
+| Project root access | Full (cwd is group folder, but host fs accessible) | Full (host fs accessible) |
+| Group folder | `groups/{folder}/` (cwd) | `groups/{folder}/` (cwd) |
+| Global memory | Read/write via parent CLAUDE.md | Read via parent CLAUDE.md |
 | Network access | Unrestricted | Unrestricted |
 | MCP tools | All | All |
 
 ## Security Architecture Diagram
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        UNTRUSTED ZONE                             │
-│  WhatsApp Messages (potentially malicious)                        │
-└────────────────────────────────┬─────────────────────────────────┘
-                                 │
-                                 ▼ Trigger check, input escaping
-┌──────────────────────────────────────────────────────────────────┐
-│                     HOST PROCESS (TRUSTED)                        │
-│  • Message routing                                                │
-│  • IPC authorization                                              │
-│  • Mount validation (external allowlist)                          │
-│  • Container lifecycle                                            │
-│  • Credential filtering                                           │
-└────────────────────────────────┬─────────────────────────────────┘
-                                 │
-                                 ▼ Explicit mounts only
-┌──────────────────────────────────────────────────────────────────┐
-│                CONTAINER (ISOLATED/SANDBOXED)                     │
-│  • Agent execution                                                │
-│  • Bash commands (sandboxed)                                      │
-│  • File operations (limited to mounts)                            │
-│  • Network access (unrestricted)                                  │
-│  • Cannot modify security config                                  │
-└──────────────────────────────────────────────────────────────────┘
++------------------------------------------------------------------+
+|                        UNTRUSTED ZONE                             |
+|  WhatsApp Messages (potentially malicious)                        |
++--------------------------------+---------------------------------+
+                                 |
+                                 v  Trigger check, input escaping
++------------------------------------------------------------------+
+|                     HOST PROCESS (TRUSTED)                        |
+|  * Message routing                                                |
+|  * IPC authorization                                              |
+|  * Credential handling via .env                                   |
+|                                                                   |
+|  +------------------------------------------------------------+  |
+|  |                  AGENT (IN-PROCESS)                          |  |
+|  |  * Claude Agent SDK query()                                  |  |
+|  |  * cwd: groups/{folder}/                                     |  |
+|  |  * Bash commands (runs on host!)                             |  |
+|  |  * File operations (host filesystem access)                  |  |
+|  |  * Network access (unrestricted)                             |  |
+|  +------------------------------------------------------------+  |
++------------------------------------------------------------------+
 ```
+
+## Recommendations
+
+- Only register trusted groups
+- Review scheduled tasks periodically
+- Monitor logs for unusual activity
+- For stronger isolation, consider running NanoClaw itself inside a container or VM

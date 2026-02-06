@@ -1,14 +1,21 @@
 /**
- * NanoClaw Agent Runner
- * Runs inside a container, receives config via stdin, outputs result to stdout
+ * Agent Runner for NanoClaw
+ * Runs Claude Agent SDK directly in-process (no containers)
  */
-
 import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
-import { createIpcMcp } from './ipc-mcp.js';
 
-interface ContainerInput {
+import {
+  AGENT_TIMEOUT,
+  DATA_DIR,
+  GROUPS_DIR,
+} from './config.js';
+import { createIpcMcp } from './ipc-mcp.js';
+import { logger } from './logger.js';
+import { RegisteredGroup } from './types.js';
+
+export interface ContainerInput {
   prompt: string;
   sessionId?: string;
   groupFolder: string;
@@ -17,7 +24,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
 }
 
-interface ContainerOutput {
+export interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
@@ -35,36 +42,11 @@ interface SessionsIndex {
   entries: SessionEntry[];
 }
 
-async function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', chunk => { data += chunk; });
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', reject);
-  });
-}
-
-const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
-const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
-
-function writeOutput(output: ContainerOutput): void {
-  console.log(OUTPUT_START_MARKER);
-  console.log(JSON.stringify(output));
-  console.log(OUTPUT_END_MARKER);
-}
-
-function log(message: string): void {
-  console.error(`[agent-runner] ${message}`);
-}
-
 function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
-  // sessions-index.json is in the same directory as the transcript
   const projectDir = path.dirname(transcriptPath);
   const indexPath = path.join(projectDir, 'sessions-index.json');
 
   if (!fs.existsSync(indexPath)) {
-    log(`Sessions index not found at ${indexPath}`);
     return null;
   }
 
@@ -75,23 +57,20 @@ function getSessionSummary(sessionId: string, transcriptPath: string): string | 
       return entry.summary;
     }
   } catch (err) {
-    log(`Failed to read sessions index: ${err instanceof Error ? err.message : String(err)}`);
+    logger.debug({ err }, 'Failed to read sessions index');
   }
 
   return null;
 }
 
-/**
- * Archive the full transcript to conversations/ before compaction.
- */
-function createPreCompactHook(): HookCallback {
+function createPreCompactHook(groupDir: string): HookCallback {
   return async (input, _toolUseId, _context) => {
     const preCompact = input as PreCompactHookInput;
     const transcriptPath = preCompact.transcript_path;
     const sessionId = preCompact.session_id;
 
     if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-      log('No transcript found for archiving');
+      logger.debug('No transcript found for archiving');
       return {};
     }
 
@@ -100,14 +79,14 @@ function createPreCompactHook(): HookCallback {
       const messages = parseTranscript(content);
 
       if (messages.length === 0) {
-        log('No messages to archive');
+        logger.debug('No messages to archive');
         return {};
       }
 
       const summary = getSessionSummary(sessionId, transcriptPath);
       const name = summary ? sanitizeFilename(summary) : generateFallbackName();
 
-      const conversationsDir = '/workspace/group/conversations';
+      const conversationsDir = path.join(groupDir, 'conversations');
       fs.mkdirSync(conversationsDir, { recursive: true });
 
       const date = new Date().toISOString().split('T')[0];
@@ -117,9 +96,9 @@ function createPreCompactHook(): HookCallback {
       const markdown = formatTranscriptMarkdown(messages, summary);
       fs.writeFileSync(filePath, markdown);
 
-      log(`Archived conversation to ${filePath}`);
+      logger.debug({ filePath }, 'Archived conversation');
     } catch (err) {
-      log(`Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`);
+      logger.error({ err }, 'Failed to archive transcript');
     }
 
     return {};
@@ -200,26 +179,36 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
   return lines.join('\n');
 }
 
-async function main(): Promise<void> {
-  let input: ContainerInput;
+export async function runContainerAgent(
+  group: RegisteredGroup,
+  input: ContainerInput,
+): Promise<ContainerOutput> {
+  const startTime = Date.now();
 
-  try {
-    const stdinData = await readStdin();
-    input = JSON.parse(stdinData);
-    log(`Received input for group: ${input.groupFolder}`);
-  } catch (err) {
-    writeOutput({
-      status: 'error',
-      result: null,
-      error: `Failed to parse input: ${err instanceof Error ? err.message : String(err)}`
-    });
-    process.exit(1);
-  }
+  const groupDir = path.join(GROUPS_DIR, group.folder);
+  fs.mkdirSync(groupDir, { recursive: true });
+
+  const logsDir = path.join(groupDir, 'logs');
+  fs.mkdirSync(logsDir, { recursive: true });
+
+  // Set up per-group IPC namespace
+  const groupIpcDir = path.join(DATA_DIR, 'ipc', group.folder);
+  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
+
+  logger.info(
+    {
+      group: group.name,
+      isMain: input.isMain,
+    },
+    'Running agent',
+  );
 
   const ipcMcp = createIpcMcp({
     chatJid: input.chatJid,
     groupFolder: input.groupFolder,
-    isMain: input.isMain
+    isMain: input.isMain,
+    ipcDir: groupIpcDir,
   });
 
   let result: string | null = null;
@@ -231,13 +220,22 @@ async function main(): Promise<void> {
     prompt = `[SCHEDULED TASK - You are running automatically, not in response to a user message. Use mcp__nanoclaw__send_message if needed to communicate with the user.]\n\n${input.prompt}`;
   }
 
+  // Timeout via AbortController
+  const abortController = new AbortController();
+  const timeout = group.containerConfig?.timeout || AGENT_TIMEOUT;
+  const timeoutHandle = setTimeout(() => {
+    logger.error({ group: group.name }, `Agent timeout after ${timeout}ms, aborting`);
+    abortController.abort();
+  }, timeout);
+
   try {
-    log('Starting agent...');
+    logger.debug({ group: group.name }, 'Starting agent...');
 
     for await (const message of query({
       prompt,
       options: {
-        cwd: '/workspace/group',
+        abortController,
+        cwd: groupDir,
         resume: input.sessionId,
         allowedTools: [
           'Bash',
@@ -252,13 +250,13 @@ async function main(): Promise<void> {
           nanoclaw: ipcMcp
         },
         hooks: {
-          PreCompact: [{ hooks: [createPreCompactHook()] }]
+          PreCompact: [{ hooks: [createPreCompactHook(groupDir)] }]
         }
       }
     })) {
       if (message.type === 'system' && message.subtype === 'init') {
         newSessionId = message.session_id;
-        log(`Session initialized: ${newSessionId}`);
+        logger.debug({ sessionId: newSessionId, group: group.name }, 'Session initialized');
       }
 
       if ('result' in message && message.result) {
@@ -266,24 +264,137 @@ async function main(): Promise<void> {
       }
     }
 
-    log('Agent completed successfully');
-    writeOutput({
+    clearTimeout(timeoutHandle);
+
+    const duration = Date.now() - startTime;
+    logger.info(
+      {
+        group: group.name,
+        duration,
+        status: 'success',
+        hasResult: !!result,
+      },
+      'Agent completed',
+    );
+
+    // Write log file
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const logFile = path.join(logsDir, `agent-${timestamp}.log`);
+    const isVerbose = process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
+
+    const logLines = [
+      `=== Agent Run Log ===`,
+      `Timestamp: ${new Date().toISOString()}`,
+      `Group: ${group.name}`,
+      `IsMain: ${input.isMain}`,
+      `Duration: ${duration}ms`,
+      `Status: success`,
+      ``,
+    ];
+
+    if (isVerbose) {
+      logLines.push(
+        `=== Input ===`,
+        `Prompt length: ${input.prompt.length} chars`,
+        `Session ID: ${input.sessionId || 'new'}`,
+        `New Session ID: ${newSessionId || 'N/A'}`,
+        ``,
+      );
+    }
+
+    fs.writeFileSync(logFile, logLines.join('\n'));
+
+    return {
       status: 'success',
       result,
-      newSessionId
-    });
+      newSessionId,
+    };
 
   } catch (err) {
+    clearTimeout(timeoutHandle);
+
+    const duration = Date.now() - startTime;
     const errorMessage = err instanceof Error ? err.message : String(err);
-    log(`Agent error: ${errorMessage}`);
-    writeOutput({
+
+    logger.error(
+      { group: group.name, duration, error: errorMessage },
+      'Agent error',
+    );
+
+    // Write error log
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const logFile = path.join(logsDir, `agent-${timestamp}.log`);
+    fs.writeFileSync(logFile, [
+      `=== Agent Run Log ===`,
+      `Timestamp: ${new Date().toISOString()}`,
+      `Group: ${group.name}`,
+      `IsMain: ${input.isMain}`,
+      `Duration: ${duration}ms`,
+      `Status: error`,
+      `Error: ${errorMessage}`,
+    ].join('\n'));
+
+    return {
       status: 'error',
       result: null,
       newSessionId,
-      error: errorMessage
-    });
-    process.exit(1);
+      error: errorMessage,
+    };
   }
 }
 
-main();
+export function writeTasksSnapshot(
+  groupFolder: string,
+  isMain: boolean,
+  tasks: Array<{
+    id: string;
+    groupFolder: string;
+    prompt: string;
+    schedule_type: string;
+    schedule_value: string;
+    status: string;
+    next_run: string | null;
+  }>,
+): void {
+  const groupIpcDir = path.join(DATA_DIR, 'ipc', groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  const filteredTasks = isMain
+    ? tasks
+    : tasks.filter((t) => t.groupFolder === groupFolder);
+
+  const tasksFile = path.join(groupIpcDir, 'current_tasks.json');
+  fs.writeFileSync(tasksFile, JSON.stringify(filteredTasks, null, 2));
+}
+
+export interface AvailableGroup {
+  jid: string;
+  name: string;
+  lastActivity: string;
+  isRegistered: boolean;
+}
+
+export function writeGroupsSnapshot(
+  groupFolder: string,
+  isMain: boolean,
+  groups: AvailableGroup[],
+  registeredJids: Set<string>,
+): void {
+  const groupIpcDir = path.join(DATA_DIR, 'ipc', groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  const visibleGroups = isMain ? groups : [];
+
+  const groupsFile = path.join(groupIpcDir, 'available_groups.json');
+  fs.writeFileSync(
+    groupsFile,
+    JSON.stringify(
+      {
+        groups: visibleGroups,
+        lastSync: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  );
+}

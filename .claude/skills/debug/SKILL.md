@@ -1,39 +1,45 @@
 ---
 name: debug
-description: Debug container agent issues. Use when things aren't working, container fails, authentication problems, or to understand how the container system works. Covers logs, environment variables, mounts, and common issues.
+description: Debug agent issues. Use when things aren't working, agent fails, authentication problems, or to understand how the in-process agent system works. Covers logs, environment variables, sessions, and common issues.
 ---
 
-# NanoClaw Container Debugging
+# NanoClaw Agent Debugging
 
-This guide covers debugging the containerized agent execution system.
+This guide covers debugging the in-process agent execution system. Agents run directly via the Claude Agent SDK `query()` function within the NanoClaw Node.js process -- there are no containers, VMs, or Docker involved.
 
 ## Architecture Overview
 
 ```
-Host (macOS)                          Container (Linux VM)
-─────────────────────────────────────────────────────────────
-src/container-runner.ts               container/agent-runner/
-    │                                      │
-    │ spawns Apple Container               │ runs Claude Agent SDK
-    │ with volume mounts                   │ with MCP servers
-    │                                      │
-    ├── data/env/env ──────────────> /workspace/env-dir/env
-    ├── groups/{folder} ───────────> /workspace/group
-    ├── data/ipc/{folder} ────────> /workspace/ipc
-    ├── data/sessions/{folder}/.claude/ ──> /home/node/.claude/ (isolated per-group)
-    └── (main only) project root ──> /workspace/project
+Host (macOS) - Single Node.js Process
+───────────────────────────────────────────────────
+src/index.ts                    src/agent-runner.ts
+    │                                │
+    │ routes WhatsApp messages       │ calls query() from
+    │ to agent-runner                │ @anthropic-ai/claude-agent-sdk
+    │                                │
+    │                                ├── cwd: groups/{folder}/
+    │                                ├── resume: sessionId (per-group)
+    │                                ├── permissionMode: 'bypassPermissions'
+    │                                ├── settingSources: ['project']
+    │                                ├── mcpServers: { nanoclaw: ipcMcp }
+    │                                └── allowedTools: [Bash, Read, Write, ...]
+    │
+    ├── groups/{folder}/          Agent working directory (cwd)
+    ├── data/ipc/{folder}/        IPC files (messages, tasks)
+    ├── data/sessions/{folder}/   Session data (per-group isolation)
+    └── .env                      Auth tokens (process.env)
 ```
 
-**Important:** The container runs as user `node` with `HOME=/home/node`. Session files must be mounted to `/home/node/.claude/` (not `/root/.claude/`) for session resumption to work.
+**Key point:** The agent runs in the same Node.js process as the host. Environment variables from `.env` are available directly via `process.env`. No volume mounts, no container runtimes, no user mapping.
 
 ## Log Locations
 
 | Log | Location | Content |
 |-----|----------|---------|
-| **Main app logs** | `logs/nanoclaw.log` | Host-side WhatsApp, routing, container spawning |
-| **Main app errors** | `logs/nanoclaw.error.log` | Host-side errors |
-| **Container run logs** | `groups/{folder}/logs/container-*.log` | Per-run: input, mounts, stderr, stdout |
-| **Claude sessions** | `~/.claude/projects/` | Claude Code session history |
+| **Main app logs** | `logs/nanoclaw.log` | WhatsApp connection, routing, agent spawning |
+| **Main app errors** | `logs/nanoclaw.error.log` | Application errors |
+| **Agent run logs** | `groups/{folder}/logs/agent-*.log` | Per-run: group, duration, status, errors |
+| **Claude sessions** | `data/sessions/{group}/.claude/projects/` | Claude Agent SDK session history |
 
 ## Enabling Debug Logging
 
@@ -49,160 +55,146 @@ LOG_LEVEL=debug npm run dev
 ```
 
 Debug level shows:
-- Full mount configurations
-- Container command arguments
-- Real-time container stderr
+- Agent start/complete lifecycle events
+- Session initialization and IDs
+- Input prompt lengths and session resumption details
 
 ## Common Issues
 
-### 1. "Claude Code process exited with code 1"
+### 1. Agent Errors or Unexpected Exits
 
-**Check the container log file** in `groups/{folder}/logs/container-*.log`
+**Check the agent log file** in `groups/{folder}/logs/agent-*.log`
 
 Common causes:
 
 #### Missing Authentication
 ```
-Invalid API key · Please run /login
+Invalid API key
 ```
-**Fix:** Ensure `.env` file exists with either OAuth token or API key:
+**Fix:** Ensure `.env` file exists in the project root with either OAuth token or API key:
 ```bash
 cat .env  # Should show one of:
 # CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  (subscription)
 # ANTHROPIC_API_KEY=sk-ant-api03-...        (pay-per-use)
 ```
 
-#### Root User Restriction
+#### SDK Import or Version Mismatch
 ```
---dangerously-skip-permissions cannot be used with root/sudo privileges
+Cannot find module '@anthropic-ai/claude-agent-sdk'
 ```
-**Fix:** Container must run as non-root user. Check Dockerfile has `USER node`.
-
-### 2. Environment Variables Not Passing
-
-**Apple Container Bug:** Environment variables passed via `-e` are lost when using `-i` (interactive/piped stdin).
-
-**Workaround:** The system extracts only authentication variables (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`) from `.env` and mounts them for sourcing inside the container. Other env vars are not exposed.
-
-To verify env vars are reaching the container:
+**Fix:** Reinstall dependencies:
 ```bash
-echo '{}' | container run -i \
-  --mount type=bind,source=$(pwd)/data/env,target=/workspace/env-dir,readonly \
-  --entrypoint /bin/bash nanoclaw-agent:latest \
-  -c 'export $(cat /workspace/env-dir/env | xargs); echo "OAuth: ${#CLAUDE_CODE_OAUTH_TOKEN} chars, API: ${#ANTHROPIC_API_KEY} chars"'
+npm install
 ```
 
-### 3. Mount Issues
+### 2. Agent Timeout
 
-**Apple Container quirks:**
-- Only mounts directories, not individual files
-- `-v` syntax does NOT support `:ro` suffix - use `--mount` for readonly:
-  ```bash
-  # Readonly: use --mount
-  --mount "type=bind,source=/path,target=/container/path,readonly"
+The agent has a configurable timeout (default 300 seconds / 5 minutes). If a query takes too long, it will be aborted.
 
-  # Read-write: use -v
-  -v /path:/container/path
-  ```
+**Check logs for:**
+```
+Agent timeout after 300000ms, aborting
+```
 
-To check what's mounted inside a container:
+**Fix:** Increase timeout via environment variable:
 ```bash
-container run --rm --entrypoint /bin/bash nanoclaw-agent:latest -c 'ls -la /workspace/'
+AGENT_TIMEOUT=600000 npm run dev  # 10 minutes
 ```
 
-Expected structure:
+Or set it in `.env`:
 ```
-/workspace/
-├── env-dir/env           # Environment file (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)
-├── group/                # Current group folder (cwd)
-├── project/              # Project root (main channel only)
-├── global/               # Global CLAUDE.md (non-main only)
-├── ipc/                  # Inter-process communication
-│   ├── messages/         # Outgoing WhatsApp messages
-│   ├── tasks/            # Scheduled task commands
-│   ├── current_tasks.json    # Read-only: scheduled tasks visible to this group
-│   └── available_groups.json # Read-only: WhatsApp groups for activation (main only)
-└── extra/                # Additional custom mounts
+AGENT_TIMEOUT=600000
 ```
 
-### 4. Permission Issues
+### 3. Session Not Resuming
 
-The container runs as user `node` (uid 1000). Check ownership:
+If sessions are not being resumed (new session ID every time):
+
+**Check the logs for session IDs:**
 ```bash
-container run --rm --entrypoint /bin/bash nanoclaw-agent:latest -c '
-  whoami
-  ls -la /workspace/
-  ls -la /app/
-'
+grep "Session initialized" logs/nanoclaw.log | tail -5
+# Should show the SAME session ID for consecutive messages in the same group
 ```
 
-All of `/workspace/` and `/app/` should be owned by `node`.
+**Root cause possibilities:**
+- Session data directory missing or corrupted at `data/sessions/{group}/.claude/`
+- The `resume` parameter in `query()` not receiving the stored session ID
 
-### 5. Session Not Resuming / "Claude Code process exited with code 1"
-
-If sessions aren't being resumed (new session ID every time), or Claude Code exits with code 1 when resuming:
-
-**Root cause:** The SDK looks for sessions at `$HOME/.claude/projects/`. Inside the container, `HOME=/home/node`, so it looks at `/home/node/.claude/projects/`.
-
-**Check the mount path:**
+**Fix:** Clear sessions and let them be recreated:
 ```bash
-# In container-runner.ts, verify mount is to /home/node/.claude/, NOT /root/.claude/
-grep -A3 "Claude sessions" src/container-runner.ts
+# Clear sessions for a specific group
+rm -rf data/sessions/{groupFolder}/.claude/
+
+# Clear the session ID from NanoClaw's tracking
+echo '{}' > data/sessions.json
 ```
 
-**Verify sessions are accessible:**
+### 4. MCP Server Failures
+
+The agent uses a file-based IPC MCP server (`nanoclaw`) for sending messages and managing tasks. If the MCP server fails to initialize, the agent may error.
+
+**Check:** Ensure the IPC directory is writable:
 ```bash
-container run --rm --entrypoint /bin/bash \
-  -v ~/.claude:/home/node/.claude \
-  nanoclaw-agent:latest -c '
-echo "HOME=$HOME"
-ls -la $HOME/.claude/projects/ 2>&1 | head -5
-'
+ls -la data/ipc/{groupFolder}/
+# Should have messages/ and tasks/ subdirectories
 ```
 
-**Fix:** Ensure `container-runner.ts` mounts to `/home/node/.claude/`:
-```typescript
-mounts.push({
-  hostPath: claudeDir,
-  containerPath: '/home/node/.claude',  // NOT /root/.claude
-  readonly: false
-});
-```
+### 5. Permission Errors on Group Directories
 
-### 6. MCP Server Failures
+The agent runs with `cwd` set to `groups/{folder}/`. If this directory is not writable, tools like Bash, Write, and Edit will fail.
 
-If an MCP server fails to start, the agent may exit. Check the container logs for MCP initialization errors.
-
-## Manual Container Testing
-
-### Test the full agent flow:
+**Fix:**
 ```bash
-# Set up env file
-mkdir -p data/env groups/test
-cp .env data/env/env
+# Check permissions
+ls -la groups/
 
-# Run test query
-echo '{"prompt":"What is 2+2?","groupFolder":"test","chatJid":"test@g.us","isMain":false}' | \
-  container run -i \
-  --mount "type=bind,source=$(pwd)/data/env,target=/workspace/env-dir,readonly" \
-  -v $(pwd)/groups/test:/workspace/group \
-  -v $(pwd)/data/ipc:/workspace/ipc \
-  nanoclaw-agent:latest
+# Fix ownership if needed
+chmod -R u+rw groups/{folder}/
 ```
 
-### Test Claude Code directly:
+### 6. Claude CLI Not Found
+
+The `query()` function from the Claude Agent SDK requires the `claude` CLI to be available on the system PATH.
+
+**Check:**
 ```bash
-container run --rm --entrypoint /bin/bash \
-  --mount "type=bind,source=$(pwd)/data/env,target=/workspace/env-dir,readonly" \
-  nanoclaw-agent:latest -c '
-  export $(cat /workspace/env-dir/env | xargs)
-  claude -p "Say hello" --dangerously-skip-permissions --allowedTools ""
-'
+which claude
+claude --version
 ```
 
-### Interactive shell in container:
+**Fix:** Install or update Claude Code:
 ```bash
-container run --rm -it --entrypoint /bin/bash nanoclaw-agent:latest
+npm install -g @anthropic-ai/claude-code
+```
+
+## Manual Testing
+
+### Test with development server:
+```bash
+# Run with hot reload - send a WhatsApp message to trigger the agent
+npm run dev
+```
+
+### Test agent SDK directly:
+```bash
+# Quick test using Node.js
+node -e "
+const { query } = require('@anthropic-ai/claude-agent-sdk');
+(async () => {
+  for await (const msg of query({
+    prompt: 'Say hello',
+    options: {
+      cwd: '$(pwd)/groups/test',
+      allowedTools: [],
+      permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+      settingSources: ['project']
+    }
+  })) {
+    if (msg.result) console.log('Result:', msg.result);
+  }
+})();
+"
 ```
 
 ## SDK Options Reference
@@ -213,17 +205,28 @@ The agent-runner uses these Claude Agent SDK options:
 query({
   prompt: input.prompt,
   options: {
-    cwd: '/workspace/group',
-    allowedTools: ['Bash', 'Read', 'Write', ...],
+    abortController,
+    cwd: groupDir,                          // groups/{folder}/
+    resume: input.sessionId,                // Per-group session resumption
+    allowedTools: [
+      'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
+      'WebSearch', 'WebFetch',
+      'mcp__nanoclaw__*'
+    ],
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,  // Required with bypassPermissions
     settingSources: ['project'],
-    mcpServers: { ... }
+    mcpServers: {
+      nanoclaw: ipcMcp                      // File-based IPC MCP server
+    },
+    hooks: {
+      PreCompact: [...]                     // Archives conversations before compaction
+    }
   }
 })
 ```
 
-**Important:** `allowDangerouslySkipPermissions: true` is required when using `permissionMode: 'bypassPermissions'`. Without it, Claude Code exits with code 1.
+**Important:** `allowDangerouslySkipPermissions: true` is required when using `permissionMode: 'bypassPermissions'`. Without it, the agent will error.
 
 ## Rebuilding After Changes
 
@@ -231,41 +234,13 @@ query({
 # Rebuild main app
 npm run build
 
-# Rebuild container (use --no-cache for clean rebuild)
-./container/build.sh
-
-# Or force full rebuild
-container builder prune -af
-./container/build.sh
-```
-
-## Checking Container Image
-
-```bash
-# List images
-container images
-
-# Check what's in the image
-container run --rm --entrypoint /bin/bash nanoclaw-agent:latest -c '
-  echo "=== Node version ==="
-  node --version
-
-  echo "=== Claude Code version ==="
-  claude --version
-
-  echo "=== Installed packages ==="
-  ls /app/node_modules/
-'
+# Run in development mode with hot reload
+npm run dev
 ```
 
 ## Session Persistence
 
 Claude sessions are stored per-group in `data/sessions/{group}/.claude/` for security isolation. Each group has its own session directory, preventing cross-group access to conversation history.
-
-**Critical:** The mount path must match the container user's HOME directory:
-- Container user: `node`
-- Container HOME: `/home/node`
-- Mount target: `/home/node/.claude/` (NOT `/root/.claude/`)
 
 To clear sessions:
 
@@ -288,23 +263,23 @@ grep "Session initialized" logs/nanoclaw.log | tail -5
 
 ## IPC Debugging
 
-The container communicates back to the host via files in `/workspace/ipc/`:
+The agent communicates back to the host via files in `data/ipc/{folder}/`:
 
 ```bash
 # Check pending messages
-ls -la data/ipc/messages/
+ls -la data/ipc/{folder}/messages/
 
 # Check pending task operations
-ls -la data/ipc/tasks/
+ls -la data/ipc/{folder}/tasks/
 
 # Read a specific IPC file
-cat data/ipc/messages/*.json
+cat data/ipc/{folder}/messages/*.json
 
 # Check available groups (main channel only)
 cat data/ipc/main/available_groups.json
 
 # Check current tasks snapshot
-cat data/ipc/{groupFolder}/current_tasks.json
+cat data/ipc/{folder}/current_tasks.json
 ```
 
 **IPC file types:**
@@ -318,30 +293,33 @@ cat data/ipc/{groupFolder}/current_tasks.json
 Run this to check common issues:
 
 ```bash
-echo "=== Checking NanoClaw Container Setup ==="
+echo "=== Checking NanoClaw Setup ==="
 
 echo -e "\n1. Authentication configured?"
 [ -f .env ] && (grep -q "CLAUDE_CODE_OAUTH_TOKEN=sk-" .env || grep -q "ANTHROPIC_API_KEY=sk-" .env) && echo "OK" || echo "MISSING - add CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY to .env"
 
-echo -e "\n2. Env file copied for container?"
-[ -f data/env/env ] && echo "OK" || echo "MISSING - will be created on first run"
+echo -e "\n2. Claude CLI available?"
+which claude &>/dev/null && echo "OK - $(claude --version 2>&1 | head -1)" || echo "MISSING - install with: npm install -g @anthropic-ai/claude-code"
 
-echo -e "\n3. Apple Container system running?"
-container system status &>/dev/null && echo "OK" || echo "NOT RUNNING - NanoClaw should auto-start it; check logs"
+echo -e "\n3. Claude Agent SDK installed?"
+node -e "require('@anthropic-ai/claude-agent-sdk')" 2>/dev/null && echo "OK" || echo "MISSING - run: npm install"
 
-echo -e "\n4. Container image exists?"
-echo '{}' | container run -i --entrypoint /bin/echo nanoclaw-agent:latest "OK" 2>/dev/null || echo "MISSING - run ./container/build.sh"
+echo -e "\n4. Node.js version?"
+node --version
 
-echo -e "\n5. Session mount path correct?"
-grep -q "/home/node/.claude" src/container-runner.ts 2>/dev/null && echo "OK" || echo "WRONG - should mount to /home/node/.claude/, not /root/.claude/"
-
-echo -e "\n6. Groups directory?"
+echo -e "\n5. Groups directory?"
 ls -la groups/ 2>/dev/null || echo "MISSING - run setup"
 
-echo -e "\n7. Recent container logs?"
-ls -t groups/*/logs/container-*.log 2>/dev/null | head -3 || echo "No container logs yet"
+echo -e "\n6. IPC directories?"
+ls -d data/ipc/*/ 2>/dev/null && echo "OK" || echo "No IPC directories yet (created on first run)"
+
+echo -e "\n7. Recent agent logs?"
+ls -t groups/*/logs/agent-*.log 2>/dev/null | head -3 || echo "No agent logs yet"
 
 echo -e "\n8. Session continuity working?"
 SESSIONS=$(grep "Session initialized" logs/nanoclaw.log 2>/dev/null | tail -5 | awk '{print $NF}' | sort -u | wc -l)
 [ "$SESSIONS" -le 2 ] && echo "OK (recent sessions reusing IDs)" || echo "CHECK - multiple different session IDs, may indicate resumption issues"
+
+echo -e "\n9. Build up to date?"
+[ -d dist ] && echo "OK - dist/ exists (last built: $(stat -f '%Sm' dist 2>/dev/null || stat -c '%y' dist 2>/dev/null))" || echo "NOT BUILT - run: npm run build"
 ```

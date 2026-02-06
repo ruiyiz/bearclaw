@@ -18,9 +18,9 @@ NanoClaw gives you the core functionality without that mess.
 
 The entire codebase should be something you can read and understand. One Node.js process. A handful of source files. No microservices, no message queues, no abstraction layers.
 
-### Security Through True Isolation
+### Session Isolation
 
-Instead of application-level permission systems trying to prevent agents from accessing things, agents run in actual Linux containers (Apple Container). The isolation is at the OS level. Agents can only see what's explicitly mounted. Bash access is safe because commands run inside the container, not on your Mac.
+Each group runs with its own working directory (`groups/{folder}/`) and conversation session. The agent's `cwd` is set to the group folder, and `settingSources: ['project']` reads CLAUDE.md from there. IPC authorization ensures non-main groups can only message their own chat and manage their own tasks.
 
 ### Built for One User
 
@@ -54,14 +54,9 @@ Skills to add or switch to different messaging platforms:
 - `/add-sms` - Add SMS via Twilio or similar
 - `/convert-to-telegram` - Replace WhatsApp with Telegram entirely
 
-### Container Runtime
-The project currently uses Apple Container (macOS-only). We need:
-- `/convert-to-docker` - Replace Apple Container with standard Docker
-- This unlocks Linux support and broader deployment options
-
 ### Platform Support
-- `/setup-linux` - Make the full setup work on Linux (depends on Docker conversion)
-- `/setup-windows` - Windows support via WSL2 + Docker
+- `/setup-linux` - Make the full setup work on Linux
+- `/setup-windows` - Windows support via WSL2
 
 ---
 
@@ -70,13 +65,11 @@ The project currently uses Apple Container (macOS-only). We need:
 A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 
 **Core components:**
-- **Claude Agent SDK** as the core agent
-- **Apple Container** for isolated agent execution (Linux VMs)
+- **Claude Agent SDK** as the core agent, running directly on the host
 - **WhatsApp** as the primary I/O channel
 - **Persistent memory** per conversation and globally
 - **Scheduled tasks** that run Claude and can message back
 - **Web access** for search and browsing
-- **Browser automation** via agent-browser
 
 **Implementation approach:**
 - Use existing tools (WhatsApp connector, Claude Agent SDK, MCP servers)
@@ -103,17 +96,17 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 - Each group maintains a conversation session (via Claude Agent SDK)
 - Sessions auto-compact when context gets too long, preserving critical information
 
-### Container Isolation
-- All agents run inside Apple Container (lightweight Linux VMs)
-- Each agent invocation spawns a container with mounted directories
-- Containers provide filesystem isolation - agents can only see mounted paths
-- Bash access is safe because commands run inside the container, not on the host
-- Browser automation via agent-browser with Chromium in the container
+### Agent Execution
+- Agents run via the Claude Agent SDK directly in the host process
+- Each agent invocation calls `query()` with the group's directory as `cwd`
+- No OS-level filesystem isolation between groups — agents have host filesystem access
+- Session isolation is per-group (each group has its own `cwd` and session ID)
+- IPC authorization enforces group-level permission boundaries
 
 ### Scheduled Tasks
 - Users can ask Claude to schedule recurring or one-time tasks from any group
 - Tasks run as full agents in the context of the group that created them
-- Tasks have access to all tools including Bash (safe in container)
+- Tasks have access to all tools including Bash
 - Tasks can optionally send messages to their group via `send_message` tool, or complete silently
 - Task runs are logged to the database with duration and result
 - Schedule types: cron expressions, intervals (ms), or one-time (ISO timestamp)
@@ -124,14 +117,14 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 - New groups are added explicitly via the main channel
 - Groups are registered by editing `data/registered_groups.json`
 - Each group gets a dedicated folder under `groups/`
-- Groups can have additional directories mounted via `containerConfig`
+- Groups can have per-group configuration via `containerConfig` (e.g., custom timeout)
 
 ### Main Channel Privileges
 - Main channel is the admin/control group (typically self-chat)
 - Can write to global memory (`groups/CLAUDE.md`)
 - Can schedule tasks for any group
 - Can view and manage tasks from all groups
-- Can configure additional directory mounts for any group
+- Can configure per-group settings
 
 ---
 
@@ -143,22 +136,16 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 - QR code authentication during setup
 
 ### Scheduler
-- Built-in scheduler runs on the host, spawns containers for task execution
-- Custom `nanoclaw` MCP server (inside container) provides scheduling tools
+- Built-in scheduler runs in the host process, invokes agents for task execution
+- Custom `nanoclaw` MCP server provides scheduling tools
 - Tools: `schedule_task`, `list_tasks`, `pause_task`, `resume_task`, `cancel_task`, `send_message`
 - Tasks stored in SQLite with run history
 - Scheduler loop checks for due tasks every minute
-- Tasks execute Claude Agent SDK in containerized group context
+- Tasks execute Claude Agent SDK in the group's directory context
 
 ### Web Access
 - Built-in WebSearch and WebFetch tools
 - Standard Claude Agent SDK capabilities
-
-### Browser Automation
-- agent-browser CLI with Chromium in container
-- Snapshot-based interaction with element references (@e1, @e2, etc.)
-- Screenshots, PDFs, video recording
-- Authentication state persistence
 
 ---
 

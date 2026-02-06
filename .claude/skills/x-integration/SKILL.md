@@ -43,11 +43,7 @@ Before using this skill, ensure:
 npx dotenv -e .env -- npx tsx .claude/skills/x-integration/scripts/setup.ts
 # Verify: data/x-auth.json should exist after successful login
 
-# 2. Rebuild container to include skill
-./container/build.sh
-# Verify: Output shows "COPY .claude/skills/x-integration/agent.ts"
-
-# 3. Rebuild host and restart service
+# 2. Build and restart service
 npm run build
 launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 # Verify: launchctl list | grep nanoclaw shows PID and exit code 0
@@ -110,9 +106,9 @@ Paths relative to project root:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Container (Linux VM)                                       │
-│  └── agent.ts → MCP tool definitions (x_post, etc.)    │
-│      └── Writes IPC request to /workspace/ipc/tasks/       │
+│  Agent runner (in-process)                                   │
+│  └── src/ipc-mcp.ts → MCP tool definitions (x_post, etc.)  │
+│      └── Writes IPC request to ipc/tasks/                   │
 └──────────────────────┬──────────────────────────────────────┘
                        │ IPC (file system)
                        ▼
@@ -138,7 +134,7 @@ Paths relative to project root:
 .claude/skills/x-integration/
 ├── SKILL.md          # This documentation
 ├── host.ts           # Host-side IPC handler
-├── agent.ts          # Container-side MCP tool definitions
+├── agent.ts          # Agent-side MCP tool definitions
 ├── lib/
 │   ├── config.ts     # Centralized configuration
 │   └── browser.ts    # Playwright utilities
@@ -180,54 +176,16 @@ if (!handled) {
 
 ---
 
-**2. Container side: `container/agent-runner/src/ipc-mcp.ts`**
+**2. Agent runner: `src/ipc-mcp.ts`**
 
 Add import after `cron-parser` import:
 ```typescript
-// @ts-ignore - Copied during Docker build from .claude/skills/x-integration/
-import { createXTools } from './skills/x-integration/agent.js';
+import { createXTools } from '../.claude/skills/x-integration/agent.js';
 ```
 
 Add to the end of tools array (before the closing `]`):
 ```typescript
-    ...createXTools({ groupFolder, isMain })
-```
-
----
-
-**3. Build script: `container/build.sh`**
-
-Change build context from `container/` to project root (required to access `.claude/skills/`):
-```bash
-# Find:
-container build -t "${IMAGE_NAME}:${TAG}" .
-
-# Replace with:
-cd "$SCRIPT_DIR/.."
-container build -t "${IMAGE_NAME}:${TAG}" -f container/Dockerfile .
-```
-
----
-
-**4. Dockerfile: `container/Dockerfile`**
-
-First, update the build context paths (required to access `.claude/skills/` from project root):
-```dockerfile
-# Find:
-COPY agent-runner/package*.json ./
-...
-COPY agent-runner/ ./
-
-# Replace with:
-COPY container/agent-runner/package*.json ./
-...
-COPY container/agent-runner/ ./
-```
-
-Then add COPY line after `COPY container/agent-runner/ ./` and before `RUN npm run build`:
-```dockerfile
-# Copy skill MCP tools
-COPY .claude/skills/x-integration/agent.ts ./src/skills/x-integration/
+    ...createXTools({ groupFolder, isMain, ipcDir })
 ```
 
 ## Setup
@@ -256,18 +214,7 @@ This opens Chrome for manual X login. Session saved to `data/x-browser-profile/`
 cat data/x-auth.json  # Should show {"authenticated": true, ...}
 ```
 
-### 3. Rebuild Container
-
-```bash
-./container/build.sh
-```
-
-**Verify success:**
-```bash
-./container/build.sh 2>&1 | grep -i "agent.ts"  # Should show COPY line
-```
-
-### 4. Restart Service
+### 3. Restart Service
 
 ```bash
 npm run build
@@ -392,18 +339,6 @@ If X updates their UI, selectors in scripts may break. Current selectors:
 | Confirm retweet | `[data-testid="retweetConfirm"]` |
 | Modal dialog | `[role="dialog"][aria-modal="true"]` |
 | Modal submit | `[data-testid="tweetButton"]` |
-
-### Container Build Issues
-
-If MCP tools not found in container:
-
-```bash
-# Verify build copies skill
-./container/build.sh 2>&1 | grep -i skill
-
-# Check container has the file
-container run nanoclaw-agent ls -la /app/src/skills/
-```
 
 ## Security
 

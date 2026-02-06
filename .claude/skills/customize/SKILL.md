@@ -20,6 +20,7 @@ This skill helps users add capabilities or modify behavior. Use AskUserQuestion 
 |------|---------|
 | `src/config.ts` | Assistant name, trigger pattern, directories |
 | `src/index.ts` | Message routing, WhatsApp connection, agent invocation |
+| `src/agent-runner.ts` | Agent SDK execution, MCP server config |
 | `src/db.ts` | Database initialization and queries |
 | `src/types.ts` | TypeScript interfaces |
 | `src/whatsapp-auth.ts` | Standalone WhatsApp authentication script |
@@ -50,7 +51,7 @@ Questions to ask:
 - Which groups should have access?
 
 Implementation:
-1. Add MCP server to the `mcpServers` config in `src/index.ts`
+1. Add MCP server to the `mcpServers` config in `src/agent-runner.ts`
 2. Add tools to `allowedTools` array
 3. Document in `groups/CLAUDE.md`
 
@@ -60,9 +61,9 @@ Questions to ask:
 - What aspect? (name, trigger, persona, response style)
 - Apply to all groups or specific ones?
 
-Simple changes → edit `src/config.ts`
-Persona changes → edit `groups/CLAUDE.md`
-Per-group behavior → edit specific group's `CLAUDE.md`
+Simple changes -> edit `src/config.ts`
+Persona changes -> edit `groups/CLAUDE.md`
+Per-group behavior -> edit specific group's `CLAUDE.md`
 
 ### Adding New Commands
 
@@ -78,13 +79,15 @@ Implementation:
 ### Changing Deployment
 
 Questions to ask:
-- Target platform? (Linux server, Docker, different Mac)
-- Service manager? (systemd, Docker, supervisord)
+- Target platform? (Linux server, different Mac)
+- Service manager? (systemd, launchd, supervisord)
 
 Implementation:
 1. Create appropriate service files
 2. Update paths in config
 3. Provide setup instructions
+
+Note: NanoClaw runs directly on the host (bare metal) -- there is no container runtime. The agent executes via the Claude Agent SDK in-process.
 
 ## After Changes
 
