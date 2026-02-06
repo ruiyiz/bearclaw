@@ -13,6 +13,7 @@ import makeWASocket, {
 import {
   ASSISTANT_NAME,
   DATA_DIR,
+  DISPLAY_NAME,
   IPC_POLL_INTERVAL,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -205,7 +206,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
     // If just "/new" with no follow-up, send confirmation and return
     const followUp = content.slice(4).trim();
     if (!followUp) {
-      await sendMessage(msg.chat_jid, `${ASSISTANT_NAME}: Session cleared! Starting fresh. 🧹`);
+      await sendMessage(msg.chat_jid, `${DISPLAY_NAME}: Session cleared! Starting fresh. 🧹`);
       lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
       saveState();
       return;
@@ -219,7 +220,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
   const missedMessages = getMessagesSince(
     msg.chat_jid,
     sinceTimestamp,
-    ASSISTANT_NAME,
+    DISPLAY_NAME,
   );
 
   const lines = missedMessages.map((m) => {
@@ -247,7 +248,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   if (response) {
     lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
-    await sendMessage(msg.chat_jid, `${ASSISTANT_NAME}: ${response}`);
+    await sendMessage(msg.chat_jid, `${DISPLAY_NAME}: ${response}`);
   }
 }
 
@@ -370,7 +371,7 @@ function startIpcWatcher(): void {
                 ) {
                   await sendMessage(
                     data.chatJid,
-                    `${ASSISTANT_NAME}: ${data.text}`,
+                    `${DISPLAY_NAME}: ${data.text}`,
                   );
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
@@ -816,7 +817,7 @@ async function startMessageLoop(): Promise<void> {
   while (true) {
     try {
       const jids = Object.keys(registeredGroups);
-      const { messages } = getNewMessages(jids, lastTimestamp, ASSISTANT_NAME);
+      const { messages } = getNewMessages(jids, lastTimestamp, DISPLAY_NAME);
 
       if (messages.length > 0)
         logger.info({ count: messages.length }, 'New messages');

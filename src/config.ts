@@ -1,6 +1,7 @@
 import path from 'path';
 
 export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Andy';
+export const DISPLAY_NAME = process.env.DISPLAY_NAME || ASSISTANT_NAME;
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
