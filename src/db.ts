@@ -7,7 +7,12 @@ import { proto } from '@whiskeysockets/baileys';
 import { STORE_DIR } from './config.js';
 import { logger } from './logger.js';
 import { transcribeAudioMessage } from './transcribe.js';
-import { NewMessage, ScheduledTask, TaskRunLog } from './types.js';
+import {
+  EventRecord,
+  Handler,
+  HandlerRunLog,
+  NewMessage,
+} from './types.js';
 
 let db: Database.Database;
 
@@ -35,33 +40,48 @@ export function initDatabase(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp);
 
-    CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      emitted_at TEXT NOT NULL,
+      processed INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_events_processed ON events(processed);
+
+    CREATE TABLE IF NOT EXISTS handlers (
       id TEXT PRIMARY KEY,
       group_folder TEXT NOT NULL,
-      chat_jid TEXT NOT NULL,
       prompt TEXT NOT NULL,
-      schedule_type TEXT NOT NULL,
-      schedule_value TEXT NOT NULL,
+      context_mode TEXT NOT NULL DEFAULT 'isolated',
+      event_type TEXT NOT NULL,
+      filter TEXT,
+      cron TEXT,
       next_run TEXT,
-      last_run TEXT,
-      last_result TEXT,
-      status TEXT DEFAULT 'active',
+      cooldown_ms INTEGER NOT NULL DEFAULT 0,
+      last_triggered TEXT,
+      max_triggers INTEGER,
+      trigger_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_next_run ON scheduled_tasks(next_run);
-    CREATE INDEX IF NOT EXISTS idx_status ON scheduled_tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_handlers_event_type ON handlers(event_type);
+    CREATE INDEX IF NOT EXISTS idx_handlers_status ON handlers(status);
+    CREATE INDEX IF NOT EXISTS idx_handlers_next_run ON handlers(next_run);
 
-    CREATE TABLE IF NOT EXISTS task_run_logs (
+    CREATE TABLE IF NOT EXISTS handler_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id TEXT NOT NULL,
+      handler_id TEXT NOT NULL,
+      event_id INTEGER NOT NULL,
       run_at TEXT NOT NULL,
       duration_ms INTEGER NOT NULL,
       status TEXT NOT NULL,
       result TEXT,
       error TEXT,
-      FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id)
+      FOREIGN KEY (handler_id) REFERENCES handlers(id),
+      FOREIGN KEY (event_id) REFERENCES events(id)
     );
-    CREATE INDEX IF NOT EXISTS idx_task_run_logs ON task_run_logs(task_id, run_at);
+    CREATE INDEX IF NOT EXISTS idx_handler_logs ON handler_logs(handler_id, run_at);
   `);
 
   // Add sender_name column if it doesn't exist (migration for existing DBs)
@@ -71,14 +91,101 @@ export function initDatabase(): void {
     /* column already exists */
   }
 
-  // Add context_mode column if it doesn't exist (migration for existing DBs)
-  try {
-    db.exec(
-      `ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`,
-    );
-  } catch {
-    /* column already exists */
-  }
+  // Migrate old tables to unified handlers table
+  migrateToUnifiedHandlers();
+}
+
+function intervalToCron(ms: number): string {
+  const minutes = Math.round(ms / 60000);
+  if (minutes <= 0) return '* * * * *';
+  if (minutes <= 59) return `*/${minutes} * * * *`;
+  const hours = Math.round(ms / 3600000);
+  if (hours <= 23) return `0 */${hours} * * *`;
+  return '0 0 * * *'; // daily fallback
+}
+
+function migrateToUnifiedHandlers(): void {
+  const hasEventHandlers = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='event_handlers'",
+  ).get();
+
+  const hasScheduledTasks = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'",
+  ).get();
+
+  if (!hasEventHandlers && !hasScheduledTasks) return;
+
+  const migrate = db.transaction(() => {
+    // Migrate event_handlers → handlers
+    if (hasEventHandlers) {
+      const rows = db.prepare('SELECT * FROM event_handlers').all() as Array<Record<string, unknown>>;
+      for (const h of rows) {
+        const exists = db.prepare('SELECT id FROM handlers WHERE id = ?').get(h.id);
+        if (exists) continue;
+
+        db.prepare(
+          `INSERT INTO handlers (id, group_folder, prompt, context_mode, event_type, filter, cron, next_run, cooldown_ms, last_triggered, max_triggers, trigger_count, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          h.id, h.group_folder, h.prompt, h.context_mode || 'isolated',
+          h.event_type, h.filter,
+          h.cooldown_ms || 0, h.last_triggered,
+          h.max_triggers ?? null, h.trigger_count || 0,
+          h.status || 'active', h.created_at,
+        );
+      }
+    }
+
+    // Migrate scheduled_tasks → handlers
+    if (hasScheduledTasks) {
+      // Ensure context_mode column exists on old table
+      try {
+        db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`);
+      } catch { /* column already exists */ }
+
+      const rows = db.prepare('SELECT * FROM scheduled_tasks').all() as Array<Record<string, unknown>>;
+      for (const t of rows) {
+        const handlerId = `migrated-${t.id}`;
+        const exists = db.prepare('SELECT id FROM handlers WHERE id = ?').get(handlerId);
+        if (exists) continue;
+
+        let cron: string | null = null;
+        const nextRun = t.next_run as string | null;
+        let maxTriggers: number | null = null;
+
+        if (t.schedule_type === 'cron') {
+          cron = t.schedule_value as string;
+        } else if (t.schedule_type === 'interval') {
+          cron = intervalToCron(parseInt(t.schedule_value as string, 10));
+        } else if (t.schedule_type === 'once') {
+          maxTriggers = 1;
+        }
+
+        const filter = JSON.stringify({ handler_id: handlerId });
+
+        db.prepare(
+          `INSERT INTO handlers (id, group_folder, prompt, context_mode, event_type, filter, cron, next_run, cooldown_ms, last_triggered, max_triggers, trigger_count, status, created_at)
+           VALUES (?, ?, ?, ?, 'cron_trigger', ?, ?, ?, 0, ?, ?, 0, ?, ?)`,
+        ).run(
+          handlerId, t.group_folder, t.prompt,
+          (t.context_mode as string) || 'isolated',
+          filter, cron, nextRun,
+          t.last_run as string | null,
+          maxTriggers,
+          t.status || 'active', t.created_at,
+        );
+      }
+    }
+
+    // Drop old tables
+    db.exec('DROP TABLE IF EXISTS event_handler_logs');
+    db.exec('DROP TABLE IF EXISTS event_handlers');
+    db.exec('DROP TABLE IF EXISTS task_run_logs');
+    db.exec('DROP TABLE IF EXISTS scheduled_tasks');
+  });
+
+  migrate();
+  logger.info('Migrated to unified handlers table');
 }
 
 /**
@@ -269,56 +376,158 @@ export function getMessagesSince(
     .all(chatJid, sinceTimestamp, ...botPrefixes.map(p => `${p}:%`)) as NewMessage[];
 }
 
-export function createTask(
-  task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
+// ─── Event functions ───────────────────────────────────────────────────────
+
+export function emitEvent(type: string, payload: object): number {
+  const result = db
+    .prepare(
+      `INSERT INTO events (type, payload, emitted_at, processed) VALUES (?, ?, ?, 0)`,
+    )
+    .run(type, JSON.stringify(payload), new Date().toISOString());
+  return result.lastInsertRowid as number;
+}
+
+export function getUnprocessedEvents(): EventRecord[] {
+  return db
+    .prepare(`SELECT * FROM events WHERE processed = 0 ORDER BY id`)
+    .all() as EventRecord[];
+}
+
+export function markEventProcessed(id: number): void {
+  db.prepare(`UPDATE events SET processed = 1 WHERE id = ?`).run(id);
+}
+
+export function cleanupProcessedEvents(): void {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  db.prepare(
+    `DELETE FROM events WHERE processed = 1 AND emitted_at < ?`,
+  ).run(cutoff);
+}
+
+// ─── Handler matching ──────────────────────────────────────────────────────
+
+export function getMatchingHandlers(event: EventRecord): Handler[] {
+  const handlers = db
+    .prepare(
+      `SELECT * FROM handlers WHERE event_type = ? AND status = 'active'`,
+    )
+    .all(event.type) as Handler[];
+
+  const now = Date.now();
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(event.payload);
+  } catch {
+    payload = {};
+  }
+
+  return handlers.filter((h) => {
+    // Check cooldown
+    if (h.cooldown_ms > 0 && h.last_triggered) {
+      const elapsed = now - new Date(h.last_triggered).getTime();
+      if (elapsed < h.cooldown_ms) return false;
+    }
+
+    // Check max_triggers
+    if (h.max_triggers !== null && h.trigger_count >= h.max_triggers) {
+      return false;
+    }
+
+    // Check filter (all keys must match payload)
+    if (h.filter) {
+      try {
+        const filter = JSON.parse(h.filter) as Record<string, unknown>;
+        for (const [key, value] of Object.entries(filter)) {
+          if (payload[key] !== value) return false;
+        }
+      } catch {
+        return false;
+      }
+    }
+
+    return true;
+  });
+}
+
+export function updateHandlerAfterTrigger(id: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE handlers SET trigger_count = trigger_count + 1, last_triggered = ? WHERE id = ?`,
+  ).run(now, id);
+
+  // Auto-complete if max_triggers reached
+  const handler = db
+    .prepare(`SELECT max_triggers, trigger_count FROM handlers WHERE id = ?`)
+    .get(id) as { max_triggers: number | null; trigger_count: number } | undefined;
+  if (handler && handler.max_triggers !== null && handler.trigger_count >= handler.max_triggers) {
+    db.prepare(`UPDATE handlers SET status = 'completed' WHERE id = ?`).run(id);
+  }
+}
+
+// ─── Cron scheduling ──────────────────────────────────────────────────────
+
+export function getCronDueHandlers(): Handler[] {
+  const now = new Date().toISOString();
+  return db
+    .prepare(
+      `SELECT * FROM handlers
+       WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ?
+       ORDER BY next_run`,
+    )
+    .all(now) as Handler[];
+}
+
+export function updateHandlerNextRun(id: string, nextRun: string | null): void {
+  db.prepare('UPDATE handlers SET next_run = ? WHERE id = ?').run(nextRun, id);
+}
+
+// ─── Handler CRUD ──────────────────────────────────────────────────────────
+
+export function createHandler(
+  handler: Omit<Handler, 'last_triggered' | 'trigger_count'>,
 ): void {
   db.prepare(
-    `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `,
+    `INSERT INTO handlers (id, group_folder, prompt, context_mode, event_type, filter, cron, next_run, cooldown_ms, last_triggered, max_triggers, trigger_count, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?)`,
   ).run(
-    task.id,
-    task.group_folder,
-    task.chat_jid,
-    task.prompt,
-    task.schedule_type,
-    task.schedule_value,
-    task.context_mode || 'isolated',
-    task.next_run,
-    task.status,
-    task.created_at,
+    handler.id,
+    handler.group_folder,
+    handler.prompt,
+    handler.context_mode || 'isolated',
+    handler.event_type,
+    handler.filter,
+    handler.cron ?? null,
+    handler.next_run ?? null,
+    handler.cooldown_ms || 0,
+    handler.max_triggers ?? null,
+    handler.status,
+    handler.created_at,
   );
 }
 
-export function getTaskById(id: string): ScheduledTask | undefined {
-  return db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as
-    | ScheduledTask
-    | undefined;
+export function getHandlerById(id: string): Handler | undefined {
+  return db
+    .prepare('SELECT * FROM handlers WHERE id = ?')
+    .get(id) as Handler | undefined;
 }
 
-export function getTasksForGroup(groupFolder: string): ScheduledTask[] {
+export function getAllHandlers(): Handler[] {
+  return db
+    .prepare('SELECT * FROM handlers ORDER BY created_at DESC')
+    .all() as Handler[];
+}
+
+export function getHandlersForGroup(groupFolder: string): Handler[] {
   return db
     .prepare(
-      'SELECT * FROM scheduled_tasks WHERE group_folder = ? ORDER BY created_at DESC',
+      'SELECT * FROM handlers WHERE group_folder = ? ORDER BY created_at DESC',
     )
-    .all(groupFolder) as ScheduledTask[];
+    .all(groupFolder) as Handler[];
 }
 
-export function getAllTasks(): ScheduledTask[] {
-  return db
-    .prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC')
-    .all() as ScheduledTask[];
-}
-
-export function updateTask(
+export function updateHandler(
   id: string,
-  updates: Partial<
-    Pick<
-      ScheduledTask,
-      'prompt' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status'
-    >
-  >,
+  updates: Partial<Pick<Handler, 'prompt' | 'filter' | 'cooldown_ms' | 'max_triggers' | 'status'>>,
 ): void {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -327,17 +536,17 @@ export function updateTask(
     fields.push('prompt = ?');
     values.push(updates.prompt);
   }
-  if (updates.schedule_type !== undefined) {
-    fields.push('schedule_type = ?');
-    values.push(updates.schedule_type);
+  if (updates.filter !== undefined) {
+    fields.push('filter = ?');
+    values.push(updates.filter);
   }
-  if (updates.schedule_value !== undefined) {
-    fields.push('schedule_value = ?');
-    values.push(updates.schedule_value);
+  if (updates.cooldown_ms !== undefined) {
+    fields.push('cooldown_ms = ?');
+    values.push(updates.cooldown_ms);
   }
-  if (updates.next_run !== undefined) {
-    fields.push('next_run = ?');
-    values.push(updates.next_run);
+  if (updates.max_triggers !== undefined) {
+    fields.push('max_triggers = ?');
+    values.push(updates.max_triggers);
   }
   if (updates.status !== undefined) {
     fields.push('status = ?');
@@ -348,70 +557,26 @@ export function updateTask(
 
   values.push(id);
   db.prepare(
-    `UPDATE scheduled_tasks SET ${fields.join(', ')} WHERE id = ?`,
+    `UPDATE handlers SET ${fields.join(', ')} WHERE id = ?`,
   ).run(...values);
 }
 
-export function deleteTask(id: string): void {
-  // Delete child records first (FK constraint)
-  db.prepare('DELETE FROM task_run_logs WHERE task_id = ?').run(id);
-  db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+export function deleteHandler(id: string): void {
+  db.prepare('DELETE FROM handler_logs WHERE handler_id = ?').run(id);
+  db.prepare('DELETE FROM handlers WHERE id = ?').run(id);
 }
 
-export function getDueTasks(): ScheduledTask[] {
-  const now = new Date().toISOString();
-  return db
-    .prepare(
-      `
-    SELECT * FROM scheduled_tasks
-    WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ?
-    ORDER BY next_run
-  `,
-    )
-    .all(now) as ScheduledTask[];
-}
-
-export function updateTaskAfterRun(
-  id: string,
-  nextRun: string | null,
-  lastResult: string,
-): void {
-  const now = new Date().toISOString();
+export function logHandlerRun(log: HandlerRunLog): void {
   db.prepare(
-    `
-    UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
-    WHERE id = ?
-  `,
-  ).run(nextRun, now, lastResult, nextRun, id);
-}
-
-export function logTaskRun(log: TaskRunLog): void {
-  db.prepare(
-    `
-    INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `,
+    `INSERT INTO handler_logs (handler_id, event_id, run_at, duration_ms, status, result, error)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    log.task_id,
+    log.handler_id,
+    log.event_id,
     log.run_at,
     log.duration_ms,
     log.status,
     log.result,
     log.error,
   );
-}
-
-export function getTaskRunLogs(taskId: string, limit = 10): TaskRunLog[] {
-  return db
-    .prepare(
-      `
-    SELECT task_id, run_at, duration_ms, status, result, error
-    FROM task_run_logs
-    WHERE task_id = ?
-    ORDER BY run_at DESC
-    LIMIT ?
-  `,
-    )
-    .all(taskId, limit) as TaskRunLog[];
 }

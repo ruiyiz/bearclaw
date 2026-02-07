@@ -1,0 +1,199 @@
+import fs from 'fs';
+import path from 'path';
+
+import {
+  EVENT_POLL_INTERVAL,
+  GROUPS_DIR,
+  MAIN_GROUP_FOLDER,
+} from './config.js';
+import {
+  cleanupProcessedEvents,
+  emitEvent,
+  getAllHandlers,
+  getMatchingHandlers,
+  getUnprocessedEvents,
+  logHandlerRun,
+  markEventProcessed,
+  updateHandlerAfterTrigger,
+} from './db.js';
+import {
+  runContainerAgent,
+  writeHandlersSnapshot,
+} from './agent-runner.js';
+import { logger } from './logger.js';
+import { EventRecord, Handler, RegisteredGroup } from './types.js';
+
+export interface EventBusDependencies {
+  registeredGroups: () => Record<string, RegisteredGroup>;
+  getSessions: () => Record<string, string>;
+}
+
+async function runHandler(
+  handler: Handler,
+  event: EventRecord,
+  deps: EventBusDependencies,
+): Promise<void> {
+  const startTime = Date.now();
+  const groupDir = path.join(GROUPS_DIR, handler.group_folder);
+  fs.mkdirSync(groupDir, { recursive: true });
+
+  const groups = deps.registeredGroups();
+  const group = Object.values(groups).find(
+    (g) => g.folder === handler.group_folder,
+  );
+
+  if (!group) {
+    logger.error(
+      { handlerId: handler.id, groupFolder: handler.group_folder },
+      'Group not found for handler',
+    );
+    logHandlerRun({
+      handler_id: handler.id,
+      event_id: event.id,
+      run_at: new Date().toISOString(),
+      duration_ms: Date.now() - startTime,
+      status: 'error',
+      result: null,
+      error: `Group not found: ${handler.group_folder}`,
+    });
+    return;
+  }
+
+  const isMain = handler.group_folder === MAIN_GROUP_FOLDER;
+  const chatJid =
+    Object.entries(groups).find(
+      ([, g]) => g.folder === handler.group_folder,
+    )?.[0] || '';
+
+  // Write handlers snapshot for the agent
+  const handlers = getAllHandlers();
+  writeHandlersSnapshot(handler.group_folder, isMain, handlers);
+
+  // Build event-handler prompt
+  const prompt = `[EVENT TRIGGERED - You are running automatically in response to an internal event.
+ Use mcp__nanoclaw__send_message to communicate with the user.
+ Use mcp__nanoclaw__emit_event to chain to the next step.]
+
+<event type="${event.type}" emitted_at="${event.emitted_at}">
+${event.payload}
+</event>
+
+<handler_instructions>
+${handler.prompt}
+</handler_instructions>`;
+
+  const sessions = deps.getSessions();
+  const sessionId =
+    handler.context_mode === 'group'
+      ? sessions[handler.group_folder]
+      : undefined;
+
+  let result: string | null = null;
+  let error: string | null = null;
+
+  try {
+    const output = await runContainerAgent(group, {
+      prompt,
+      sessionId,
+      groupFolder: handler.group_folder,
+      chatJid,
+      isMain,
+      isEventHandler: true,
+    });
+
+    if (output.status === 'error') {
+      error = output.error || 'Unknown error';
+    } else {
+      result = output.result;
+    }
+
+    logger.info(
+      {
+        handlerId: handler.id,
+        eventType: event.type,
+        durationMs: Date.now() - startTime,
+      },
+      'Handler completed',
+    );
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    logger.error(
+      { handlerId: handler.id, eventType: event.type, error },
+      'Handler failed',
+    );
+  }
+
+  const durationMs = Date.now() - startTime;
+
+  logHandlerRun({
+    handler_id: handler.id,
+    event_id: event.id,
+    run_at: new Date().toISOString(),
+    duration_ms: durationMs,
+    status: error ? 'error' : 'success',
+    result: result ? result.slice(0, 500) : null,
+    error,
+  });
+
+  updateHandlerAfterTrigger(handler.id);
+
+  // Emit handler_complete for chaining
+  const resultSummary = error
+    ? `Error: ${error}`
+    : result
+      ? result.slice(0, 200)
+      : 'Completed';
+  emitEvent('handler_complete', {
+    handler_id: handler.id,
+    group_folder: handler.group_folder,
+    status: error ? 'error' : 'success',
+    result_summary: resultSummary,
+  });
+}
+
+let busRunning = false;
+let cleanupCounter = 0;
+
+export function startEventBusLoop(deps: EventBusDependencies): void {
+  if (busRunning) {
+    logger.debug('Event bus loop already running, skipping duplicate start');
+    return;
+  }
+  busRunning = true;
+  logger.info('Event bus loop started');
+
+  const loop = async () => {
+    try {
+      const events = getUnprocessedEvents();
+
+      for (const event of events) {
+        try {
+          const handlers = getMatchingHandlers(event);
+          for (const handler of handlers) {
+            await runHandler(handler, event, deps);
+          }
+        } catch (err) {
+          logger.error(
+            { eventId: event.id, eventType: event.type, err },
+            'Error processing event',
+          );
+        }
+
+        markEventProcessed(event.id);
+      }
+
+      // Periodic cleanup (every ~5 minutes = 60 iterations at 5s)
+      cleanupCounter++;
+      if (cleanupCounter >= 60) {
+        cleanupCounter = 0;
+        cleanupProcessedEvents();
+      }
+    } catch (err) {
+      logger.error({ err }, 'Error in event bus loop');
+    }
+
+    setTimeout(loop, EVENT_POLL_INTERVAL);
+  };
+
+  loop();
+}

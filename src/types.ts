@@ -23,21 +23,6 @@ export interface NewMessage {
   timestamp: string;
 }
 
-export interface ScheduledTask {
-  id: string;
-  group_folder: string;
-  chat_jid: string;
-  prompt: string;
-  schedule_type: 'cron' | 'interval' | 'once';
-  schedule_value: string;
-  context_mode: 'group' | 'isolated';
-  next_run: string | null;
-  last_run: string | null;
-  last_result: string | null;
-  status: 'active' | 'paused' | 'completed';
-  created_at: string;
-}
-
 export interface EmailMessage {
   id: string;
   threadId: string;
@@ -47,8 +32,34 @@ export interface EmailMessage {
   date: string;
 }
 
-export interface TaskRunLog {
-  task_id: string;
+export interface EventRecord {
+  id: number;
+  type: string;
+  payload: string; // JSON
+  emitted_at: string;
+  processed: number; // 0 or 1
+}
+
+export interface Handler {
+  id: string;
+  group_folder: string;
+  prompt: string;
+  context_mode: 'group' | 'isolated';
+  event_type: string;
+  filter: string | null;
+  cron: string | null;
+  next_run: string | null;
+  cooldown_ms: number;
+  last_triggered: string | null;
+  max_triggers: number | null;
+  trigger_count: number;
+  status: 'active' | 'paused' | 'completed';
+  created_at: string;
+}
+
+export interface HandlerRunLog {
+  handler_id: string;
+  event_id: number;
   run_at: string;
   duration_ms: number;
   status: 'success' | 'error';

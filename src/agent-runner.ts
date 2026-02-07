@@ -12,8 +12,9 @@ import {
   GROUPS_DIR,
 } from './config.js';
 import { createIpcMcp } from './ipc-mcp.js';
+import { emitEvent } from './db.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { Handler, RegisteredGroup } from './types.js';
 
 export interface ContainerInput {
   prompt: string;
@@ -21,7 +22,7 @@ export interface ContainerInput {
   groupFolder: string;
   chatJid: string;
   isMain: boolean;
-  isScheduledTask?: boolean;
+  isEventHandler?: boolean;
 }
 
 export interface ContainerOutput {
@@ -214,11 +215,7 @@ export async function runContainerAgent(
   let result: string | null = null;
   let newSessionId: string | undefined;
 
-  // Add context for scheduled tasks
-  let prompt = input.prompt;
-  if (input.isScheduledTask) {
-    prompt = `[SCHEDULED TASK - You are running automatically, not in response to a user message. Use mcp__nanoclaw__send_message if needed to communicate with the user.]\n\n${input.prompt}`;
-  }
+  const prompt = input.prompt;
 
   // Timeout via AbortController
   const abortController = new AbortController();
@@ -305,6 +302,15 @@ export async function runContainerAgent(
 
     fs.writeFileSync(logFile, logLines.join('\n'));
 
+    // Emit agent_complete event
+    const triggerType = input.isEventHandler ? 'event_handler' : 'message';
+    emitEvent('agent_complete', {
+      group_folder: input.groupFolder,
+      trigger_type: triggerType,
+      status: 'success',
+      duration_ms: duration,
+    });
+
     return {
       status: 'success',
       result,
@@ -335,6 +341,15 @@ export async function runContainerAgent(
       `Error: ${errorMessage}`,
     ].join('\n'));
 
+    // Emit agent_complete event (error path)
+    const triggerType = input.isEventHandler ? 'event_handler' : 'message';
+    emitEvent('agent_complete', {
+      group_folder: input.groupFolder,
+      trigger_type: triggerType,
+      status: 'error',
+      duration_ms: duration,
+    });
+
     return {
       status: 'error',
       result: null,
@@ -344,35 +359,47 @@ export async function runContainerAgent(
   }
 }
 
-export function writeTasksSnapshot(
-  groupFolder: string,
-  isMain: boolean,
-  tasks: Array<{
-    id: string;
-    groupFolder: string;
-    prompt: string;
-    schedule_type: string;
-    schedule_value: string;
-    status: string;
-    next_run: string | null;
-  }>,
-): void {
-  const groupIpcDir = path.join(DATA_DIR, 'ipc', groupFolder);
-  fs.mkdirSync(groupIpcDir, { recursive: true });
-
-  const filteredTasks = isMain
-    ? tasks
-    : tasks.filter((t) => t.groupFolder === groupFolder);
-
-  const tasksFile = path.join(groupIpcDir, 'current_tasks.json');
-  fs.writeFileSync(tasksFile, JSON.stringify(filteredTasks, null, 2));
-}
-
 export interface AvailableGroup {
   jid: string;
   name: string;
   lastActivity: string;
   isRegistered: boolean;
+}
+
+export function writeHandlersSnapshot(
+  groupFolder: string,
+  isMain: boolean,
+  handlers: Handler[],
+): void {
+  const groupIpcDir = path.join(DATA_DIR, 'ipc', groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  const filteredHandlers = isMain
+    ? handlers
+    : handlers.filter((h) => h.group_folder === groupFolder);
+
+  const handlersFile = path.join(groupIpcDir, 'current_handlers.json');
+  fs.writeFileSync(
+    handlersFile,
+    JSON.stringify(
+      filteredHandlers.map((h) => ({
+        id: h.id,
+        event_type: h.event_type,
+        filter: h.filter,
+        group_folder: h.group_folder,
+        prompt: h.prompt.slice(0, 100),
+        context_mode: h.context_mode,
+        cron: h.cron,
+        next_run: h.next_run,
+        cooldown_ms: h.cooldown_ms,
+        max_triggers: h.max_triggers,
+        trigger_count: h.trigger_count,
+        status: h.status,
+      })),
+      null,
+      2,
+    ),
+  );
 }
 
 export function writeGroupsSnapshot(
