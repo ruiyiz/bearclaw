@@ -257,7 +257,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   if (response && !isNonResponse(response)) {
     lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
-    await sendMessage(msg.chat_jid, `${DISPLAY_NAME}: ${response}`);
+    await sendMessage(msg.chat_jid, `${DISPLAY_NAME}: ${response.trimStart()}`);
   }
 }
 
@@ -397,7 +397,7 @@ function startIpcWatcher(): void {
                   ) {
                     await sendMessage(
                       targetJid,
-                      `${DISPLAY_NAME}: ${data.text}`,
+                      `${DISPLAY_NAME}: ${data.text.trimStart()}`,
                     );
                     logger.info(
                       { targetJid, sourceGroup },
@@ -745,6 +745,12 @@ async function processTaskIpc(
       break;
 
     default:
+      // Try X integration handler
+      if (data.type?.startsWith('x_')) {
+        const { handleXIpc } = await import('./x-handler.js');
+        const handled = await handleXIpc(data as Record<string, unknown>, sourceGroup, isMain, DATA_DIR);
+        if (handled) break;
+      }
       logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
 }
