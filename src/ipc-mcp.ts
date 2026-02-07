@@ -57,6 +57,7 @@ export function createIpcMcp(ctx: IpcMcpContext) {
   const messagesDir = path.join(ipcDir, 'messages');
   const tasksDir = path.join(ipcDir, 'tasks');
   const xResultsDir = path.join(ipcDir, 'x_results');
+  const emailResultsDir = path.join(ipcDir, 'email_results');
 
   return createSdkMcpServer({
     name: 'nanoclaw',
@@ -170,6 +171,39 @@ CRON FORMAT (5-field, all times LOCAL timezone):
               type: 'text',
               text: `Task scheduled (${filename}): ${scheduleDesc}`
             }]
+          };
+        }
+      ),
+
+      // ─── Email tools ────────────────────────────────────────────────────
+
+      tool(
+        'reply_email',
+        `Reply to an email. Use this when processing email_received events and a response is needed.
+Sends the reply via Gmail, threading it under the original message.`,
+        {
+          message_id: z.string().describe('The original message ID to reply to'),
+          to: z.string().describe('Recipient email address'),
+          subject: z.string().describe('Email subject (use "Re: ..." for replies)'),
+          body: z.string().describe('The reply body text'),
+        },
+        async (args) => {
+          const requestId = `email-reply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          writeIpcFile(tasksDir, {
+            type: 'reply_email',
+            requestId,
+            messageId: args.message_id,
+            to: args.to,
+            subject: args.subject,
+            body: args.body,
+            groupFolder,
+            timestamp: new Date().toISOString(),
+          });
+
+          const result = await waitForResult(emailResultsDir, requestId);
+          return {
+            content: [{ type: 'text', text: result.message }],
+            isError: !result.success,
           };
         }
       ),

@@ -14,6 +14,7 @@ import {
   ASSISTANT_NAME,
   DATA_DIR,
   DISPLAY_NAME,
+  EMAIL_GROUP_FOLDER,
   IPC_POLL_INTERVAL,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -44,7 +45,7 @@ import {
   updateChatName,
   updateHandler,
 } from './db.js';
-import { startEmailLoop } from './email-channel.js';
+import { sendEmailReply, startEmailLoop } from './email-channel.js';
 import { startEventBusLoop } from './event-bus.js';
 import { startSchedulerEmitter } from './task-scheduler.js';
 import { NewMessage, RegisteredGroup, Session } from './types.js';
@@ -484,6 +485,12 @@ async function processTaskIpc(
     name?: string;
     folder?: string;
     trigger?: string;
+    // For reply_email
+    requestId?: string;
+    messageId?: string;
+    to?: string;
+    subject?: string;
+    body?: string;
     // For event handlers
     eventType?: string;
     payload?: Record<string, unknown>;
@@ -719,6 +726,24 @@ async function processTaskIpc(
       }
       break;
 
+    case 'reply_email':
+      if (data.requestId && data.messageId && data.to && data.subject && data.body) {
+        const emailResultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'email_results');
+        fs.mkdirSync(emailResultsDir, { recursive: true });
+        try {
+          await sendEmailReply(data.messageId, data.to, data.subject, data.body);
+          const resultFile = path.join(emailResultsDir, `${data.requestId}.json`);
+          fs.writeFileSync(resultFile, JSON.stringify({ success: true, message: 'Email reply sent' }));
+          logger.info({ messageId: data.messageId, to: data.to, sourceGroup }, 'Email reply sent via IPC');
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          const resultFile = path.join(emailResultsDir, `${data.requestId}.json`);
+          fs.writeFileSync(resultFile, JSON.stringify({ success: false, message: `Failed to send email: ${errorMsg}` }));
+          logger.error({ messageId: data.messageId, err, sourceGroup }, 'Failed to send email reply via IPC');
+        }
+      }
+      break;
+
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
@@ -795,16 +820,11 @@ async function connectWhatsApp(): Promise<void> {
       startEventBusLoop({
         registeredGroups: () => registeredGroups,
         getSessions: () => sessions,
+        saveSessions: () => saveJson(path.join(DATA_DIR, 'sessions.json'), sessions),
       });
       startIpcWatcher();
       startMessageLoop();
-      startEmailLoop({
-        getSessions: () => sessions,
-        saveSessions: (updated) => {
-          sessions = updated;
-          saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
-        },
-      });
+      startEmailLoop();
     }
   });
 
@@ -899,6 +919,18 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
+
+  // Ensure the email group is registered so the event bus can resolve it
+  const emailJid = `email:${EMAIL_GROUP_FOLDER}`;
+  if (!registeredGroups[emailJid]) {
+    registeredGroups[emailJid] = {
+      name: 'Email',
+      folder: EMAIL_GROUP_FOLDER,
+      trigger: '',
+      added_at: new Date().toISOString(),
+    };
+  }
+
   await connectWhatsApp();
 }
 

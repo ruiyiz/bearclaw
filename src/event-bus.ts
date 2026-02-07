@@ -26,6 +26,7 @@ import { EventRecord, Handler, RegisteredGroup } from './types.js';
 export interface EventBusDependencies {
   registeredGroups: () => Record<string, RegisteredGroup>;
   getSessions: () => Record<string, string>;
+  saveSessions: () => void;
 }
 
 async function runHandler(
@@ -82,11 +83,21 @@ ${event.payload}
 ${handler.prompt}
 </handler_instructions>`;
 
+  // Determine session key: use payload's session_key if present, else fall back to group folder
+  let payloadObj: Record<string, unknown>;
+  try {
+    payloadObj = JSON.parse(event.payload);
+  } catch {
+    payloadObj = {};
+  }
+  const sessionKey =
+    handler.context_mode === 'group'
+      ? (payloadObj.session_key as string) || handler.group_folder
+      : '';
+
   const sessions = deps.getSessions();
   const sessionId =
-    handler.context_mode === 'group'
-      ? sessions[handler.group_folder]
-      : undefined;
+    handler.context_mode === 'group' ? sessions[sessionKey] : undefined;
 
   let result: string | null = null;
   let error: string | null = null;
@@ -105,6 +116,12 @@ ${handler.prompt}
       error = output.error || 'Unknown error';
     } else {
       result = output.result;
+    }
+
+    // Persist new session ID for group-mode handlers
+    if (output.newSessionId && handler.context_mode === 'group') {
+      sessions[sessionKey] = output.newSessionId;
+      deps.saveSessions();
     }
 
     logger.info(

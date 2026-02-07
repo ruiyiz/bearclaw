@@ -9,19 +9,14 @@ import {
   EMAIL_TRIGGER_ADDRESS,
   GROUPS_DIR,
 } from './config.js';
-import { runContainerAgent } from './agent-runner.js';
+import { createHandler, emitEvent, getHandlersForGroup } from './db.js';
 import { logger } from './logger.js';
-import { EmailMessage, RegisteredGroup } from './types.js';
+import { EmailMessage } from './types.js';
 import { loadJson, saveJson } from './utils.js';
 
 const GOG_PATH = '/opt/homebrew/bin/gog';
 const STATE_FILE = path.join(DATA_DIR, 'email_state.json');
 const MAX_PROCESSED_IDS = 1000;
-
-export interface EmailDependencies {
-  getSessions: () => Record<string, string>;
-  saveSessions: (sessions: Record<string, string>) => void;
-}
 
 interface EmailState {
   processedIds: string[];
@@ -100,7 +95,7 @@ async function markThreadRead(threadId: string): Promise<void> {
   ]);
 }
 
-async function sendEmailReply(
+export async function sendEmailReply(
   messageId: string,
   to: string,
   subject: string,
@@ -119,105 +114,62 @@ async function sendEmailReply(
   );
 }
 
-function parseEmailAddress(from: string): string {
+export function parseEmailAddress(from: string): string {
   const match = from.match(/<([^>]+)>/);
   return match ? match[1] : from;
 }
 
-function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-const emailGroup: RegisteredGroup = {
-  name: 'Email',
-  folder: EMAIL_GROUP_FOLDER,
-  trigger: '',
-  added_at: new Date().toISOString(),
-};
-
-async function processEmail(
-  email: EmailMessage,
-  deps: EmailDependencies,
-): Promise<void> {
-  const senderAddress = parseEmailAddress(email.from);
-  logger.info(
-    { messageId: email.id, threadId: email.threadId, from: senderAddress, subject: email.subject },
-    'Processing email',
+/**
+ * Ensure a default email_received handler exists for the email group.
+ * Called once on startup — if one already exists, this is a no-op.
+ */
+function ensureDefaultEmailHandler(): void {
+  const handlers = getHandlersForGroup(EMAIL_GROUP_FOLDER);
+  const hasEmailHandler = handlers.some(
+    (h) => h.event_type === 'email_received' && h.status === 'active',
   );
 
-  const prompt = [
-    '<email>',
-    `<from>${escapeXml(email.from)}</from>`,
-    `<subject>${escapeXml(email.subject)}</subject>`,
-    `<date>${escapeXml(email.date)}</date>`,
-    `<body>${escapeXml(email.body)}</body>`,
-    '</email>',
-  ].join('\n');
-
-  // Use per-thread session key
-  const sessionKey = `email:${email.threadId}`;
-  const sessions = deps.getSessions();
-  const sessionId = sessions[sessionKey];
-
-  // Ensure group directory exists
-  const groupDir = path.join(GROUPS_DIR, EMAIL_GROUP_FOLDER);
-  fs.mkdirSync(groupDir, { recursive: true });
-
-  try {
-    const output = await runContainerAgent(emailGroup, {
-      prompt,
-      sessionId,
-      groupFolder: EMAIL_GROUP_FOLDER,
-      chatJid: `email:${email.threadId}`,
-      isMain: false,
-    });
-
-    if (output.newSessionId) {
-      sessions[sessionKey] = output.newSessionId;
-      deps.saveSessions(sessions);
-    }
-
-    if (output.status === 'error') {
-      logger.error(
-        { messageId: email.id, error: output.error },
-        'Email agent error',
-      );
-      return;
-    }
-
-    if (output.result) {
-      const replySubject = email.subject.startsWith('Re:')
-        ? email.subject
-        : `Re: ${email.subject}`;
-      await sendEmailReply(
-        email.id,
-        senderAddress,
-        replySubject,
-        output.result,
-      );
-      logger.info(
-        { messageId: email.id, threadId: email.threadId },
-        'Email reply sent',
-      );
-    }
-  } catch (err) {
-    logger.error({ messageId: email.id, err }, 'Failed to process email');
+  if (hasEmailHandler) {
+    logger.debug('Default email_received handler already exists');
+    return;
   }
+
+  const handlerId = `handler-email-default-${Date.now()}`;
+  createHandler({
+    id: handlerId,
+    group_folder: EMAIL_GROUP_FOLDER,
+    prompt: `Process this email. The event payload contains the full email (from, subject, body, thread_id, message_id).
+If a response is needed, use the reply_email tool. If no response is needed, do nothing.`,
+    context_mode: 'group',
+    event_type: 'email_received',
+    filter: null,
+    cron: null,
+    next_run: null,
+    cooldown_ms: 0,
+    max_triggers: null,
+    status: 'active',
+    created_at: new Date().toISOString(),
+  });
+
+  logger.info({ handlerId }, 'Default email_received handler registered');
 }
 
-export function startEmailLoop(deps: EmailDependencies): void {
+export function startEmailLoop(): void {
   if (emailLoopRunning) {
     logger.debug('Email loop already running, skipping duplicate start');
     return;
   }
   emailLoopRunning = true;
+
+  // Ensure group directory exists
+  fs.mkdirSync(path.join(GROUPS_DIR, EMAIL_GROUP_FOLDER), { recursive: true });
+
+  // Auto-register default handler if none exists
+  ensureDefaultEmailHandler();
+
   logger.info(
     { address: EMAIL_TRIGGER_ADDRESS, interval: EMAIL_POLL_INTERVAL },
-    'Email loop started',
+    'Email emitter started',
   );
 
   const processedIds = loadEmailState();
@@ -235,7 +187,17 @@ export function startEmailLoop(deps: EmailDependencies): void {
           continue;
         }
 
-        await processEmail(email, deps);
+        // Emit event with full email body + session_key for per-thread sessions
+        emitEvent('email_received', {
+          message_id: email.id,
+          thread_id: email.threadId,
+          from: parseEmailAddress(email.from),
+          from_raw: email.from,
+          subject: email.subject,
+          body: email.body,
+          date: email.date,
+          session_key: `email:${email.threadId}`,
+        });
 
         // Mark processed
         processedIds.add(email.id);
