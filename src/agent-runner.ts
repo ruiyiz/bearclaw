@@ -23,6 +23,7 @@ export interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isEventHandler?: boolean;
+  model?: string;
 }
 
 export interface ContainerOutput {
@@ -234,7 +235,7 @@ export async function runContainerAgent(
         abortController,
         cwd: groupDir,
         resume: input.sessionId,
-        model: 'claude-opus-4-6',
+        model: input.model || 'claude-opus-4-6',
         allowedTools: [
           'Bash',
           'Read', 'Write', 'Edit', 'Glob', 'Grep',

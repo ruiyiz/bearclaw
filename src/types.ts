@@ -2,12 +2,19 @@ export interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }
 
+export interface OdysseyConfig {
+  interval: string; // "30m", "1h", "6h"
+  model?: string; // optional model override (e.g., cheaper model for routine checks)
+  quiet?: { start: string; end: string }; // e.g. { start: "23:00", end: "07:00" }
+}
+
 export interface RegisteredGroup {
   name: string;
   folder: string;
   trigger: string;
   added_at: string;
   containerConfig?: ContainerConfig;
+  odyssey?: OdysseyConfig;
 }
 
 export interface Session {

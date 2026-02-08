@@ -33,6 +33,17 @@ export const EMAIL_POLL_INTERVAL = 3600000; // 1 hour
 export const EMAIL_TRIGGER_ADDRESS = process.env.EMAIL_TRIGGER_ADDRESS || 'ruiyizhang+conan@gmail.com';
 export const EMAIL_GROUP_FOLDER = 'email';
 
+// Odyssey — proactive agent initiative loop
+export const ODYSSEY_HANDLER_PREFIX = 'odyssey-';
+
+export const ODYSSEY_PROMPT = `[ODYSSEY — Proactive check-in. You are waking up on your own to look around.]
+
+Read ODYSSEY.md in your working directory. Follow its instructions exactly.
+Do not infer tasks from previous conversations — only act on what ODYSSEY.md says.
+
+If nothing needs attention, reply with exactly: ODYSSEY_OK
+If something does need attention, take action (send messages, run commands, etc.) and describe what you did. Do NOT include ODYSSEY_OK in your response if you took action.`;
+
 // Timezone for scheduled tasks (cron expressions, etc.)
 // Uses system timezone by default
 export const TIMEZONE =

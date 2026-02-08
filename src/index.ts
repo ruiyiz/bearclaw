@@ -48,6 +48,7 @@ import {
 } from './db.js';
 import { sendEmailReply, startEmailLoop } from './email-channel.js';
 import { startEventBusLoop } from './event-bus.js';
+import { registerOdysseyHandlers } from './odyssey.js';
 import { startSchedulerEmitter } from './task-scheduler.js';
 import { NewMessage, RegisteredGroup, Session } from './types.js';
 import { loadJson, saveJson } from './utils.js';
@@ -1047,6 +1048,8 @@ async function main(): Promise<void> {
       added_at: new Date().toISOString(),
     };
   }
+
+  registerOdysseyHandlers(registeredGroups);
 
   await connectWhatsApp();
 }

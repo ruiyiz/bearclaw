@@ -5,6 +5,7 @@ import {
   EVENT_POLL_INTERVAL,
   GROUPS_DIR,
   MAIN_GROUP_FOLDER,
+  ODYSSEY_HANDLER_PREFIX,
 } from './config.js';
 import {
   cleanupProcessedEvents,
@@ -21,6 +22,7 @@ import {
   writeHandlersSnapshot,
 } from './agent-runner.js';
 import { logger } from './logger.js';
+import { isInQuietPeriod } from './odyssey.js';
 import { EventRecord, Handler, RegisteredGroup } from './types.js';
 
 export interface EventBusDependencies {
@@ -57,6 +59,16 @@ async function runHandler(
       result: null,
       error: `Group not found: ${handler.group_folder}`,
     });
+    return;
+  }
+
+  // Skip Odyssey handlers during quiet period
+  if (
+    handler.id.startsWith(ODYSSEY_HANDLER_PREFIX) &&
+    group.odyssey?.quiet &&
+    isInQuietPeriod(group.odyssey.quiet)
+  ) {
+    logger.debug({ handlerId: handler.id }, 'Odyssey handler skipped (quiet period)');
     return;
   }
 
@@ -103,6 +115,11 @@ ${handler.prompt}
   let error: string | null = null;
 
   try {
+    // Pass model override for Odyssey handlers
+    const model = handler.id.startsWith(ODYSSEY_HANDLER_PREFIX)
+      ? group.odyssey?.model
+      : undefined;
+
     const output = await runContainerAgent(group, {
       prompt,
       sessionId,
@@ -110,6 +127,7 @@ ${handler.prompt}
       chatJid,
       isMain,
       isEventHandler: true,
+      model,
     });
 
     if (output.status === 'error') {
