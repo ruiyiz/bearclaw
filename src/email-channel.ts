@@ -1,41 +1,48 @@
 import { execFile } from 'child_process';
-import fs from 'fs';
 import path from 'path';
 
-import {
-  DATA_DIR,
-  EMAIL_GROUP_FOLDER,
-  EMAIL_POLL_INTERVAL,
-  EMAIL_TRIGGER_ADDRESS,
-  GROUPS_DIR,
-} from './config.js';
-import { createHandler, emitEvent, getHandlersForGroup } from './db.js';
+import { DATA_DIR, EMAIL_DEFAULT_INTERVAL, EMAIL_HANDLER_PREFIX } from './config.js';
+import { createHandler, emitEvent, getAllHandlers, updateHandler } from './db.js';
 import { logger } from './logger.js';
-import { EmailMessage } from './types.js';
+import { EmailMessage, RegisteredGroup } from './types.js';
 import { loadJson, saveJson } from './utils.js';
 
 const GOG_PATH = '/opt/homebrew/bin/gog';
-const STATE_FILE = path.join(DATA_DIR, 'email_state.json');
 const MAX_PROCESSED_IDS = 1000;
 
 interface EmailState {
   processedIds: string[];
 }
 
-let emailLoopRunning = false;
+/** Convert an interval string like "30m", "1h" to milliseconds. */
+function intervalToMs(interval: string): number {
+  const match = interval.match(/^(\d+)(m|h|d)$/);
+  if (!match) return 3600000; // default 1h
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+  switch (unit) {
+    case 'm': return value * 60 * 1000;
+    case 'h': return value * 60 * 60 * 1000;
+    case 'd': return value * 24 * 60 * 60 * 1000;
+    default: return 3600000;
+  }
+}
 
-function loadEmailState(): Set<string> {
-  const state = loadJson<EmailState>(STATE_FILE, { processedIds: [] });
+function stateFile(folder: string): string {
+  return path.join(DATA_DIR, `email_state_${folder}.json`);
+}
+
+function loadEmailState(folder: string): Set<string> {
+  const state = loadJson<EmailState>(stateFile(folder), { processedIds: [] });
   return new Set(state.processedIds);
 }
 
-function saveEmailState(processedIds: Set<string>): void {
-  // Cap at MAX_PROCESSED_IDS, keeping newest
+function saveEmailState(folder: string, processedIds: Set<string>): void {
   const ids = Array.from(processedIds);
   const trimmed = ids.length > MAX_PROCESSED_IDS
     ? ids.slice(ids.length - MAX_PROCESSED_IDS)
     : ids;
-  saveJson(STATE_FILE, { processedIds: trimmed });
+  saveJson(stateFile(folder), { processedIds: trimmed });
 }
 
 function runGog(args: string[], stdin?: string): Promise<string> {
@@ -59,10 +66,10 @@ function runGog(args: string[], stdin?: string): Promise<string> {
   });
 }
 
-async function fetchUnreadEmails(): Promise<EmailMessage[]> {
+async function fetchUnreadEmails(address: string): Promise<EmailMessage[]> {
   const output = await runGog([
     'gmail', 'messages', 'search',
-    `to:${EMAIL_TRIGGER_ADDRESS} is:unread`,
+    `to:${address} is:unread`,
     '--json', '--no-input', '--include-body', '--max=10',
   ]);
 
@@ -119,104 +126,146 @@ export function parseEmailAddress(from: string): string {
   return match ? match[1] : from;
 }
 
+// Track running loops to prevent duplicates on reconnect
+const runningLoops = new Set<string>();
+
 /**
- * Ensure a default email_received handler exists for the email group.
- * Called once on startup — if one already exists, this is a no-op.
+ * Start email polling loops for all groups that have email config.
+ * Each group gets its own loop with its own state file and interval.
  */
-function ensureDefaultEmailHandler(): void {
-  const handlers = getHandlersForGroup(EMAIL_GROUP_FOLDER);
-  const hasEmailHandler = handlers.some(
-    (h) => h.event_type === 'email_received' && h.status === 'active',
-  );
+export function startEmailLoops(groups: Record<string, RegisteredGroup>): void {
+  for (const group of Object.values(groups)) {
+    if (!group.email) continue;
+    if (runningLoops.has(group.folder)) {
+      logger.debug({ folder: group.folder }, 'Email loop already running, skipping');
+      continue;
+    }
+    runningLoops.add(group.folder);
 
-  if (hasEmailHandler) {
-    logger.debug('Default email_received handler already exists');
-    return;
+    const { address, interval } = group.email;
+    const pollMs = intervalToMs(interval || EMAIL_DEFAULT_INTERVAL);
+    const processedIds = loadEmailState(group.folder);
+
+    logger.info(
+      { folder: group.folder, address, intervalMs: pollMs },
+      'Email loop started',
+    );
+
+    const poll = async () => {
+      try {
+        const emails = await fetchUnreadEmails(address);
+        if (emails.length > 0) {
+          logger.info({ count: emails.length, folder: group.folder }, 'Found unread emails');
+        }
+
+        for (const email of emails) {
+          if (processedIds.has(email.id)) {
+            logger.debug({ messageId: email.id }, 'Skipping already-processed email');
+            continue;
+          }
+
+          emitEvent('email_received', {
+            group_folder: group.folder,
+            message_id: email.id,
+            thread_id: email.threadId,
+            from: parseEmailAddress(email.from),
+            from_raw: email.from,
+            subject: email.subject,
+            body: email.body,
+            date: email.date,
+            session_key: `email:${email.threadId}`,
+          });
+
+          processedIds.add(email.id);
+          saveEmailState(group.folder, processedIds);
+
+          try {
+            await markThreadRead(email.threadId);
+          } catch (err) {
+            logger.error({ threadId: email.threadId, err }, 'Failed to mark thread read');
+          }
+        }
+      } catch (err) {
+        logger.error({ err, folder: group.folder }, 'Error in email poll');
+      }
+
+      setTimeout(poll, pollMs);
+    };
+
+    poll();
   }
-
-  const handlerId = `handler-email-default-${Date.now()}`;
-  createHandler({
-    id: handlerId,
-    group_folder: EMAIL_GROUP_FOLDER,
-    prompt: `Process this email. The event payload contains the full email (from, subject, body, thread_id, message_id).
-If a response is needed, use the reply_email tool. If no response is needed, do nothing.`,
-    context_mode: 'group',
-    event_type: 'email_received',
-    filter: null,
-    cron: null,
-    next_run: null,
-    cooldown_ms: 0,
-    max_triggers: null,
-    status: 'active',
-    created_at: new Date().toISOString(),
-  });
-
-  logger.info({ handlerId }, 'Default email_received handler registered');
 }
 
-export function startEmailLoop(): void {
-  if (emailLoopRunning) {
-    logger.debug('Email loop already running, skipping duplicate start');
-    return;
-  }
-  emailLoopRunning = true;
-
-  // Ensure group directory exists
-  fs.mkdirSync(path.join(GROUPS_DIR, EMAIL_GROUP_FOLDER), { recursive: true });
-
-  // Auto-register default handler if none exists
-  ensureDefaultEmailHandler();
-
-  logger.info(
-    { address: EMAIL_TRIGGER_ADDRESS, interval: EMAIL_POLL_INTERVAL },
-    'Email emitter started',
+/**
+ * Register email_received handlers for all groups with email config.
+ * Mirrors the Odyssey pattern: creates/updates/pauses handlers based on config.
+ */
+export function registerEmailHandlers(groups: Record<string, RegisteredGroup>): void {
+  const existingHandlers = getAllHandlers();
+  const emailHandlers = new Map(
+    existingHandlers
+      .filter((h) => h.id.startsWith(EMAIL_HANDLER_PREFIX))
+      .map((h) => [h.id, h]),
   );
 
-  const processedIds = loadEmailState();
+  const seenHandlerIds = new Set<string>();
 
-  const poll = async () => {
-    try {
-      const emails = await fetchUnreadEmails();
-      if (emails.length > 0) {
-        logger.info({ count: emails.length }, 'Found unread emails');
+  for (const group of Object.values(groups)) {
+    const handlerId = `${EMAIL_HANDLER_PREFIX}${group.folder}`;
+    seenHandlerIds.add(handlerId);
+
+    const existing = emailHandlers.get(handlerId);
+
+    if (!group.email) {
+      // No email config — pause existing handler if any
+      if (existing && existing.status === 'active') {
+        updateHandler(handlerId, { status: 'paused' });
+        logger.info({ handlerId }, 'Email handler paused (config removed)');
       }
-
-      for (const email of emails) {
-        if (processedIds.has(email.id)) {
-          logger.debug({ messageId: email.id }, 'Skipping already-processed email');
-          continue;
-        }
-
-        // Emit event with full email body + session_key for per-thread sessions
-        emitEvent('email_received', {
-          message_id: email.id,
-          thread_id: email.threadId,
-          from: parseEmailAddress(email.from),
-          from_raw: email.from,
-          subject: email.subject,
-          body: email.body,
-          date: email.date,
-          session_key: `email:${email.threadId}`,
-        });
-
-        // Mark processed
-        processedIds.add(email.id);
-        saveEmailState(processedIds);
-
-        // Mark thread as read in Gmail
-        try {
-          await markThreadRead(email.threadId);
-        } catch (err) {
-          logger.error({ threadId: email.threadId, err }, 'Failed to mark thread read');
-        }
-      }
-    } catch (err) {
-      logger.error({ err }, 'Error in email poll');
+      continue;
     }
 
-    setTimeout(poll, EMAIL_POLL_INTERVAL);
-  };
+    const filter = JSON.stringify({ group_folder: group.folder });
+    const prompt = `Process this email. The event payload contains the full email (from, subject, body, thread_id, message_id).
+If a response is needed, use the reply_email tool. If no response is needed, do nothing.`;
 
-  // Run first poll immediately
-  poll();
+    if (existing) {
+      // Handler exists — ensure active with correct filter/prompt
+      const updates: Parameters<typeof updateHandler>[1] = {};
+      if (existing.status !== 'active') updates.status = 'active';
+      if (existing.prompt !== prompt) updates.prompt = prompt;
+      if (existing.filter !== filter) updates.filter = filter;
+      if (Object.keys(updates).length > 0) {
+        updateHandler(handlerId, updates);
+        logger.info({ handlerId }, 'Email handler updated');
+      }
+      continue;
+    }
+
+    // Create new handler
+    createHandler({
+      id: handlerId,
+      group_folder: group.folder,
+      prompt,
+      context_mode: 'group',
+      event_type: 'email_received',
+      filter,
+      cron: null,
+      next_run: null,
+      cooldown_ms: 0,
+      max_triggers: null,
+      status: 'active',
+      created_at: new Date().toISOString(),
+    });
+
+    logger.info({ handlerId, folder: group.folder }, 'Email handler created');
+  }
+
+  // Pause any email handlers for groups that no longer exist
+  for (const [handlerId, handler] of emailHandlers) {
+    if (!seenHandlerIds.has(handlerId) && handler.status === 'active') {
+      updateHandler(handlerId, { status: 'paused' });
+      logger.info({ handlerId }, 'Email handler paused (group removed)');
+    }
+  }
 }

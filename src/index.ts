@@ -14,7 +14,6 @@ import {
   ASSISTANT_NAME,
   DATA_DIR,
   DISPLAY_NAME,
-  EMAIL_GROUP_FOLDER,
   GROUPS_DIR,
   IPC_POLL_INTERVAL,
   MAIN_GROUP_FOLDER,
@@ -46,7 +45,7 @@ import {
   updateChatName,
   updateHandler,
 } from './db.js';
-import { sendEmailReply, startEmailLoop } from './email-channel.js';
+import { registerEmailHandlers, sendEmailReply, startEmailLoops } from './email-channel.js';
 import { startEventBusLoop } from './event-bus.js';
 import { registerOdysseyHandlers } from './odyssey.js';
 import { startSchedulerEmitter } from './task-scheduler.js';
@@ -942,7 +941,7 @@ async function connectWhatsApp(): Promise<void> {
       });
       startIpcWatcher();
       startMessageLoop();
-      startEmailLoop();
+      startEmailLoops(registeredGroups);
     }
   });
 
@@ -1038,18 +1037,8 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
-  // Ensure the email group is registered so the event bus can resolve it
-  const emailJid = `email:${EMAIL_GROUP_FOLDER}`;
-  if (!registeredGroups[emailJid]) {
-    registeredGroups[emailJid] = {
-      name: 'Email',
-      folder: EMAIL_GROUP_FOLDER,
-      trigger: '',
-      added_at: new Date().toISOString(),
-    };
-  }
-
   registerOdysseyHandlers(registeredGroups);
+  registerEmailHandlers(registeredGroups);
 
   await connectWhatsApp();
 }

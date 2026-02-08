@@ -8,6 +8,11 @@ export interface OdysseyConfig {
   quiet?: { start: string; end: string }; // e.g. { start: "23:00", end: "07:00" }
 }
 
+export interface EmailConfig {
+  address: string;       // Gmail trigger address, e.g. "ruiyizhang+coco@gmail.com"
+  interval?: string;     // Poll interval: "30m", "1h", etc. Default: "1h"
+}
+
 export interface RegisteredGroup {
   name: string;
   folder: string;
@@ -15,6 +20,7 @@ export interface RegisteredGroup {
   added_at: string;
   containerConfig?: ContainerConfig;
   odyssey?: OdysseyConfig;
+  email?: EmailConfig;
 }
 
 export interface Session {

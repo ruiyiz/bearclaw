@@ -29,9 +29,8 @@ export const TRIGGER_PATTERN = new RegExp(
   'i',
 );
 
-export const EMAIL_POLL_INTERVAL = 3600000; // 1 hour
-export const EMAIL_TRIGGER_ADDRESS = process.env.EMAIL_TRIGGER_ADDRESS || 'ruiyizhang+conan@gmail.com';
-export const EMAIL_GROUP_FOLDER = 'email';
+export const EMAIL_DEFAULT_INTERVAL = '1h';
+export const EMAIL_HANDLER_PREFIX = 'email-';
 
 // Odyssey — proactive agent initiative loop
 export const ODYSSEY_HANDLER_PREFIX = 'odyssey-';
