@@ -65,8 +65,15 @@ export function createIpcMcp(ctx: IpcMcpContext) {
     tools: [
       tool(
         'send_message',
-        `Send a message to a WhatsApp group. Use this to proactively share information or updates.
-By default sends to the current group. Main group agents can send to any registered group by specifying target_chat (the group folder name).
+        `Send a message to a WhatsApp group.
+
+IMPORTANT: Your final text output is automatically sent to the user. Do NOT use this tool for regular replies — you'll cause duplicate messages. Only use this tool for:
+- Cross-group messaging (sending to a different group via target_chat)
+- Early acknowledgments during long tasks (then return "no response needed" as your final output)
+- Sending media (images, documents)
+- Communicating during scheduled/event-triggered tasks (where your return value is only logged)
+
+Main group agents can send to any registered group by specifying target_chat (the group folder name).
 
 MEDIA: Attach an image or document by providing file_path (local file) or media_url (remote URL) along with media_type.
 The text parameter becomes the caption for media messages. For documents, also provide file_name.`,
