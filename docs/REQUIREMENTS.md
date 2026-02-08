@@ -20,7 +20,7 @@ The entire codebase should be something you can read and understand. One Node.js
 
 ### Session Isolation
 
-Each group runs with its own working directory (`groups/{folder}/`) and conversation session. The agent's `cwd` is set to the group folder, and `settingSources: ['project']` reads CLAUDE.md from there. IPC authorization ensures non-main groups can only message their own chat and manage their own tasks.
+Each group runs with its own working directory (`~/.nanoclaw/groups/{folder}/`) and conversation session. The agent's `cwd` is set to the group folder, and `settingSources: ['project']` reads CLAUDE.md from there. IPC authorization ensures non-main groups can only message their own chat and manage their own tasks.
 
 ### Built for One User
 
@@ -74,7 +74,7 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 **Implementation approach:**
 - Use existing tools (WhatsApp connector, Claude Agent SDK, MCP servers)
 - Minimal glue code
-- File-based systems where possible (CLAUDE.md for memory, folders for groups)
+- File-based systems where possible (CLAUDE.md for memory, `~/.nanoclaw/groups/` for group data)
 
 ---
 
@@ -87,9 +87,9 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 - Unregistered groups are ignored completely
 
 ### Memory System
-- **Per-group memory**: Each group has a folder with its own `CLAUDE.md`
+- **Per-group memory**: Each group has a folder under `~/.nanoclaw/groups/` with its own `CLAUDE.md`
 - **Global memory**: Root `CLAUDE.md` is read by all groups, but only writable from "main" (self-chat)
-- **Files**: Groups can create/read files in their folder and reference them
+- **Files**: Groups can create/read files in their `~/.nanoclaw/groups/{folder}/` directory and reference them
 - Agent runs in the group's folder, automatically inherits both CLAUDE.md files
 
 ### Session Management
@@ -115,13 +115,13 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 
 ### Group Management
 - New groups are added explicitly via the main channel
-- Groups are registered by editing `data/registered_groups.json`
-- Each group gets a dedicated folder under `groups/`
+- Groups are registered by editing `~/.nanoclaw/data/registered_groups.json`
+- Each group gets a dedicated folder under `~/.nanoclaw/groups/`
 - Groups can have per-group configuration via `containerConfig` (e.g., custom timeout)
 
 ### Main Channel Privileges
 - Main channel is the admin/control group (typically self-chat)
-- Can write to global memory (`groups/CLAUDE.md`)
+- Can write to global memory (`~/.nanoclaw/groups/CLAUDE.md`)
 - Can schedule tasks for any group
 - Can view and manage tasks from all groups
 - Can configure per-group settings

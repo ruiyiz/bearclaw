@@ -122,7 +122,7 @@ allowedTools: [
 
 ### 5. Add Usage Instructions to CLAUDE.md
 
-Add Parallel AI usage instructions to `groups/main/CLAUDE.md`:
+Add Parallel AI usage instructions to `~/.nanoclaw/groups/main/CLAUDE.md`:
 
 Find the "## What You Can Do" section and add after the existing bullet points:
 ```markdown
@@ -253,7 +253,7 @@ Look for: `Parallel AI MCP servers configured`
 - Check logs for "Parallel AI MCP servers configured" message
 
 **Task polling not working:**
-- Verify scheduled task was created: `sqlite3 store/messages.db "SELECT * FROM scheduled_tasks"`
+- Verify scheduled task was created: `sqlite3 ~/.nanoclaw/store/messages.db "SELECT * FROM scheduled_tasks"`
 - Check task runs: `tail -f logs/nanoclaw.log | grep "scheduled task"`
 - Ensure task prompt includes proper Parallel MCP tool names
 
@@ -263,6 +263,6 @@ To remove Parallel AI integration:
 
 1. Remove from .env: `sed -i.bak '/PARALLEL_API_KEY/d' .env`
 2. Revert changes to `src/agent-runner.ts` (remove Parallel MCP server config and allowedTools entries)
-3. Remove Web Research Tools section from groups/main/CLAUDE.md
+3. Remove Web Research Tools section from ~/.nanoclaw/groups/main/CLAUDE.md
 4. Rebuild: `npm run build`
 5. Restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`

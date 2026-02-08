@@ -4,9 +4,7 @@ node_modules/
 # Build output
 dist/
 
-# Local data & auth
-store/
-data/
+# Logs
 logs/
 
 # Secrets

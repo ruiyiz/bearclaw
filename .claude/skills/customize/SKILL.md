@@ -25,7 +25,7 @@ This skill helps users add capabilities or modify behavior. Use AskUserQuestion 
 | `src/types.ts` | TypeScript interfaces |
 | `src/whatsapp-auth.ts` | Standalone WhatsApp authentication script |
 | `.mcp.json` | MCP server configuration (reference) |
-| `groups/CLAUDE.md` | Global memory/persona |
+| `~/.nanoclaw/groups/CLAUDE.md` | Global memory/persona |
 
 ## Common Customization Patterns
 
@@ -53,7 +53,7 @@ Questions to ask:
 Implementation:
 1. Add MCP server to the `mcpServers` config in `src/agent-runner.ts`
 2. Add tools to `allowedTools` array
-3. Document in `groups/CLAUDE.md`
+3. Document in `~/.nanoclaw/groups/CLAUDE.md`
 
 ### Changing Assistant Behavior
 
@@ -62,7 +62,7 @@ Questions to ask:
 - Apply to all groups or specific ones?
 
 Simple changes -> edit `src/config.ts`
-Persona changes -> edit `groups/CLAUDE.md`
+Persona changes -> edit `~/.nanoclaw/groups/CLAUDE.md`
 Per-group behavior -> edit specific group's `CLAUDE.md`
 
 ### Adding New Commands

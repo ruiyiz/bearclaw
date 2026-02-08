@@ -41,7 +41,7 @@ Before using this skill, ensure:
 ```bash
 # 1. Setup authentication (interactive)
 npx dotenv -e .env -- npx tsx .claude/skills/x-integration/scripts/setup.ts
-# Verify: data/x-auth.json should exist after successful login
+# Verify: ~/.nanoclaw/data/x-auth.json should exist after successful login
 
 # 2. Build and restart service
 npm run build
@@ -94,12 +94,12 @@ export const config = {
 
 ### Data Directories
 
-Paths relative to project root:
+Paths under `~/.nanoclaw/`:
 
 | Path | Purpose | Git |
 |------|---------|-----|
-| `data/x-browser-profile/` | Chrome profile with X session | Ignored |
-| `data/x-auth.json` | Auth state marker | Ignored |
+| `~/.nanoclaw/data/x-browser-profile/` | Chrome profile with X session | N/A |
+| `~/.nanoclaw/data/x-auth.json` | Auth state marker | N/A |
 | `logs/nanoclaw.log` | Service logs (contains X operation logs) | Ignored |
 
 ## Architecture
@@ -207,11 +207,11 @@ echo "Chrome not found - update CHROME_PATH in .env"
 npx dotenv -e .env -- npx tsx .claude/skills/x-integration/scripts/setup.ts
 ```
 
-This opens Chrome for manual X login. Session saved to `data/x-browser-profile/`.
+This opens Chrome for manual X login. Session saved to `~/.nanoclaw/data/x-browser-profile/`.
 
 **Verify success:**
 ```bash
-cat data/x-auth.json  # Should show {"authenticated": true, ...}
+cat ~/.nanoclaw/data/x-auth.json  # Should show {"authenticated": true, ...}
 ```
 
 ### 3. Restart Service
@@ -252,10 +252,10 @@ Scripts require environment variables from `.env`. Use `dotenv-cli` to load them
 
 ```bash
 # Check if auth file exists and is valid
-cat data/x-auth.json 2>/dev/null && echo "Auth configured" || echo "Auth not configured"
+cat ~/.nanoclaw/data/x-auth.json 2>/dev/null && echo "Auth configured" || echo "Auth not configured"
 
 # Check if browser profile exists
-ls -la data/x-browser-profile/ 2>/dev/null | head -5
+ls -la ~/.nanoclaw/data/x-browser-profile/ 2>/dev/null | head -5
 ```
 
 ### Re-authenticate (if expired)
@@ -297,9 +297,9 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 If Chrome fails to launch:
 
 ```bash
-rm -f data/x-browser-profile/SingletonLock
-rm -f data/x-browser-profile/SingletonSocket
-rm -f data/x-browser-profile/SingletonCookie
+rm -f ~/.nanoclaw/data/x-browser-profile/SingletonLock
+rm -f ~/.nanoclaw/data/x-browser-profile/SingletonSocket
+rm -f ~/.nanoclaw/data/x-browser-profile/SingletonCookie
 ```
 
 ### Check Logs
@@ -342,7 +342,7 @@ If X updates their UI, selectors in scripts may break. Current selectors:
 
 ## Security
 
-- `data/x-browser-profile/` - Contains X session cookies (in `.gitignore`)
-- `data/x-auth.json` - Auth state marker (in `.gitignore`)
+- `~/.nanoclaw/data/x-browser-profile/` - Contains X session cookies (in `.gitignore`)
+- `~/.nanoclaw/data/x-auth.json` - Auth state marker (in `.gitignore`)
 - Only main group can use X tools (enforced in `agent.ts` and `host.ts`)
 - Scripts run as subprocesses with limited environment

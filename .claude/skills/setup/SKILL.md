@@ -94,9 +94,9 @@ Ask the user:
 > Messages starting with `@TriggerWord` will be sent to Claude.
 
 If they choose something other than `Andy`, update it in these places:
-1. `groups/CLAUDE.md` - Change "# Andy" and "You are Andy" to the new name
-2. `groups/main/CLAUDE.md` - Same changes at the top
-3. `data/registered_groups.json` - Use `@NewName` as the trigger when registering groups
+1. `~/.nanoclaw/groups/CLAUDE.md` - Change "# Andy" and "You are Andy" to the new name
+2. `~/.nanoclaw/groups/main/CLAUDE.md` - Same changes at the top
+3. `~/.nanoclaw/data/registered_groups.json` - Use `@NewName` as the trigger when registering groups
 
 Store their choice - you'll use it when creating the registered_groups.json and when telling them how to test.
 
@@ -156,13 +156,13 @@ Then find the JID from the database:
 
 ```bash
 # For personal chat (ends with @s.whatsapp.net)
-sqlite3 store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@s.whatsapp.net' ORDER BY timestamp DESC LIMIT 5"
+sqlite3 ~/.nanoclaw/store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@s.whatsapp.net' ORDER BY timestamp DESC LIMIT 5"
 
 # For group (ends with @g.us)
-sqlite3 store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@g.us' ORDER BY timestamp DESC LIMIT 5"
+sqlite3 ~/.nanoclaw/store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@g.us' ORDER BY timestamp DESC LIMIT 5"
 ```
 
-Create/update `data/registered_groups.json` using the JID from above and the assistant name from step 4:
+Create/update `~/.nanoclaw/data/registered_groups.json` using the JID from above and the assistant name from step 4:
 ```json
 {
   "JID_HERE": {
@@ -176,7 +176,7 @@ Create/update `data/registered_groups.json` using the JID from above and the ass
 
 Ensure the groups folder exists:
 ```bash
-mkdir -p groups/main/logs
+mkdir -p ~/.nanoclaw/groups/main/logs
 ```
 
 ## 7. Configure launchd Service
@@ -256,12 +256,12 @@ The user should receive a response in WhatsApp.
 **Service not starting**: Check `logs/nanoclaw.error.log`
 
 **Agent fails**:
-- Check agent logs: `cat groups/main/logs/agent-*.log | tail -50`
+- Check agent logs: `cat ~/.nanoclaw/groups/main/logs/agent-*.log | tail -50`
 - Ensure `.env` has valid credentials
 
 **No response to messages**:
 - Verify the trigger pattern matches (e.g., `@AssistantName` at start of message)
-- Check that the chat JID is in `data/registered_groups.json`
+- Check that the chat JID is in `~/.nanoclaw/data/registered_groups.json`
 - Check `logs/nanoclaw.log` for errors
 
 **WhatsApp disconnected**:

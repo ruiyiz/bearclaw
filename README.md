@@ -127,7 +127,7 @@ Logs:
 ```bash
 tail -f logs/nanoclaw.log        # Main log
 tail -f logs/nanoclaw.error.log  # Errors
-cat groups/main/logs/agent-*.log | tail -50  # Agent logs
+cat ~/.nanoclaw/groups/main/logs/agent-*.log | tail -50  # Agent logs
 ```
 
 Re-authenticate WhatsApp (if disconnected):
@@ -150,7 +150,7 @@ Key files:
 - `src/ipc-mcp.ts` - MCP tools for agent communication
 - `src/task-scheduler.ts` - Runs scheduled tasks
 - `src/db.ts` - SQLite operations
-- `groups/*/CLAUDE.md` - Per-group memory
+- `~/.nanoclaw/groups/*/CLAUDE.md` - Per-group memory
 
 ## FAQ
 
@@ -160,7 +160,7 @@ Because I use WhatsApp. Fork it and run a skill to change it. That's the whole p
 
 **Is this secure?**
 
-Agents run directly on the host, so they have access to the host filesystem. Each group's agent runs with `cwd` set to its own `groups/{folder}/` directory, and the `settingSources: ['project']` option means it reads CLAUDE.md from that folder. However, there is no OS-level isolation between groups — a determined prompt injection could access files outside the group folder. For stronger isolation, you could run NanoClaw in a container itself. See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
+Agents run directly on the host, so they have access to the host filesystem. Each group's agent runs with `cwd` set to its own `~/.nanoclaw/groups/{folder}/` directory, and the `settingSources: ['project']` option means it reads CLAUDE.md from that folder. However, there is no OS-level isolation between groups — a determined prompt injection could access files outside the group folder. For stronger isolation, you could run NanoClaw in a container itself. See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
 
 **Why no configuration files?**
 

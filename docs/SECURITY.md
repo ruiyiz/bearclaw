@@ -13,9 +13,9 @@
 
 ### 1. Session Isolation
 
-Each group runs with its own working directory (`groups/{folder}/`) and conversation session:
+Each group runs with its own working directory (`~/.nanoclaw/groups/{folder}/`) and conversation session:
 - **Working directory isolation** - Agent's `cwd` is set to the group's folder
-- **Session isolation** - Each group has its own session ID in `data/sessions.json`
+- **Session isolation** - Each group has its own session ID in `~/.nanoclaw/data/sessions.json`
 - **Memory isolation** - Each group has its own `CLAUDE.md`
 
 **Important:** This is application-level isolation, not OS-level. Agents running on the host have full filesystem access. A determined prompt injection could access files outside the group folder.
@@ -45,7 +45,7 @@ On bare metal, `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` are available dir
 | Capability | Main Group | Non-Main Group |
 |------------|------------|----------------|
 | Project root access | Full (cwd is group folder, but host fs accessible) | Full (host fs accessible) |
-| Group folder | `groups/{folder}/` (cwd) | `groups/{folder}/` (cwd) |
+| Group folder | `~/.nanoclaw/groups/{folder}/` (cwd) | `~/.nanoclaw/groups/{folder}/` (cwd) |
 | Global memory | Read/write via parent CLAUDE.md | Read via parent CLAUDE.md |
 | Network access | Unrestricted | Unrestricted |
 | MCP tools | All | All |
@@ -68,7 +68,7 @@ On bare metal, `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` are available dir
 |  +------------------------------------------------------------+  |
 |  |                  AGENT (IN-PROCESS)                          |  |
 |  |  * Claude Agent SDK query()                                  |  |
-|  |  * cwd: groups/{folder}/                                     |  |
+|  |  * cwd: ~/.nanoclaw/groups/{folder}/                          |  |
 |  |  * Bash commands (runs on host!)                             |  |
 |  |  * File operations (host filesystem access)                  |  |
 |  |  * Network access (unrestricted)                             |  |

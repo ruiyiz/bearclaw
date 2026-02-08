@@ -193,7 +193,7 @@ allowedTools: [
 
 ### Step 2: Update Group Memory
 
-Append to `groups/CLAUDE.md` (the global memory file):
+Append to `~/.nanoclaw/groups/CLAUDE.md` (the global memory file):
 
 ```markdown
 
@@ -209,7 +209,7 @@ You have access to Gmail via MCP tools:
 Example: "Check my unread emails from today" or "Send an email to john@example.com about the meeting"
 ```
 
-Also append the same section to `groups/main/CLAUDE.md`.
+Also append the same section to `~/.nanoclaw/groups/main/CLAUDE.md`.
 
 ### Step 3: Rebuild and Restart
 
@@ -583,10 +583,10 @@ Then add handling in `src/index.ts` in the `processTaskIpc` function or create a
 Create the email group directory and memory file:
 
 ```bash
-mkdir -p groups/email
+mkdir -p ~/.nanoclaw/groups/email
 ```
 
-Write `groups/email/CLAUDE.md`:
+Write `~/.nanoclaw/groups/email/CLAUDE.md`:
 
 ```markdown
 # Email Channel
@@ -682,7 +682,7 @@ To remove Gmail entirely:
 
 3. Delete `src/email-channel.ts` (if created)
 
-4. Remove Gmail sections from `groups/*/CLAUDE.md`
+4. Remove Gmail sections from `~/.nanoclaw/groups/*/CLAUDE.md`
 
 5. Rebuild:
    ```bash

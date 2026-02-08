@@ -31,7 +31,7 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 │  ┌──────────────┐                     ┌────────────────────┐        │
 │  │  WhatsApp    │────────────────────▶│   SQLite Database  │        │
 │  │  (baileys)   │◀────────────────────│   (messages.db)    │        │
-│  └──────────────┘   store/send        └─────────┬──────────┘        │
+│  └──────────────┘                      └─────────┬──────────┘        │
 │                                                  │                   │
 │         ┌────────────────────────────────────────┘                   │
 │         │                                                            │
@@ -47,7 +47,7 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │                    AGENT (IN-PROCESS)                         │   │
 │  │                                                                │   │
-│  │  Working directory: groups/{name}/ (on host)                   │   │
+│  │  Working directory: ~/.nanoclaw/groups/{name}/ (on host)        │   │
 │  │                                                                │   │
 │  │  Tools (all groups):                                           │   │
 │  │    • Bash (runs on host)                                       │   │
@@ -74,7 +74,7 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 ## Folder Structure
 
 ```
-nanoclaw/
+nanoclaw/                            # Source code (git repo)
 ├── CLAUDE.md                      # Project context for Claude Code
 ├── docs/
 │   ├── SPEC.md                    # This specification document
@@ -108,6 +108,11 @@ nanoclaw/
 │       └── debug/
 │           └── SKILL.md           # /debug skill
 │
+└── logs/                          # Runtime logs (gitignored)
+    ├── nanoclaw.log               # Host stdout
+    └── nanoclaw.error.log         # Host stderr
+
+~/.nanoclaw/                         # Runtime data (outside git repo)
 ├── groups/
 │   ├── CLAUDE.md                  # Global memory (all groups read this)
 │   ├── main/                      # Self-chat (main control channel)
@@ -118,20 +123,15 @@ nanoclaw/
 │       ├── logs/                  # Task logs for this group
 │       └── *.md                   # Files created by the agent
 │
-├── store/                         # Local data (gitignored)
+├── store/
 │   ├── auth/                      # WhatsApp authentication state
 │   └── messages.db                # SQLite database (messages, scheduled_tasks, task_run_logs)
 │
-├── data/                          # Application state (gitignored)
-│   ├── sessions.json              # Active session IDs per group
-│   ├── registered_groups.json     # Group JID → folder mapping
-│   ├── router_state.json          # Last processed timestamp + last agent timestamps
-│   └── ipc/                       # Agent IPC (messages/, tasks/)
-│
-└── logs/                          # Runtime logs (gitignored)
-    ├── nanoclaw.log               # Host stdout
-    └── nanoclaw.error.log         # Host stderr
-    # Note: Per-agent logs are in groups/{folder}/logs/agent-*.log
+└── data/
+    ├── sessions.json              # Active session IDs per group
+    ├── registered_groups.json     # Group JID → folder mapping
+    ├── router_state.json          # Last processed timestamp + last agent timestamps
+    └── ipc/                       # Agent IPC (messages/, tasks/)
 ```
 
 ---
@@ -141,16 +141,17 @@ nanoclaw/
 Configuration constants are in `src/config.ts`:
 
 ```typescript
+import os from 'os';
 import path from 'path';
 
 export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Andy';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
-const PROJECT_ROOT = process.cwd();
-export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
-export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
-export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
+export const NANOCLAW_HOME = path.resolve(os.homedir(), '.nanoclaw');
+export const STORE_DIR = path.resolve(NANOCLAW_HOME, 'store');
+export const GROUPS_DIR = path.resolve(NANOCLAW_HOME, 'groups');
+export const DATA_DIR = path.resolve(NANOCLAW_HOME, 'data');
 
 export const AGENT_TIMEOUT = parseInt(process.env.AGENT_TIMEOUT || '300000', 10);
 export const IPC_POLL_INTERVAL = 1000;
@@ -203,14 +204,14 @@ NanoClaw uses a hierarchical memory system based on CLAUDE.md files.
 
 | Level | Location | Read By | Written By | Purpose |
 |-------|----------|---------|------------|---------|
-| **Global** | `groups/CLAUDE.md` | All groups | Main only | Preferences, facts, context shared across all conversations |
-| **Group** | `groups/{name}/CLAUDE.md` | That group | That group | Group-specific context, conversation memory |
-| **Files** | `groups/{name}/*.md` | That group | That group | Notes, research, documents created during conversation |
+| **Global** | `~/.nanoclaw/groups/CLAUDE.md` | All groups | Main only | Preferences, facts, context shared across all conversations |
+| **Group** | `~/.nanoclaw/groups/{name}/CLAUDE.md` | That group | That group | Group-specific context, conversation memory |
+| **Files** | `~/.nanoclaw/groups/{name}/*.md` | That group | That group | Notes, research, documents created during conversation |
 
 ### How Memory Works
 
 1. **Agent Context Loading**
-   - Agent runs with `cwd` set to `groups/{group-name}/`
+   - Agent runs with `cwd` set to `~/.nanoclaw/groups/{group-name}/`
    - Claude Agent SDK with `settingSources: ['project']` automatically loads:
      - `../CLAUDE.md` (parent directory = global memory)
      - `./CLAUDE.md` (current directory = group memory)
@@ -233,11 +234,11 @@ Sessions enable conversation continuity - Claude remembers what you talked about
 
 ### How Sessions Work
 
-1. Each group has a session ID stored in `data/sessions.json`
+1. Each group has a session ID stored in `~/.nanoclaw/data/sessions.json`
 2. Session ID is passed to Claude Agent SDK's `resume` option
 3. Claude continues the conversation with full context
 
-**data/sessions.json:**
+**~/.nanoclaw/data/sessions.json:**
 ```json
 {
   "main": "session-abc123",
@@ -258,7 +259,7 @@ Sessions enable conversation continuity - Claude remembers what you talked about
 2. Baileys receives message via WhatsApp Web protocol
    │
    ▼
-3. Message stored in SQLite (store/messages.db)
+3. Message stored in SQLite (~/.nanoclaw/store/messages.db)
    │
    ▼
 4. Message loop polls SQLite (every 2 seconds)
@@ -276,7 +277,7 @@ Sessions enable conversation continuity - Claude remembers what you talked about
    │
    ▼
 7. Router invokes Claude Agent SDK via query():
-   ├── cwd: groups/{group-name}/
+   ├── cwd: ~/.nanoclaw/groups/{group-name}/
    ├── prompt: conversation history + current message
    ├── resume: session_id (for continuity)
    └── mcpServers: nanoclaw (scheduler)
@@ -467,13 +468,13 @@ WhatsApp messages could contain malicious instructions attempting to manipulate 
 | Credential | Storage Location | Notes |
 |------------|------------------|-------|
 | Claude Auth | `.env` file | Available via process.env |
-| WhatsApp Session | `store/auth/` | Auto-created, persists ~20 days |
+| WhatsApp Session | `~/.nanoclaw/store/auth/` | Auto-created, persists ~20 days |
 
 ### File Permissions
 
-The groups/ folder contains personal memory and should be protected:
+The `~/.nanoclaw/groups/` folder contains personal memory and should be protected:
 ```bash
-chmod 700 groups/
+chmod 700 ~/.nanoclaw/groups/
 ```
 
 ---
@@ -486,15 +487,15 @@ chmod 700 groups/
 |-------|-------|----------|
 | No response to messages | Service not running | Check `launchctl list | grep nanoclaw` |
 | Agent error | Missing credentials | Check `.env` has valid token/key |
-| Session not continuing | Session ID not saved | Check `data/sessions.json` |
-| "QR code expired" | WhatsApp session expired | Delete store/auth/ and restart |
+| Session not continuing | Session ID not saved | Check `~/.nanoclaw/data/sessions.json` |
+| "QR code expired" | WhatsApp session expired | Delete `~/.nanoclaw/store/auth/` and restart |
 | "No groups registered" | Haven't added groups | Use `@Andy add group "Name"` in main |
 
 ### Log Location
 
 - `logs/nanoclaw.log` - stdout
 - `logs/nanoclaw.error.log` - stderr
-- `groups/{folder}/logs/agent-*.log` - per-agent run logs
+- `~/.nanoclaw/groups/{folder}/logs/agent-*.log` - per-agent run logs
 
 ### Debug Mode
 

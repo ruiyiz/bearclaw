@@ -17,16 +17,16 @@ src/index.ts                    src/agent-runner.ts
     │ routes WhatsApp messages       │ calls query() from
     │ to agent-runner                │ @anthropic-ai/claude-agent-sdk
     │                                │
-    │                                ├── cwd: groups/{folder}/
+    │                                ├── cwd: ~/.nanoclaw/groups/{folder}/
     │                                ├── resume: sessionId (per-group)
     │                                ├── permissionMode: 'bypassPermissions'
     │                                ├── settingSources: ['project']
     │                                ├── mcpServers: { nanoclaw: ipcMcp }
     │                                └── allowedTools: [Bash, Read, Write, ...]
     │
-    ├── groups/{folder}/          Agent working directory (cwd)
-    ├── data/ipc/{folder}/        IPC files (messages, tasks)
-    ├── data/sessions/{folder}/   Session data (per-group isolation)
+    ├── ~/.nanoclaw/groups/{folder}/          Agent working directory (cwd)
+    ├── ~/.nanoclaw/data/ipc/{folder}/        IPC files (messages, tasks)
+    ├── ~/.nanoclaw/data/sessions/{folder}/   Session data (per-group isolation)
     └── .env                      Auth tokens (process.env)
 ```
 
@@ -38,8 +38,8 @@ src/index.ts                    src/agent-runner.ts
 |-----|----------|---------|
 | **Main app logs** | `logs/nanoclaw.log` | WhatsApp connection, routing, agent spawning |
 | **Main app errors** | `logs/nanoclaw.error.log` | Application errors |
-| **Agent run logs** | `groups/{folder}/logs/agent-*.log` | Per-run: group, duration, status, errors |
-| **Claude sessions** | `data/sessions/{group}/.claude/projects/` | Claude Agent SDK session history |
+| **Agent run logs** | `~/.nanoclaw/groups/{folder}/logs/agent-*.log` | Per-run: group, duration, status, errors |
+| **Claude sessions** | `~/.nanoclaw/data/sessions/{group}/.claude/projects/` | Claude Agent SDK session history |
 
 ## Enabling Debug Logging
 
@@ -63,7 +63,7 @@ Debug level shows:
 
 ### 1. Agent Errors or Unexpected Exits
 
-**Check the agent log file** in `groups/{folder}/logs/agent-*.log`
+**Check the agent log file** in `~/.nanoclaw/groups/{folder}/logs/agent-*.log`
 
 Common causes:
 
@@ -117,16 +117,16 @@ grep "Session initialized" logs/nanoclaw.log | tail -5
 ```
 
 **Root cause possibilities:**
-- Session data directory missing or corrupted at `data/sessions/{group}/.claude/`
+- Session data directory missing or corrupted at `~/.nanoclaw/data/sessions/{group}/.claude/`
 - The `resume` parameter in `query()` not receiving the stored session ID
 
 **Fix:** Clear sessions and let them be recreated:
 ```bash
 # Clear sessions for a specific group
-rm -rf data/sessions/{groupFolder}/.claude/
+rm -rf ~/.nanoclaw/data/sessions/{groupFolder}/.claude/
 
 # Clear the session ID from NanoClaw's tracking
-echo '{}' > data/sessions.json
+echo '{}' > ~/.nanoclaw/data/sessions.json
 ```
 
 ### 4. MCP Server Failures
@@ -135,21 +135,21 @@ The agent uses a file-based IPC MCP server (`nanoclaw`) for sending messages and
 
 **Check:** Ensure the IPC directory is writable:
 ```bash
-ls -la data/ipc/{groupFolder}/
+ls -la ~/.nanoclaw/data/ipc/{groupFolder}/
 # Should have messages/ and tasks/ subdirectories
 ```
 
 ### 5. Permission Errors on Group Directories
 
-The agent runs with `cwd` set to `groups/{folder}/`. If this directory is not writable, tools like Bash, Write, and Edit will fail.
+The agent runs with `cwd` set to `~/.nanoclaw/groups/{folder}/`. If this directory is not writable, tools like Bash, Write, and Edit will fail.
 
 **Fix:**
 ```bash
 # Check permissions
-ls -la groups/
+ls -la ~/.nanoclaw/groups/
 
 # Fix ownership if needed
-chmod -R u+rw groups/{folder}/
+chmod -R u+rw ~/.nanoclaw/groups/{folder}/
 ```
 
 ### 6. Claude CLI Not Found
@@ -184,7 +184,7 @@ const { query } = require('@anthropic-ai/claude-agent-sdk');
   for await (const msg of query({
     prompt: 'Say hello',
     options: {
-      cwd: '$(pwd)/groups/test',
+      cwd: '$HOME/.nanoclaw/groups/test',
       allowedTools: [],
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
@@ -206,7 +206,7 @@ query({
   prompt: input.prompt,
   options: {
     abortController,
-    cwd: groupDir,                          // groups/{folder}/
+    cwd: groupDir,                          // ~/.nanoclaw/groups/{folder}/
     resume: input.sessionId,                // Per-group session resumption
     allowedTools: [
       'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
@@ -240,19 +240,19 @@ npm run dev
 
 ## Session Persistence
 
-Claude sessions are stored per-group in `data/sessions/{group}/.claude/` for security isolation. Each group has its own session directory, preventing cross-group access to conversation history.
+Claude sessions are stored per-group in `~/.nanoclaw/data/sessions/{group}/.claude/` for security isolation. Each group has its own session directory, preventing cross-group access to conversation history.
 
 To clear sessions:
 
 ```bash
 # Clear all sessions for all groups
-rm -rf data/sessions/
+rm -rf ~/.nanoclaw/data/sessions/
 
 # Clear sessions for a specific group
-rm -rf data/sessions/{groupFolder}/.claude/
+rm -rf ~/.nanoclaw/data/sessions/{groupFolder}/.claude/
 
 # Also clear the session ID from NanoClaw's tracking
-echo '{}' > data/sessions.json
+echo '{}' > ~/.nanoclaw/data/sessions.json
 ```
 
 To verify session resumption is working, check the logs for the same session ID across messages:
@@ -263,23 +263,23 @@ grep "Session initialized" logs/nanoclaw.log | tail -5
 
 ## IPC Debugging
 
-The agent communicates back to the host via files in `data/ipc/{folder}/`:
+The agent communicates back to the host via files in `~/.nanoclaw/data/ipc/{folder}/`:
 
 ```bash
 # Check pending messages
-ls -la data/ipc/{folder}/messages/
+ls -la ~/.nanoclaw/data/ipc/{folder}/messages/
 
 # Check pending task operations
-ls -la data/ipc/{folder}/tasks/
+ls -la ~/.nanoclaw/data/ipc/{folder}/tasks/
 
 # Read a specific IPC file
-cat data/ipc/{folder}/messages/*.json
+cat ~/.nanoclaw/data/ipc/{folder}/messages/*.json
 
 # Check available groups (main channel only)
-cat data/ipc/main/available_groups.json
+cat ~/.nanoclaw/data/ipc/main/available_groups.json
 
 # Check current tasks snapshot
-cat data/ipc/{folder}/current_tasks.json
+cat ~/.nanoclaw/data/ipc/{folder}/current_tasks.json
 ```
 
 **IPC file types:**
@@ -308,13 +308,13 @@ echo -e "\n4. Node.js version?"
 node --version
 
 echo -e "\n5. Groups directory?"
-ls -la groups/ 2>/dev/null || echo "MISSING - run setup"
+ls -la ~/.nanoclaw/groups/ 2>/dev/null || echo "MISSING - run setup"
 
 echo -e "\n6. IPC directories?"
-ls -d data/ipc/*/ 2>/dev/null && echo "OK" || echo "No IPC directories yet (created on first run)"
+ls -d ~/.nanoclaw/data/ipc/*/ 2>/dev/null && echo "OK" || echo "No IPC directories yet (created on first run)"
 
 echo -e "\n7. Recent agent logs?"
-ls -t groups/*/logs/agent-*.log 2>/dev/null | head -3 || echo "No agent logs yet"
+ls -t ~/.nanoclaw/groups/*/logs/agent-*.log 2>/dev/null | head -3 || echo "No agent logs yet"
 
 echo -e "\n8. Session continuity working?"
 SESSIONS=$(grep "Session initialized" logs/nanoclaw.log 2>/dev/null | tail -5 | awk '{print $NF}' | sort -u | wc -l)
