@@ -66,23 +66,54 @@ export function createIpcMcp(ctx: IpcMcpContext) {
       tool(
         'send_message',
         `Send a message to a WhatsApp group. Use this to proactively share information or updates.
-By default sends to the current group. Main group agents can send to any registered group by specifying target_chat (the group folder name).`,
+By default sends to the current group. Main group agents can send to any registered group by specifying target_chat (the group folder name).
+
+MEDIA: Attach an image or document by providing file_path (local file) or media_url (remote URL) along with media_type.
+The text parameter becomes the caption for media messages. For documents, also provide file_name.`,
         {
-          text: z.string().describe('The message text to send'),
-          target_chat: z.string().optional().describe('Target group folder (main only, defaults to current group)')
+          text: z.string().optional().describe('The message text to send (becomes caption for media messages)'),
+          target_chat: z.string().optional().describe('Target group folder (main only, defaults to current group)'),
+          media_type: z.enum(['image', 'document']).optional().describe('Type of media to attach'),
+          file_path: z.string().optional().describe('Local file path for the media (absolute or relative to group folder)'),
+          media_url: z.string().optional().describe('URL of the media to send (alternative to file_path)'),
+          file_name: z.string().optional().describe('Display file name for documents (e.g., "report.pdf")'),
+          mimetype: z.string().optional().describe('MIME type for documents (e.g., "application/pdf"). Auto-detected if omitted.')
         },
         async (args) => {
+          // Validation: must have text or media
+          if (!args.text && !args.media_type) {
+            return {
+              content: [{ type: 'text', text: 'Must provide either text or media_type (or both).' }],
+              isError: true
+            };
+          }
+          // Validation: media requires a source
+          if (args.media_type && !args.file_path && !args.media_url) {
+            return {
+              content: [{ type: 'text', text: 'media_type requires either file_path or media_url.' }],
+              isError: true
+            };
+          }
+
           // Non-main groups can only send to their own chat
           const targetFolder = isMain && args.target_chat ? args.target_chat : groupFolder;
 
-          const data = {
+          const data: Record<string, unknown> = {
             type: 'message',
             chatJid,
             targetFolder,
-            text: args.text,
+            text: args.text || null,
             groupFolder,
             timestamp: new Date().toISOString()
           };
+
+          if (args.media_type) {
+            data.mediaType = args.media_type;
+            data.filePath = args.file_path || null;
+            data.mediaUrl = args.media_url || null;
+            data.fileName = args.file_name || null;
+            data.mimetype = args.mimetype || null;
+          }
 
           const filename = writeIpcFile(messagesDir, data);
 

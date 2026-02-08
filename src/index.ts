@@ -15,6 +15,7 @@ import {
   DATA_DIR,
   DISPLAY_NAME,
   EMAIL_GROUP_FOLDER,
+  GROUPS_DIR,
   IPC_POLL_INTERVAL,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -331,6 +332,91 @@ async function sendMessage(jid: string, text: string): Promise<void> {
   }
 }
 
+function guessMimetype(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeMap: Record<string, string> = {
+    '.pdf': 'application/pdf',
+    '.doc': 'application/msword',
+    '.docx':
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xls': 'application/vnd.ms-excel',
+    '.xlsx':
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.csv': 'text/csv',
+    '.txt': 'text/plain',
+    '.json': 'application/json',
+    '.zip': 'application/zip',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.mp4': 'video/mp4',
+    '.mp3': 'audio/mpeg',
+  };
+  return mimeMap[ext] || 'application/octet-stream';
+}
+
+async function sendMedia(
+  jid: string,
+  mediaType: 'image' | 'document',
+  source: { filePath?: string | null; mediaUrl?: string | null },
+  options: {
+    caption?: string;
+    fileName?: string | null;
+    mimetype?: string | null;
+  },
+  sourceGroup: string,
+): Promise<void> {
+  try {
+    let media: Buffer | { url: string };
+
+    if (source.mediaUrl) {
+      media = { url: source.mediaUrl };
+    } else if (source.filePath) {
+      const resolvedPath = path.isAbsolute(source.filePath)
+        ? source.filePath
+        : path.join(GROUPS_DIR, sourceGroup, source.filePath);
+
+      if (!fs.existsSync(resolvedPath)) {
+        logger.error(
+          { resolvedPath, sourceGroup },
+          'Media file not found',
+        );
+        return;
+      }
+      media = fs.readFileSync(resolvedPath);
+    } else {
+      logger.error('No media source provided');
+      return;
+    }
+
+    const caption = options.caption || undefined;
+
+    if (mediaType === 'image') {
+      await sock.sendMessage(jid, { image: media, caption });
+    } else if (mediaType === 'document') {
+      const mimetype =
+        options.mimetype ||
+        guessMimetype(source.filePath || source.mediaUrl || '');
+      const fileName =
+        options.fileName ||
+        path.basename(source.filePath || source.mediaUrl || 'file');
+      await sock.sendMessage(jid, {
+        document: media,
+        mimetype,
+        fileName,
+        caption,
+      });
+    }
+
+    logger.info({ jid, mediaType }, 'Media message sent');
+  } catch (err) {
+    logger.error({ jid, mediaType, err }, 'Failed to send media message');
+  }
+}
+
 function startIpcWatcher(): void {
   if (ipcWatcherRunning) {
     logger.debug('IPC watcher already running, skipping duplicate start');
@@ -370,7 +456,7 @@ function startIpcWatcher(): void {
             const filePath = path.join(messagesDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'message' && data.text) {
+              if (data.type === 'message' && (data.text || data.mediaType)) {
                 // Resolve target: use targetFolder if specified (main only), else use chatJid
                 let targetJid: string | undefined;
                 if (data.targetFolder && isMain) {
@@ -395,12 +481,37 @@ function startIpcWatcher(): void {
                     isMain ||
                     (targetGroup && targetGroup.folder === sourceGroup)
                   ) {
-                    await sendMessage(
-                      targetJid,
-                      `${DISPLAY_NAME}: ${data.text.trimStart()}`,
-                    );
+                    if (data.mediaType) {
+                      // Media message (image or document)
+                      await sendMedia(
+                        targetJid,
+                        data.mediaType,
+                        {
+                          filePath: data.filePath,
+                          mediaUrl: data.mediaUrl,
+                        },
+                        {
+                          caption: data.text
+                            ? `${DISPLAY_NAME}: ${data.text.trimStart()}`
+                            : undefined,
+                          fileName: data.fileName,
+                          mimetype: data.mimetype,
+                        },
+                        sourceGroup,
+                      );
+                    } else {
+                      // Text-only message
+                      await sendMessage(
+                        targetJid,
+                        `${DISPLAY_NAME}: ${data.text.trimStart()}`,
+                      );
+                    }
                     logger.info(
-                      { targetJid, sourceGroup },
+                      {
+                        targetJid,
+                        sourceGroup,
+                        mediaType: data.mediaType || 'text',
+                      },
                       'IPC message sent',
                     );
                   } else {
