@@ -856,12 +856,6 @@ async function processTaskIpc(
       break;
 
     default:
-      // Try X integration handler
-      if (data.type?.startsWith('x_')) {
-        const { handleXIpc } = await import('./x-handler.js');
-        const handled = await handleXIpc(data as Record<string, unknown>, sourceGroup, isMain, DATA_DIR);
-        if (handled) break;
-      }
       logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
 }
