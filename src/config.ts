@@ -46,6 +46,11 @@ export const ODYSSEY_PROMPT = `[ODYSSEY — Proactive check-in. You are waking u
 Read ODYSSEY.md in your working directory. Follow its instructions exactly.
 Do not infer tasks from previous conversations — only act on what ODYSSEY.md says.
 
+MEMORY: Read odyssey-log.md in your working directory (create it if missing). This is your persistent memory across runs. It tracks what you have already suggested, asked about, or acted on. Use it to avoid repeating yourself:
+- Before messaging the user, check if you already suggested or asked about the same thing recently.
+- If nothing has changed since your last check-in on a topic, do not bring it up again.
+- After each run, append a timestamped entry summarizing what you did or observed (keep the log concise — prune entries older than 7 days).
+
 If nothing needs attention, reply with exactly: ODYSSEY_OK
 If something does need attention, take action (send messages, run commands, etc.) and describe what you did. Do NOT include ODYSSEY_OK in your response if you took action.`;
 
