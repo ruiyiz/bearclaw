@@ -1,5 +1,11 @@
+import dotenv from 'dotenv';
 import os from 'os';
 import path from 'path';
+
+// Load .env before reading any env vars.
+// This MUST happen here (not in index.ts) because ESM hoists imports,
+// so config.ts is evaluated before index.ts body runs.
+dotenv.config({ path: path.join(os.homedir(), '.nanoclaw', '.env') });
 
 export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Andy';
 export const DISPLAY_NAME = process.env.DISPLAY_NAME || ASSISTANT_NAME;
