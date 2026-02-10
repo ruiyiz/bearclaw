@@ -10,6 +10,7 @@ import {
   AGENT_TIMEOUT,
   DATA_DIR,
   GROUPS_DIR,
+  NANOCLAW_HOME,
 } from './config.js';
 import { createIpcMcp } from './ipc-mcp.js';
 import { emitEvent } from './db.js';
@@ -213,6 +214,16 @@ export async function runContainerAgent(
     ipcDir: groupIpcDir,
   });
 
+  // Load user-configured MCP servers from ~/.nanoclaw/mcp.json
+  let userMcpServers: Record<string, unknown> = {};
+  try {
+    const mcpConfigPath = path.join(NANOCLAW_HOME, 'mcp.json');
+    const raw = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
+    userMcpServers = raw.mcpServers || {};
+  } catch {
+    // No mcp.json or invalid — skip
+  }
+
   let result: string | null = null;
   let newSessionId: string | undefined;
 
@@ -240,13 +251,14 @@ export async function runContainerAgent(
           'Bash',
           'Read', 'Write', 'Edit', 'Glob', 'Grep',
           'WebSearch', 'WebFetch',
-          'mcp__nanoclaw__*'
+          'mcp__*'
         ],
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         settingSources: ['project'],
         mcpServers: {
-          nanoclaw: ipcMcp
+          nanoclaw: ipcMcp,
+          ...userMcpServers,
         },
         hooks: {
           PreCompact: [{ hooks: [createPreCompactHook(groupDir)] }]
