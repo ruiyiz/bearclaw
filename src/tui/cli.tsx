@@ -7,8 +7,12 @@ import { App } from './app.js';
 
 program
   .name('nanoclaw')
-  .description('NanoClaw management TUI')
-  .version('1.0.0')
+  .description('NanoClaw — personal Claude assistant')
+  .version('1.0.0');
+
+program
+  .command('tui')
+  .description('Open the management TUI')
   .action(() => {
     render(React.createElement(App), { exitOnCtrlC: false });
   });
