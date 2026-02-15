@@ -19,6 +19,9 @@ import {
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
   STORE_DIR,
+  TELEGRAM_BOT_POOL,
+  TELEGRAM_BOT_TOKEN,
+  TELEGRAM_ONLY,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -28,6 +31,7 @@ import {
   writeGroupsSnapshot,
   writeHandlersSnapshot,
 } from './agent-runner.js';
+import { initBotPool, sendPoolMessage, TelegramChannel } from './channels/telegram.js';
 import {
   createHandler,
   deleteHandler,
@@ -42,14 +46,16 @@ import {
   setLastGroupSync,
   storeChatMetadata,
   storeMessage,
+  storeMessageDirect,
   updateChatName,
   updateHandler,
 } from './db.js';
 import { registerEmailHandlers, sendEmailReply, startEmailLoops } from './email-channel.js';
 import { startEventBusLoop } from './event-bus.js';
 import { registerOdysseyHandlers } from './odyssey.js';
+import { findChannel, formatOutbound } from './router.js';
 import { startSchedulerEmitter } from './task-scheduler.js';
-import { NewMessage, RegisteredGroup, Session } from './types.js';
+import { Channel, NewMessage, RegisteredGroup, Session } from './types.js';
 import { loadJson, saveJson } from './utils.js';
 import { logger } from './logger.js';
 
@@ -66,6 +72,8 @@ let lidToPhoneMap: Record<string, string> = {};
 let messageLoopRunning = false;
 let ipcWatcherRunning = false;
 let groupSyncTimerStarted = false;
+
+const channels: Channel[] = [];
 
 /**
  * Translate a JID from LID format to phone format if we have a mapping.
@@ -178,7 +186,7 @@ function getAvailableGroups(): AvailableGroup[] {
   const registeredJids = new Set(Object.keys(registeredGroups));
 
   return chats
-    .filter((c) => c.jid !== '__group_sync__' && c.jid.endsWith('@g.us'))
+    .filter((c) => c.jid !== '__group_sync__' && (c.jid.endsWith('@g.us') || c.jid.startsWith('tg:')))
     .map((c) => ({
       jid: c.jid,
       name: c.name,
@@ -252,13 +260,19 @@ async function processMessage(msg: NewMessage): Promise<void> {
     'Processing message',
   );
 
-  await setTyping(msg.chat_jid, true);
+  const channel = findChannel(channels, msg.chat_jid);
+  if (channel) await channel.setTyping?.(msg.chat_jid, true);
   const response = await runAgent(group, prompt, msg.chat_jid);
-  await setTyping(msg.chat_jid, false);
+  if (channel) await channel.setTyping?.(msg.chat_jid, false);
 
   if (response && !isNonResponse(response)) {
     lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
-    await sendMessage(msg.chat_jid, `${DISPLAY_NAME}: ${response.trimStart()}`);
+    if (channel) {
+      const text = formatOutbound(channel, response);
+      await channel.sendMessage(msg.chat_jid, text);
+    } else {
+      await sendMessage(msg.chat_jid, `${DISPLAY_NAME}: ${response.trimStart()}`);
+    }
   }
 }
 
@@ -481,8 +495,17 @@ function startIpcWatcher(): void {
                     isMain ||
                     (targetGroup && targetGroup.folder === sourceGroup)
                   ) {
-                    if (data.mediaType) {
-                      // Media message (image or document)
+                    const ipcChannel = findChannel(channels, targetJid);
+                    if (data.sender && targetJid.startsWith('tg:')) {
+                      // Swarm message — route through pool bot
+                      await sendPoolMessage(
+                        targetJid,
+                        data.text,
+                        data.sender,
+                        sourceGroup,
+                      );
+                    } else if (data.mediaType) {
+                      // Media message (image or document) — WhatsApp only for now
                       await sendMedia(
                         targetJid,
                         data.mediaType,
@@ -499,8 +522,10 @@ function startIpcWatcher(): void {
                         },
                         sourceGroup,
                       );
+                    } else if (ipcChannel) {
+                      const ipcText = formatOutbound(ipcChannel, data.text);
+                      await ipcChannel.sendMessage(targetJid, ipcText);
                     } else {
-                      // Text-only message
                       await sendMessage(
                         targetJid,
                         `${DISPLAY_NAME}: ${data.text.trimStart()}`,
@@ -1034,7 +1059,49 @@ async function main(): Promise<void> {
   registerOdysseyHandlers(registeredGroups);
   registerEmailHandlers(registeredGroups);
 
-  await connectWhatsApp();
+  // WhatsApp channel adapter (wraps existing sock-based functions)
+  if (!TELEGRAM_ONLY) {
+    const whatsappAdapter: Channel = {
+      name: 'whatsapp',
+      prefixAssistantName: true,
+      async connect() {},
+      async sendMessage(jid, text) { await sendMessage(jid, text); },
+      ownsJid(jid) { return !jid.startsWith('tg:'); },
+      isConnected() { return !!sock; },
+      async disconnect() {},
+      async setTyping(jid, isTyping) { await setTyping(jid, isTyping); },
+    };
+    channels.push(whatsappAdapter);
+  }
+
+  // Telegram channel
+  if (TELEGRAM_BOT_TOKEN) {
+    const telegram = new TelegramChannel(TELEGRAM_BOT_TOKEN, {
+      onMessage: (_chatJid, msg) => storeMessageDirect(msg),
+      onChatMetadata: (chatJid, timestamp, name) => storeChatMetadata(chatJid, timestamp, name),
+      registeredGroups: () => registeredGroups,
+    });
+    channels.push(telegram);
+    await telegram.connect();
+    if (TELEGRAM_BOT_POOL.length > 0) {
+      await initBotPool(TELEGRAM_BOT_POOL);
+    }
+  }
+
+  if (!TELEGRAM_ONLY) {
+    await connectWhatsApp();
+  } else {
+    // Start subsystems without WhatsApp
+    startSchedulerEmitter();
+    startEventBusLoop({
+      registeredGroups: () => registeredGroups,
+      getSessions: () => sessions,
+      saveSessions: () => saveJson(path.join(DATA_DIR, 'sessions.json'), sessions),
+    });
+    startIpcWatcher();
+    startMessageLoop();
+    startEmailLoops(registeredGroups);
+  }
 }
 
 main().catch((err) => {

@@ -1,3 +1,17 @@
+export type OnInboundMessage = (chatJid: string, msg: NewMessage) => void;
+export type OnChatMetadata = (chatJid: string, timestamp: string, name?: string) => void;
+
+export interface Channel {
+  name: string;
+  prefixAssistantName: boolean;
+  connect(): Promise<void>;
+  sendMessage(jid: string, text: string): Promise<void>;
+  ownsJid(jid: string): boolean;
+  isConnected(): boolean;
+  disconnect(): Promise<void>;
+  setTyping?(jid: string, isTyping: boolean): Promise<void>;
+}
+
 export interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }

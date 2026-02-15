@@ -7,6 +7,13 @@ import path from 'path';
 // so config.ts is evaluated before index.ts body runs.
 dotenv.config({ path: path.join(os.homedir(), '.nanoclaw', '.env') });
 
+export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+export const TELEGRAM_ONLY = process.env.TELEGRAM_ONLY === 'true';
+export const TELEGRAM_BOT_POOL = (process.env.TELEGRAM_BOT_POOL || '')
+  .split(',')
+  .map((t) => t.trim())
+  .filter(Boolean);
+
 export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Andy';
 export const DISPLAY_NAME = process.env.DISPLAY_NAME || ASSISTANT_NAME;
 export const POLL_INTERVAL = 2000;

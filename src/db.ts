@@ -329,6 +329,12 @@ export async function storeMessage(
   );
 }
 
+export function storeMessageDirect(msg: NewMessage): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(msg.id, msg.chat_jid, msg.sender, msg.sender_name, msg.content, msg.timestamp, 0);
+}
+
 export function getNewMessages(
   jids: string[],
   lastTimestamp: string,
