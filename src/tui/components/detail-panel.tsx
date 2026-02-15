@@ -29,7 +29,11 @@ export function DetailPanel({
   useInput(
     (input, key) => {
       const maxScroll = Math.max(0, totalLines - contentHeight);
-      if (input === 'j' || key.downArrow) {
+      if (key.pageDown) {
+        setScrollOffset((o) => Math.min(o + contentHeight, maxScroll));
+      } else if (key.pageUp) {
+        setScrollOffset((o) => Math.max(o - contentHeight, 0));
+      } else if (input === 'j' || key.downArrow) {
         setScrollOffset((o) => Math.min(o + 1, maxScroll));
       } else if (input === 'k' || key.upArrow) {
         setScrollOffset((o) => Math.max(o - 1, 0));

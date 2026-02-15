@@ -7,7 +7,9 @@ interface ListViewProps<T> {
   onSelect: (index: number) => void;
   renderItem: (item: T, index: number, isSelected: boolean) => ReactNode;
   height: number;
+  itemHeight?: number;
   isFocused?: boolean;
+  isSelectable?: (item: T, index: number) => boolean;
   onSubmit?: (item: T, index: number) => void;
 }
 
@@ -17,12 +19,14 @@ export function ListView<T>({
   onSelect,
   renderItem,
   height,
+  itemHeight = 1,
   isFocused = true,
+  isSelectable,
   onSubmit,
 }: ListViewProps<T>) {
   const safeItems = Array.isArray(items) ? items : [];
   const [scrollOffset, setScrollOffset] = useState(0);
-  const visibleCount = Math.max(1, height);
+  const visibleCount = Math.max(1, Math.floor(height / itemHeight));
 
   useEffect(() => {
     if (selected < scrollOffset) {
@@ -32,18 +36,32 @@ export function ListView<T>({
     }
   }, [selected, scrollOffset, visibleCount]);
 
+  const findNextSelectable = (from: number, direction: 1 | -1): number => {
+    if (!isSelectable) return Math.max(0, Math.min(from, safeItems.length - 1));
+    let idx = from;
+    while (idx >= 0 && idx < safeItems.length) {
+      if (isSelectable(safeItems[idx], idx)) return idx;
+      idx += direction;
+    }
+    return selected;
+  };
+
   useInput(
     (input, key) => {
       if (!isFocused || safeItems.length === 0) return;
 
-      if (input === 'j' || key.downArrow) {
-        onSelect(Math.min(selected + 1, safeItems.length - 1));
+      if (key.pageDown) {
+        onSelect(findNextSelectable(Math.min(selected + visibleCount, safeItems.length - 1), -1));
+      } else if (key.pageUp) {
+        onSelect(findNextSelectable(Math.max(selected - visibleCount, 0), 1));
+      } else if (input === 'j' || key.downArrow) {
+        onSelect(findNextSelectable(selected + 1, 1));
       } else if (input === 'k' || key.upArrow) {
-        onSelect(Math.max(selected - 1, 0));
+        onSelect(findNextSelectable(selected - 1, -1));
       } else if (input === 'g') {
-        onSelect(0);
+        onSelect(findNextSelectable(0, 1));
       } else if (input === 'G') {
-        onSelect(safeItems.length - 1);
+        onSelect(findNextSelectable(safeItems.length - 1, -1));
       } else if (key.return && onSubmit) {
         onSubmit(safeItems[selected], selected);
       }
@@ -66,7 +84,7 @@ export function ListView<T>({
       {visible.map((item, i) => {
         const realIndex = scrollOffset + i;
         return (
-          <Box key={realIndex}>
+          <Box key={realIndex} height={itemHeight}>
             {renderItem(item, realIndex, realIndex === selected)}
           </Box>
         );

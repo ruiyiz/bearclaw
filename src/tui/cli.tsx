@@ -14,7 +14,10 @@ program
   .command('tui')
   .description('Open the management TUI')
   .action(() => {
-    render(React.createElement(App), { exitOnCtrlC: false });
+    const instance = render(React.createElement(App), { exitOnCtrlC: false });
+    instance.waitUntilExit().then(() => {
+      process.stdout.write('\x1B[2J\x1B[H');
+    });
   });
 
 program.parse();

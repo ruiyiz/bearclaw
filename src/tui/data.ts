@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
 
@@ -275,6 +276,7 @@ export interface SkillInfo {
   description: string;
   path: string;
   installed: boolean;
+  source: string;
 }
 
 const SKILLS_DIR = path.join(GROUPS_DIR, '.claude', 'skills');
@@ -310,6 +312,7 @@ export function getInstalledSkills(): SkillInfo[] {
         description: parseSkillDescription(content),
         path: skillMd,
         installed: true,
+        source: '',
       });
     }
   } catch {
@@ -323,9 +326,10 @@ export function getSkillSources(): string[] {
 }
 
 export function addSkillSource(dir: string): void {
+  const resolved = dir.startsWith('~/') ? path.join(os.homedir(), dir.slice(2)) : dir;
   const sources = getSkillSources();
-  if (!sources.includes(dir)) {
-    sources.push(dir);
+  if (!sources.includes(resolved)) {
+    sources.push(resolved);
     fs.mkdirSync(path.dirname(SKILL_SOURCES_PATH), { recursive: true });
     fs.writeFileSync(SKILL_SOURCES_PATH, JSON.stringify(sources, null, 2));
   }
@@ -338,9 +342,14 @@ export function getAvailableSkills(): SkillInfo[] {
 
   for (const sourceDir of sources) {
     if (!fs.existsSync(sourceDir)) continue;
+    const sourceLabel =
+      path.basename(path.dirname(sourceDir)) + '/' + path.basename(sourceDir);
     try {
-      for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
+      const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
+      const sorted = entries
+        .filter((e) => e.isDirectory())
+        .sort((a, b) => a.name.localeCompare(b.name));
+      for (const entry of sorted) {
         const skillMd = path.join(sourceDir, entry.name, 'SKILL.md');
         if (!fs.existsSync(skillMd)) continue;
         if (installed.has(entry.name)) continue;
@@ -350,6 +359,7 @@ export function getAvailableSkills(): SkillInfo[] {
           description: parseSkillDescription(content),
           path: skillMd,
           installed: false,
+          source: sourceLabel,
         });
       }
     } catch {

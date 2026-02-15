@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 
@@ -8,11 +8,18 @@ import { StatusBar } from '../components/status-bar.js';
 import type { ViewProps } from '../app.js';
 import * as data from '../data.js';
 
+type SkillListItem =
+  | { type: 'header'; label: string }
+  | { type: 'skill'; skill: data.SkillInfo };
+
+const ITEM_HEIGHT = 3;
+
 export function SkillsView({ listHeight, detailHeight }: ViewProps) {
   const [installed, setInstalled] = useState<data.SkillInfo[]>([]);
   const [available, setAvailable] = useState<data.SkillInfo[]>([]);
   const [showAvailable, setShowAvailable] = useState(false);
-  const [selected, setSelected] = useState(0);
+  const [installedSel, setInstalledSel] = useState(0);
+  const [availableSel, setAvailableSel] = useState(0);
   const [focusDetail, setFocusDetail] = useState(false);
   const [addingSource, setAddingSource] = useState(false);
   const [sourceInput, setSourceInput] = useState('');
@@ -29,16 +36,46 @@ export function SkillsView({ listHeight, detailHeight }: ViewProps) {
     refresh();
   }, [refresh]);
 
-  const items = showAvailable ? available : installed;
-  const skill = items[selected];
+  const installedItems: SkillListItem[] = useMemo(
+    () => installed.map((s) => ({ type: 'skill' as const, skill: s })),
+    [installed],
+  );
+
+  const availableItems: SkillListItem[] = useMemo(() => {
+    const items: SkillListItem[] = [];
+    let lastSource = '';
+    for (const skill of available) {
+      if (skill.source !== lastSource) {
+        items.push({ type: 'header', label: skill.source });
+        lastSource = skill.source;
+      }
+      items.push({ type: 'skill', skill });
+    }
+    return items;
+  }, [available]);
+
+  const items = showAvailable ? availableItems : installedItems;
+  const selected = showAvailable ? availableSel : installedSel;
+  const setSelected = showAvailable ? setAvailableSel : setInstalledSel;
+
+  // Ensure selection lands on a selectable item
+  useEffect(() => {
+    if (items.length > 0 && items[selected]?.type !== 'skill') {
+      const first = items.findIndex((i) => i.type === 'skill');
+      if (first >= 0) setSelected(first);
+    }
+  }, [items, selected]);
+
+  const selectedSkill =
+    items[selected]?.type === 'skill' ? items[selected].skill : null;
 
   useEffect(() => {
-    if (skill) {
-      setDetailContent(data.readSkillContent(skill.path));
+    if (selectedSkill) {
+      setDetailContent(data.readSkillContent(selectedSkill.path));
     } else {
       setDetailContent('');
     }
-  }, [skill?.path]);
+  }, [selectedSkill?.path]);
 
   useInput(
     (input, key) => {
@@ -59,26 +96,36 @@ export function SkillsView({ listHeight, detailHeight }: ViewProps) {
 
       if (key.tab && !key.shift) {
         setShowAvailable((s) => !s);
-        setSelected(0);
       } else if (key.tab && key.shift) {
         setFocusDetail((f) => !f);
-      } else if (input === 'i' && showAvailable && skill && !skill.installed) {
-        data.installSkill(skill.path, skill.name);
+      } else if (
+        input === 'i' &&
+        showAvailable &&
+        selectedSkill &&
+        !selectedSkill.installed
+      ) {
+        data.installSkill(selectedSkill.path, selectedSkill.name);
         refresh();
-        setSelected(0);
-      } else if (input === 'u' && !showAvailable && skill && skill.installed) {
-        data.uninstallSkill(skill.name);
+        setAvailableSel(0);
+      } else if (
+        input === 'u' &&
+        !showAvailable &&
+        selectedSkill &&
+        selectedSkill.installed
+      ) {
+        data.uninstallSkill(selectedSkill.name);
         refresh();
-        setSelected((s) => Math.min(s, installed.length - 2));
+        setInstalledSel((s) => Math.min(s, Math.max(0, installed.length - 2)));
       } else if (input === 'a') {
         setAddingSource(true);
       }
     },
-    { isActive: !addingSource },
+    {},
   );
 
-  const subTabHeight = 2; // sub-tab row + divider
+  const subTabHeight = 2;
   const actualListHeight = listHeight - subTabHeight;
+  const maxDesc = cols - 4;
 
   return (
     <Box flexDirection="column">
@@ -90,9 +137,15 @@ export function SkillsView({ listHeight, detailHeight }: ViewProps) {
       )}
       <Box flexDirection="column">
         <Box>
-          <Text bold inverse={!showAvailable}> Installed ({installed.length}) </Text>
+          <Text bold inverse={!showAvailable}>
+            {' '}
+            Installed ({installed.length}){' '}
+          </Text>
           <Text> </Text>
-          <Text bold inverse={showAvailable}> Available ({available.length}) </Text>
+          <Text bold inverse={showAvailable}>
+            {' '}
+            Available ({available.length}){' '}
+          </Text>
         </Box>
         <Text dimColor>{'─'.repeat(cols)}</Text>
       </Box>
@@ -102,22 +155,51 @@ export function SkillsView({ listHeight, detailHeight }: ViewProps) {
           selected={selected}
           onSelect={setSelected}
           height={actualListHeight}
+          itemHeight={ITEM_HEIGHT}
           isFocused={!focusDetail && !addingSource}
-          renderItem={(s, _i, isSel) => (
-            <Box gap={1}>
-              <Text inverse={isSel}>{isSel ? '>' : ' '}</Text>
-              <Text bold={isSel} color={s.installed ? 'green' : undefined}>
-                {s.name}
-              </Text>
-              <Text dimColor wrap="truncate">
-                {s.description.slice(0, 50)}
-              </Text>
-            </Box>
-          )}
+          isSelectable={(item) => item.type === 'skill'}
+          renderItem={(item, _idx, isSel) => {
+            if (item.type === 'header') {
+              return (
+                <Box flexDirection="column" height={ITEM_HEIGHT}>
+                  <Text> </Text>
+                  <Text dimColor bold>
+                    {'  '}
+                    {item.label}
+                  </Text>
+                  <Text> </Text>
+                </Box>
+              );
+            }
+            const s = item.skill;
+            const borderColor = isSel ? 'magenta' : undefined;
+            return (
+              <Box flexDirection="column" height={ITEM_HEIGHT}>
+                <Box>
+                  <Text color={borderColor} dimColor={!isSel}>
+                    {'  │ '}
+                  </Text>
+                  <Text
+                    bold={isSel}
+                    color={s.installed ? 'green' : isSel ? 'white' : undefined}
+                  >
+                    {s.name}
+                  </Text>
+                </Box>
+                <Box>
+                  <Text color={borderColor} dimColor={!isSel}>
+                    {'  │ '}
+                  </Text>
+                  <Text dimColor>{s.description.slice(0, maxDesc)}</Text>
+                </Box>
+                <Text> </Text>
+              </Box>
+            );
+          }}
         />
       </Box>
       <DetailPanel
-        title={skill ? `${skill.name} — SKILL.md` : 'Skill Details'}
+        title={selectedSkill ? `${selectedSkill.name} — SKILL.md` : 'Skill Details'}
         content={detailContent}
         height={detailHeight}
         isFocused={focusDetail}
