@@ -891,13 +891,16 @@ async function connectWhatsApp(): Promise<void> {
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
+  const waLogger = logger.child({ module: 'baileys' });
+  waLogger.level = 'warn';
+
   sock = makeWASocket({
     auth: {
       creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, logger),
+      keys: makeCacheableSignalKeyStore(state.keys, waLogger),
     },
     printQRInTerminal: false,
-    logger,
+    logger: waLogger,
     browser: ['NanoClaw', 'Chrome', '1.0.0'],
   });
 
