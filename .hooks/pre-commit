@@ -1,10 +1,10 @@
 #!/bin/sh
 
 # Date-based versioning: YYYY.M.D
-NEW_VERSION="$(date +%Y.%m.%d)"
+NEW_VERSION="$(date +%Y.%-m.%-d)"
 CURRENT_VERSION=$(node -p "require('./package.json').version")
 
 if [ "$CURRENT_VERSION" != "$NEW_VERSION" ]; then
   npm version "$NEW_VERSION" --no-git-tag-version > /dev/null 2>&1
-  git add package.json
+  git add package.json package-lock.json
 fi
