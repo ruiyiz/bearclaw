@@ -4,17 +4,18 @@ function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function renderTable(
   header: { text: string; tokens: any[] }[],
   rows: { text: string; tokens: any[] }[][],
-  parseInline: (tokens: any[]) => string,
+  cellRenderer: (cell: { text: string; tokens: any[] }) => string,
 ): string {
   const allRows = [
-    header.map((c) => parseInline(c.tokens)),
-    ...rows.map((r) => r.map((c) => parseInline(c.tokens))),
+    header.map((c) => cellRenderer(c)),
+    ...rows.map((r) => r.map((c) => cellRenderer(c))),
   ];
   const colWidths = header.map((_, i) =>
     Math.max(...allRows.map((r) => r[i].length)),
@@ -22,6 +23,24 @@ function renderTable(
   return allRows
     .map((row) => row.map((cell, i) => cell.padEnd(colWidths[i])).join('  '))
     .join('\n');
+}
+
+function formatListItem(
+  prefix: string,
+  body: string,
+  indent: string,
+): string {
+  const trimmed = body.replace(/\n$/, '');
+  const lines = trimmed.split('\n');
+  const first = lines[0];
+  if (lines.length === 1) {
+    return prefix + first + '\n';
+  }
+  const rest = lines
+    .slice(1)
+    .map((line) => indent + line)
+    .join('\n');
+  return prefix + first + '\n' + rest + '\n';
 }
 
 export const TelegramHtmlRenderer: RendererObject = {
@@ -55,13 +74,14 @@ export const TelegramHtmlRenderer: RendererObject = {
     let result = '';
     for (let i = 0; i < token.items.length; i++) {
       const item = token.items[i];
-      const text = this.parser.parse(item.tokens).trim();
+      const body = this.parser.parse(item.tokens);
       if (token.ordered) {
         const start =
           typeof token.start === 'number' ? token.start : 1;
-        result += start + i + '. ' + text + '\n';
+        const prefix = start + i + '. ';
+        result += formatListItem(prefix, body, '   ');
       } else {
-        result += '- ' + text + '\n';
+        result += formatListItem('- ', body, '  ');
       }
     }
     return result;
@@ -70,7 +90,7 @@ export const TelegramHtmlRenderer: RendererObject = {
     return this.parser.parseInline(tokens) + '\n';
   },
   link({ href, tokens }) {
-    return '<a href="' + href + '">' + this.parser.parseInline(tokens) + '</a>';
+    return '<a href="' + escapeHtml(href) + '">' + this.parser.parseInline(tokens) + '</a>';
   },
   image({ href, text }) {
     return escapeHtml(text) + ' (' + href + ')';
@@ -79,13 +99,13 @@ export const TelegramHtmlRenderer: RendererObject = {
     const content = renderTable(
       token.header,
       token.rows,
-      (t) => this.parser.parseInline(t),
+      (c) => c.text,
     );
     return '<pre>' + escapeHtml(content) + '</pre>\n';
   },
   text(token) {
     if ('tokens' in token && token.tokens) {
-      return this.parser.parseInline(token.tokens);
+      return this.parser.parseInline(token.tokens) + '\n';
     }
     return escapeHtml(token.text);
   },
@@ -139,13 +159,14 @@ export const WhatsAppRenderer: RendererObject = {
     let result = '';
     for (let i = 0; i < token.items.length; i++) {
       const item = token.items[i];
-      const text = this.parser.parse(item.tokens).trim();
+      const body = this.parser.parse(item.tokens);
       if (token.ordered) {
         const start =
           typeof token.start === 'number' ? token.start : 1;
-        result += start + i + '. ' + text + '\n';
+        const prefix = start + i + '. ';
+        result += formatListItem(prefix, body, '   ');
       } else {
-        result += '- ' + text + '\n';
+        result += formatListItem('- ', body, '  ');
       }
     }
     return result;
@@ -164,13 +185,13 @@ export const WhatsAppRenderer: RendererObject = {
     const content = renderTable(
       token.header,
       token.rows,
-      (t) => this.parser.parseInline(t),
+      (c) => this.parser.parseInline(c.tokens),
     );
     return content + '\n';
   },
   text(token) {
     if ('tokens' in token && token.tokens) {
-      return this.parser.parseInline(token.tokens);
+      return this.parser.parseInline(token.tokens) + '\n';
     }
     return token.text;
   },

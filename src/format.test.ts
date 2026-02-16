@@ -90,6 +90,21 @@ describe('TelegramHtmlRenderer', () => {
         '1. first\n2. second\n3. third',
       );
     });
+
+    it('renders nested unordered lists with indentation', () => {
+      const md = '- outer\n  - inner';
+      const result = render(md);
+      expect(result).toContain('- outer');
+      expect(result).toContain('  - inner');
+      expect(result).not.toBe('- outer- inner');
+    });
+
+    it('renders nested ordered lists with indentation', () => {
+      const md = '1. outer\n   1. inner';
+      const result = render(md);
+      expect(result).toContain('1. outer');
+      expect(result).toContain('   1. inner');
+    });
   });
 
   describe('links and images', () => {
@@ -97,6 +112,12 @@ describe('TelegramHtmlRenderer', () => {
       expect(render('[click here](https://example.com)')).toBe(
         '<a href="https://example.com">click here</a>',
       );
+    });
+
+    it('escapes quotes in link href', () => {
+      const result = render('[click](https://example.com/a"b)');
+      expect(result).toContain('href="https://example.com/a&quot;b"');
+      expect(result).not.toContain('href="https://example.com/a"b"');
     });
 
     it('renders images as text with URL', () => {
@@ -114,6 +135,14 @@ describe('TelegramHtmlRenderer', () => {
       expect(result).toContain('Name');
       expect(result).toContain('Alice');
       expect(result).toContain('Bob');
+    });
+
+    it('renders table with formatted cells without double-escaping', () => {
+      const md = '| Name | Age |\n|------|-----|\n| **Alice** | 30 |';
+      const result = render(md);
+      expect(result).not.toContain('&lt;b&gt;');
+      expect(result).not.toContain('<b>');
+      expect(result).toContain('Alice');
     });
   });
 
@@ -228,6 +257,21 @@ describe('WhatsAppRenderer', () => {
       expect(render('1. first\n2. second\n3. third')).toBe(
         '1. first\n2. second\n3. third',
       );
+    });
+
+    it('renders nested unordered lists with indentation', () => {
+      const md = '- outer\n  - inner';
+      const result = render(md);
+      expect(result).toContain('- outer');
+      expect(result).toContain('  - inner');
+      expect(result).not.toBe('- outer- inner');
+    });
+
+    it('renders nested ordered lists with indentation', () => {
+      const md = '1. outer\n   1. inner';
+      const result = render(md);
+      expect(result).toContain('1. outer');
+      expect(result).toContain('   1. inner');
     });
   });
 
