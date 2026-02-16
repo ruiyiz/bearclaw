@@ -19,3 +19,6 @@ logs/
 .vscode/
 
 agents-sdk-docs
+
+# Worktrees
+.worktrees/
