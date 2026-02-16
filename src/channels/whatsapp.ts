@@ -10,7 +10,8 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 
-import { GROUPS_DIR, STORE_DIR } from '../config.js';
+import { DISPLAY_NAME, GROUPS_DIR, STORE_DIR } from '../config.js';
+import { renderMarkdown, WhatsAppRenderer } from '../format.js';
 import { getLastGroupSync, setLastGroupSync, storeChatMetadata, updateChatName } from '../db.js';
 import { logger } from '../logger.js';
 import { transcribeAudio } from '../transcribe.js';
@@ -26,7 +27,6 @@ export interface WhatsAppChannelOpts {
 
 export class WhatsAppChannel implements Channel {
   name = 'whatsapp';
-  prefixAssistantName = true;
 
   private sock: WASocket | null = null;
   private lidToPhoneMap: Record<string, string> = {};
@@ -140,8 +140,10 @@ export class WhatsAppChannel implements Channel {
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.sock) return;
     try {
-      await this.sock.sendMessage(jid, { text });
-      logger.info({ jid, length: text.length }, 'Message sent');
+      const formatted = renderMarkdown(text, WhatsAppRenderer);
+      const prefixed = `${DISPLAY_NAME}: ${formatted}`;
+      await this.sock.sendMessage(jid, { text: prefixed });
+      logger.info({ jid, length: prefixed.length }, 'Message sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send message');
     }

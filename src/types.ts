@@ -16,7 +16,6 @@ export interface MediaOptions {
 
 export interface Channel {
   name: string;
-  prefixAssistantName: boolean;
   connect(): Promise<void>;
   sendMessage(jid: string, text: string): Promise<void>;
   sendMedia?(jid: string, type: MediaType, source: MediaSource, options?: MediaOptions): Promise<void>;

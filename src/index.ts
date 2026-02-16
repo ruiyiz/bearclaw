@@ -42,7 +42,7 @@ import {
 import { registerEmailHandlers, sendEmailReply, startEmailLoops } from './email-channel.js';
 import { startEventBusLoop } from './event-bus.js';
 import { registerOdysseyHandlers } from './odyssey.js';
-import { findChannel, formatOutbound } from './router.js';
+import { findChannel } from './router.js';
 import { startSchedulerEmitter } from './task-scheduler.js';
 import { Channel, MediaType, NewMessage, RegisteredGroup, Session } from './types.js';
 import { loadJson, saveJson } from './utils.js';
@@ -142,7 +142,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
     if (!followUp) {
       const ch = findChannel(channels, msg.chat_jid);
       if (ch) {
-        await ch.sendMessage(msg.chat_jid, formatOutbound(ch, 'Session cleared! Starting fresh.'));
+        await ch.sendMessage(msg.chat_jid, 'Session cleared! Starting fresh.');
       }
       lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
       saveState();
@@ -186,8 +186,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   if (response && !isNonResponse(response) && channel) {
     lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
-    const text = formatOutbound(channel, response);
-    await channel.sendMessage(msg.chat_jid, text);
+    await channel.sendMessage(msg.chat_jid, response);
   }
 }
 
@@ -314,9 +313,7 @@ function startIpcWatcher(): void {
                     if (data.mediaType) {
                       const mediaSource = resolveMediaSource(data.filePath, data.mediaUrl, sourceGroup);
                       if (mediaSource && ipcChannel?.sendMedia) {
-                        const caption = data.text
-                          ? formatOutbound(ipcChannel, data.text)
-                          : undefined;
+                        const caption = data.text || undefined;
                         const mediaType = data.mediaType as MediaType;
                         const fileName = data.fileName || (data.filePath ? path.basename(data.filePath) : undefined);
                         const mimetype = data.mimetype || guessMimetype(data.filePath || data.mediaUrl || '');
@@ -334,8 +331,7 @@ function startIpcWatcher(): void {
                     } else if (data.sender && ipcChannel?.sendAsAgent) {
                       await ipcChannel.sendAsAgent(targetJid, data.text, data.sender, sourceGroup);
                     } else if (ipcChannel) {
-                      const ipcText = formatOutbound(ipcChannel, data.text);
-                      await ipcChannel.sendMessage(targetJid, ipcText);
+                      await ipcChannel.sendMessage(targetJid, data.text);
                     }
                     logger.info(
                       {

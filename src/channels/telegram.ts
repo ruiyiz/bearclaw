@@ -4,6 +4,7 @@ import path from 'path';
 import { Api, Bot, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, GROUPS_DIR, TRIGGER_PATTERN } from '../config.js';
+import { renderMarkdown, TelegramHtmlRenderer } from '../format.js';
 import { logger } from '../logger.js';
 import { transcribeAudio } from '../transcribe.js';
 import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredGroup } from '../types.js';
@@ -16,7 +17,6 @@ export interface TelegramChannelOpts {
 
 export class TelegramChannel implements Channel {
   name = 'telegram';
-  prefixAssistantName = false;
 
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
@@ -336,15 +336,16 @@ export class TelegramChannel implements Channel {
 
     try {
       const numericId = jid.replace(/^tg:/, '');
+      const formatted = renderMarkdown(text, TelegramHtmlRenderer);
       const MAX_LENGTH = 4096;
-      if (text.length <= MAX_LENGTH) {
-        await this.bot.api.sendMessage(numericId, text);
+      if (formatted.length <= MAX_LENGTH) {
+        await this.bot.api.sendMessage(numericId, formatted, { parse_mode: 'HTML' });
       } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await this.bot.api.sendMessage(numericId, text.slice(i, i + MAX_LENGTH));
+        for (let i = 0; i < formatted.length; i += MAX_LENGTH) {
+          await this.bot.api.sendMessage(numericId, formatted.slice(i, i + MAX_LENGTH), { parse_mode: 'HTML' });
         }
       }
-      logger.info({ jid, length: text.length }, 'Telegram message sent');
+      logger.info({ jid, length: formatted.length }, 'Telegram message sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
     }
@@ -515,15 +516,16 @@ export async function sendPoolMessage(
       return;
     }
 
+    const formatted = renderMarkdown(text, TelegramHtmlRenderer);
     const MAX_LENGTH = 4096;
-    if (text.length <= MAX_LENGTH) {
-      await api.sendMessage(numericId, text);
+    if (formatted.length <= MAX_LENGTH) {
+      await api.sendMessage(numericId, formatted, { parse_mode: 'HTML' });
     } else {
-      for (let i = 0; i < text.length; i += MAX_LENGTH) {
-        await api.sendMessage(numericId, text.slice(i, i + MAX_LENGTH));
+      for (let i = 0; i < formatted.length; i += MAX_LENGTH) {
+        await api.sendMessage(numericId, formatted.slice(i, i + MAX_LENGTH), { parse_mode: 'HTML' });
       }
     }
-    logger.info({ chatId, sender, poolIndex: idx, length: text.length }, 'Pool message sent');
+    logger.info({ chatId, sender, poolIndex: idx, length: formatted.length }, 'Pool message sent');
   } catch (err) {
     logger.error({ chatId, sender, err }, 'Failed to send pool message');
   }
