@@ -90,6 +90,8 @@ export function initDatabase(): void {
 
   // Migrate old tables to unified handlers table
   migrateToUnifiedHandlers();
+
+  initMemoryFts();
 }
 
 function intervalToCron(ms: number): string {
@@ -528,4 +530,116 @@ export function logHandlerRun(log: HandlerRunLog): void {
     log.result,
     log.error,
   );
+}
+
+// ─── Memory FTS ──────────────────────────────────────────────────────────
+
+function initMemoryFts(): void {
+  const hasFts = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_fts'",
+  ).get();
+
+  if (!hasFts) {
+    db.exec(`
+      CREATE VIRTUAL TABLE memory_fts USING fts5(
+        content,
+        path UNINDEXED,
+        group_folder UNINDEXED
+      );
+    `);
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_files (
+      path TEXT NOT NULL,
+      group_folder TEXT NOT NULL,
+      mtime INTEGER NOT NULL,
+      PRIMARY KEY (path, group_folder)
+    );
+  `);
+}
+
+export function indexMemoryFiles(groupFolder: string, groupDir: string): void {
+  const dirs = [
+    { dir: path.join(groupDir, 'memory'), prefix: 'memory' },
+    { dir: path.join(groupDir, 'conversations'), prefix: 'conversations' },
+  ];
+
+  const currentFiles = new Map<string, number>();
+
+  for (const { dir, prefix } of dirs) {
+    if (!fs.existsSync(dir)) continue;
+    for (const file of fs.readdirSync(dir)) {
+      if (!file.endsWith('.md')) continue;
+      const filePath = path.join(dir, file);
+      const stat = fs.statSync(filePath);
+      const relPath = `${prefix}/${file}`;
+      currentFiles.set(relPath, stat.mtimeMs);
+    }
+  }
+
+  // Get already-indexed files for this group
+  const indexed = db.prepare(
+    'SELECT path, mtime FROM memory_files WHERE group_folder = ?',
+  ).all(groupFolder) as Array<{ path: string; mtime: number }>;
+
+  const indexedMap = new Map(indexed.map((r) => [r.path, r.mtime]));
+
+  const upsert = db.transaction(() => {
+    // Remove deleted files
+    for (const [iPath] of indexedMap) {
+      if (!currentFiles.has(iPath)) {
+        db.prepare('DELETE FROM memory_fts WHERE path = ? AND group_folder = ?').run(iPath, groupFolder);
+        db.prepare('DELETE FROM memory_files WHERE path = ? AND group_folder = ?').run(iPath, groupFolder);
+      }
+    }
+
+    // Index new/changed files
+    for (const [relPath, mtime] of currentFiles) {
+      const existingMtime = indexedMap.get(relPath);
+      if (existingMtime !== undefined && Math.abs(existingMtime - mtime) < 1000) continue;
+
+      const prefix = relPath.split('/')[0];
+      const fullPath = path.join(groupDir, relPath);
+      const content = fs.readFileSync(fullPath, 'utf-8');
+      if (!content.trim()) continue;
+
+      // Remove old entry
+      db.prepare('DELETE FROM memory_fts WHERE path = ? AND group_folder = ?').run(relPath, groupFolder);
+      db.prepare('DELETE FROM memory_files WHERE path = ? AND group_folder = ?').run(relPath, groupFolder);
+
+      // Insert new
+      db.prepare('INSERT INTO memory_fts (content, path, group_folder) VALUES (?, ?, ?)').run(content, relPath, groupFolder);
+      db.prepare('INSERT INTO memory_files (path, group_folder, mtime) VALUES (?, ?, ?)').run(relPath, groupFolder, mtime);
+    }
+  });
+
+  upsert();
+}
+
+export interface MemorySearchResult {
+  path: string;
+  snippet: string;
+  rank: number;
+}
+
+export function searchMemory(
+  groupFolder: string,
+  query: string,
+  limit = 10,
+): MemorySearchResult[] {
+  // Escape FTS5 special characters for safe querying
+  const safeQuery = query.replace(/["*(){}[\]:^~!]/g, ' ').trim();
+  if (!safeQuery) return [];
+
+  return db.prepare(`
+    SELECT
+      path,
+      snippet(memory_fts, 0, '>>>', '<<<', '...', 40) as snippet,
+      rank
+    FROM memory_fts
+    WHERE memory_fts MATCH ? AND group_folder = ?
+    ORDER BY rank
+    LIMIT ?
+  `).all(safeQuery, groupFolder, limit) as MemorySearchResult[];
 }

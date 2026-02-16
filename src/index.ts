@@ -9,6 +9,8 @@ import {
   IPC_POLL_INTERVAL,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
+  SESSION_IDLE_MINUTES,
+  SESSION_RESET_HOUR,
   TELEGRAM_BOT_POOL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
@@ -50,6 +52,8 @@ let lastTimestamp = '';
 let sessions: Session = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
+let sessionLastActivity: Record<string, string> = {};
+let lastDailyReset = '';
 let messageLoopRunning = false;
 let ipcWatcherRunning = false;
 
@@ -60,9 +64,13 @@ function loadState(): void {
   const state = loadJson<{
     last_timestamp?: string;
     last_agent_timestamp?: Record<string, string>;
+    session_last_activity?: Record<string, string>;
+    last_daily_reset?: string;
   }>(statePath, {});
   lastTimestamp = state.last_timestamp || '';
   lastAgentTimestamp = state.last_agent_timestamp || {};
+  sessionLastActivity = state.session_last_activity || {};
+  lastDailyReset = state.last_daily_reset || '';
   sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
   registeredGroups = loadJson(
     path.join(DATA_DIR, 'registered_groups.json'),
@@ -78,6 +86,8 @@ function saveState(): void {
   saveJson(path.join(DATA_DIR, 'router_state.json'), {
     last_timestamp: lastTimestamp,
     last_agent_timestamp: lastAgentTimestamp,
+    session_last_activity: sessionLastActivity,
+    last_daily_reset: lastDailyReset,
   });
   saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
 }
@@ -224,6 +234,8 @@ async function runAgent(
       sessions[group.folder] = output.newSessionId;
       saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
     }
+
+    sessionLastActivity[group.folder] = new Date().toISOString();
 
     if (output.status === 'error') {
       logger.error(
@@ -669,6 +681,67 @@ async function processTaskIpc(
   }
 }
 
+function checkSessionResets(): void {
+  const now = new Date();
+  const today = now.toISOString().split('T')[0];
+  let changed = false;
+
+  // Daily reset at configured hour
+  if (SESSION_RESET_HOUR >= 0 && SESSION_RESET_HOUR <= 23) {
+    if (now.getHours() === SESSION_RESET_HOUR && lastDailyReset !== today) {
+      const folders = Object.keys(sessions);
+      if (folders.length > 0) {
+        for (const folder of folders) {
+          delete sessions[folder];
+          delete sessionLastActivity[folder];
+        }
+        lastDailyReset = today;
+        changed = true;
+        logger.info(
+          { hour: SESSION_RESET_HOUR, cleared: folders },
+          'Daily session reset',
+        );
+      } else {
+        lastDailyReset = today;
+      }
+    }
+  }
+
+  // Idle reset per session
+  if (SESSION_IDLE_MINUTES > 0) {
+    const cutoff = now.getTime() - SESSION_IDLE_MINUTES * 60 * 1000;
+    for (const folder of Object.keys(sessions)) {
+      const lastActive = sessionLastActivity[folder];
+      if (lastActive && new Date(lastActive).getTime() < cutoff) {
+        delete sessions[folder];
+        delete sessionLastActivity[folder];
+        changed = true;
+        logger.info(
+          { folder, idleMinutes: SESSION_IDLE_MINUTES },
+          'Idle session reset',
+        );
+      }
+    }
+  }
+
+  if (changed) {
+    saveState();
+  }
+}
+
+function startSessionResetLoop(): void {
+  if (SESSION_RESET_HOUR < 0 && SESSION_IDLE_MINUTES <= 0) {
+    logger.debug('Session reset disabled');
+    return;
+  }
+
+  setInterval(checkSessionResets, 60_000);
+  logger.info(
+    { resetHour: SESSION_RESET_HOUR, idleMinutes: SESSION_IDLE_MINUTES },
+    'Session reset loop started',
+  );
+}
+
 async function startMessageLoop(): Promise<void> {
   if (messageLoopRunning) {
     logger.debug('Message loop already running, skipping duplicate start');
@@ -740,6 +813,7 @@ async function main(): Promise<void> {
   }
 
   // Start all subsystems unconditionally
+  startSessionResetLoop();
   startSchedulerEmitter();
   startEventBusLoop({
     registeredGroups: () => registeredGroups,

@@ -42,6 +42,17 @@ export const TRIGGER_PATTERN = new RegExp(
   'i',
 );
 
+// Session reset — clear stale sessions to prevent unbounded context growth
+// Set to -1 to disable
+export const SESSION_RESET_HOUR = parseInt(
+  process.env.SESSION_RESET_HOUR ?? '4',
+  10,
+);
+export const SESSION_IDLE_MINUTES = parseInt(
+  process.env.SESSION_IDLE_MINUTES ?? '-1',
+  10,
+);
+
 export const EMAIL_DEFAULT_INTERVAL = '1h';
 export const EMAIL_HANDLER_PREFIX = 'email-';
 

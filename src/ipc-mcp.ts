@@ -8,6 +8,8 @@ import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
+import { indexMemoryFiles, searchMemory } from './db.js';
+import { GROUPS_DIR } from './config.js';
 
 export interface IpcMcpContext {
   chatJid: string;
@@ -508,7 +510,37 @@ Use available_groups.json to find the JID for a group. The folder name should be
             }]
           };
         }
-      )
+      ),
+
+      tool(
+        'memory_search',
+        `Search your memory files and conversation archives using keyword search.
+Returns ranked snippets from memory/ and conversations/ directories.
+Use this to recall past context, decisions, or conversation details.`,
+        {
+          query: z.string().describe('Search query (keywords, phrases, names, topics)'),
+          limit: z.number().default(5).describe('Max results to return (default: 5)'),
+        },
+        async (args) => {
+          const groupDir = path.join(GROUPS_DIR, groupFolder);
+          indexMemoryFiles(groupFolder, groupDir);
+          const results = searchMemory(groupFolder, args.query, args.limit);
+
+          if (results.length === 0) {
+            return {
+              content: [{ type: 'text', text: 'No matching memory found.' }],
+            };
+          }
+
+          const formatted = results.map((r, i) =>
+            `${i + 1}. [${r.path}]\n   ${r.snippet}`
+          ).join('\n\n');
+
+          return {
+            content: [{ type: 'text', text: formatted }],
+          };
+        }
+      ),
     ]
   });
 }

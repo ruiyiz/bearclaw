@@ -66,6 +66,78 @@ function getSessionSummary(sessionId: string, transcriptPath: string): string | 
   return null;
 }
 
+const DAILY_LOG_MAX_CHARS = 4000;
+
+function createSessionStartHook(groupDir: string): HookCallback {
+  return async (_input, _toolUseId, _context) => {
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().split('T')[0];
+    const memoryDir = path.join(groupDir, 'memory');
+
+    const parts: string[] = [];
+    for (const date of [yesterday, today]) {
+      const filePath = path.join(memoryDir, `${date}.md`);
+      if (fs.existsSync(filePath)) {
+        let content = fs.readFileSync(filePath, 'utf-8').trim();
+        if (content) {
+          if (content.length > DAILY_LOG_MAX_CHARS) {
+            content = content.slice(-DAILY_LOG_MAX_CHARS) + '\n[...truncated]';
+          }
+          parts.push(`=== memory/${date}.md ===\n${content}`);
+        }
+      }
+    }
+
+    if (parts.length === 0) return {};
+
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'SessionStart',
+        additionalContext: `Recent daily memory logs:\n\n${parts.join('\n\n')}`,
+      },
+    };
+  };
+}
+
+function flushMemoryFromTranscript(
+  groupDir: string,
+  messages: ParsedMessage[],
+  summary: string | null,
+): void {
+  const date = new Date().toISOString().split('T')[0];
+  const memoryDir = path.join(groupDir, 'memory');
+  fs.mkdirSync(memoryDir, { recursive: true });
+
+  const memoryFile = path.join(memoryDir, `${date}.md`);
+  const time = new Date().toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  // Extract the last few user messages and assistant responses as context
+  const recentMessages = messages.slice(-6);
+  const contextLines = recentMessages.map((m) => {
+    const prefix = m.role === 'user' ? 'User' : 'Assistant';
+    const text = m.content.length > 200 ? m.content.slice(0, 200) + '...' : m.content;
+    return `  - ${prefix}: ${text}`;
+  });
+
+  const entry = [
+    '',
+    `## Pre-compaction flush (${time})`,
+    '',
+    summary ? `Topic: ${summary}` : 'Topic: (no summary available)',
+    '',
+    'Recent context before compaction:',
+    ...contextLines,
+    '',
+  ].join('\n');
+
+  fs.appendFileSync(memoryFile, entry);
+  logger.debug({ memoryFile }, 'Memory flush written');
+}
+
 function createPreCompactHook(groupDir: string): HookCallback {
   return async (input, _toolUseId, _context) => {
     const preCompact = input as PreCompactHookInput;
@@ -89,6 +161,10 @@ function createPreCompactHook(groupDir: string): HookCallback {
       const summary = getSessionSummary(sessionId, transcriptPath);
       const name = summary ? sanitizeFilename(summary) : generateFallbackName();
 
+      // Flush recent context to daily memory log
+      flushMemoryFromTranscript(groupDir, messages, summary);
+
+      // Archive full transcript
       const conversationsDir = path.join(groupDir, 'conversations');
       fs.mkdirSync(conversationsDir, { recursive: true });
 
@@ -261,7 +337,8 @@ export async function runContainerAgent(
           ...userMcpServers,
         },
         hooks: {
-          PreCompact: [{ hooks: [createPreCompactHook(groupDir)] }]
+          SessionStart: [{ hooks: [createSessionStartHook(groupDir)] }],
+          PreCompact: [{ hooks: [createPreCompactHook(groupDir)] }],
         }
       }
     })) {
