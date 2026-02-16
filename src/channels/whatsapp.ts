@@ -10,7 +10,7 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 
-import { STORE_DIR } from '../config.js';
+import { GROUPS_DIR, STORE_DIR } from '../config.js';
 import { getLastGroupSync, setLastGroupSync, storeChatMetadata, updateChatName } from '../db.js';
 import { logger } from '../logger.js';
 import { transcribeAudio } from '../transcribe.js';
@@ -267,25 +267,30 @@ export class WhatsAppChannel implements Channel {
       return null;
     }
 
-    let content =
-      msg.message?.conversation ||
-      msg.message?.extendedTextMessage?.text ||
-      msg.message?.imageMessage?.caption ||
-      msg.message?.videoMessage?.caption ||
-      '';
+    const msgId = msg.key?.id || `wa_${Date.now()}`;
+    let content = '';
 
-    // Handle voice messages (PTT = Push-to-Talk)
-    if (!content && msg.message?.audioMessage?.ptt) {
+    if (msg.message?.conversation || msg.message?.extendedTextMessage) {
+      content = msg.message.conversation || msg.message.extendedTextMessage.text || '';
+    } else if (msg.message?.imageMessage) {
+      const caption = msg.message.imageMessage.caption ? ` ${msg.message.imageMessage.caption}` : '';
+      const filePath = await this.downloadMedia(msg, chatJid, `photo-${msgId}`, '.jpg');
+      content = filePath ? `[Photo: ${filePath}]${caption}` : `[Photo]${caption}`;
+    } else if (msg.message?.videoMessage) {
+      const caption = msg.message.videoMessage.caption ? ` ${msg.message.videoMessage.caption}` : '';
+      const filePath = await this.downloadMedia(msg, chatJid, `video-${msgId}`, '.mp4');
+      content = filePath ? `[Video: ${filePath}]${caption}` : `[Video]${caption}`;
+    } else if (msg.message?.audioMessage?.ptt) {
+      // Voice message (Push-to-Talk)
       try {
         const buffer = await downloadMediaMessage(msg, 'buffer', {});
         if (buffer) {
-          const transcription = await transcribeAudio(buffer, msg.key?.id);
+          const transcription = await transcribeAudio(buffer as Buffer, msgId);
           if (transcription) {
             content = `[Voice message] ${transcription}`;
             logger.info({ length: transcription.length }, 'Voice message transcribed');
           } else {
             content = '[Voice message - transcription failed]';
-            logger.warn('Voice transcription returned null');
           }
         } else {
           content = '[Voice message - download failed]';
@@ -294,12 +299,21 @@ export class WhatsAppChannel implements Channel {
         content = '[Voice message - transcription error]';
         logger.error({ err }, 'Voice transcription error');
       }
+    } else if (msg.message?.audioMessage) {
+      const filePath = await this.downloadMedia(msg, chatJid, `audio-${msgId}`, '.ogg');
+      content = filePath ? `[Audio: ${filePath}]` : '[Audio]';
+    } else if (msg.message?.documentMessage) {
+      const fileName = msg.message.documentMessage.fileName || 'file';
+      const ext = path.extname(fileName) || '';
+      const filePath = await this.downloadMedia(msg, chatJid, `doc-${msgId}`, ext);
+      content = filePath ? `[Document: ${filePath}]` : `[Document: ${fileName}]`;
+    } else if (msg.message?.stickerMessage) {
+      content = '[Sticker]';
     }
 
     const timestamp = new Date(Number(msg.messageTimestamp) * 1000).toISOString();
     const sender = msg.key.participant || msg.key.remoteJid || '';
     const senderName = msg.pushName || sender.split('@')[0];
-    const msgId = msg.key.id || '';
 
     return {
       id: msgId,
@@ -309,5 +323,25 @@ export class WhatsAppChannel implements Channel {
       content,
       timestamp,
     };
+  }
+
+  private async downloadMedia(msg: any, chatJid: string, baseName: string, ext: string): Promise<string | null> {
+    try {
+      const buffer = await downloadMediaMessage(msg, 'buffer', {});
+      if (!buffer) return null;
+
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return null;
+
+      const mediaDir = path.join(GROUPS_DIR, group.folder, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const filePath = path.join(mediaDir, `${baseName}${ext}`);
+      fs.writeFileSync(filePath, buffer as Buffer);
+      logger.debug({ filePath }, 'WhatsApp media saved');
+      return filePath;
+    } catch (err) {
+      logger.warn({ err }, 'Failed to download WhatsApp media');
+      return null;
+    }
   }
 }
