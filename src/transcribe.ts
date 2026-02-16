@@ -6,8 +6,6 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 
-import { downloadMediaMessage, proto } from '@whiskeysockets/baileys';
-
 import { STORE_DIR } from './config.js';
 import { logger } from './logger.js';
 
@@ -20,25 +18,14 @@ const TEMP_DIR = path.join(STORE_DIR, 'audio_temp');
 // Ensure temp directory exists
 fs.mkdirSync(TEMP_DIR, { recursive: true });
 
-export async function transcribeAudioMessage(
-  msg: proto.IWebMessageInfo,
+export async function transcribeAudio(
+  buffer: Buffer,
+  audioId?: string,
 ): Promise<string | null> {
   try {
-    if (!msg.key) {
-      logger.warn('Message has no key');
-      return null;
-    }
-
-    // Download the audio file
-    const buffer = await downloadMediaMessage(msg as any, 'buffer', {});
-    if (!buffer) {
-      logger.warn('No buffer returned from audio download');
-      return null;
-    }
-
-    const audioId = msg.key.id || `audio_${Date.now()}`;
-    const oggPath = path.join(TEMP_DIR, `${audioId}.ogg`);
-    const wavPath = path.join(TEMP_DIR, `${audioId}.wav`);
+    const id = audioId || `audio_${Date.now()}`;
+    const oggPath = path.join(TEMP_DIR, `${id}.ogg`);
+    const wavPath = path.join(TEMP_DIR, `${id}.wav`);
 
     // Write OGG file
     fs.writeFileSync(oggPath, buffer);
@@ -65,13 +52,13 @@ export async function transcribeAudioMessage(
       '--model', WHISPER_MODEL,
       '--output_format', 'txt',
       '--output_dir', outputDir,
-      '--language', 'en', // or 'auto' for auto-detection
+      '--language', 'en',
     ]);
 
     logger.debug({ stdout, stderr }, 'Whisper output');
 
     // Read transcription
-    const txtPath = path.join(outputDir, `${audioId}.txt`);
+    const txtPath = path.join(outputDir, `${id}.txt`);
     if (!fs.existsSync(txtPath)) {
       logger.warn('Transcription file not found');
       cleanup(oggPath, wavPath, txtPath);
@@ -80,14 +67,13 @@ export async function transcribeAudioMessage(
 
     const transcription = fs.readFileSync(txtPath, 'utf-8').trim();
 
-    // Cleanup temp files
     cleanup(oggPath, wavPath, txtPath);
 
     logger.info({ length: transcription.length }, 'Audio transcribed successfully');
     return transcription;
 
   } catch (err) {
-    logger.error({ err }, 'Failed to transcribe audio message');
+    logger.error({ err }, 'Failed to transcribe audio');
     return null;
   }
 }

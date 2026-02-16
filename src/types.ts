@@ -1,15 +1,32 @@
 export type OnInboundMessage = (chatJid: string, msg: NewMessage) => void;
 export type OnChatMetadata = (chatJid: string, timestamp: string, name?: string) => void;
 
+export type MediaType = 'image' | 'document' | 'video' | 'audio';
+
+export interface MediaSource {
+  buffer?: Buffer;
+  url?: string;
+}
+
+export interface MediaOptions {
+  caption?: string;
+  fileName?: string;
+  mimetype?: string;
+}
+
 export interface Channel {
   name: string;
   prefixAssistantName: boolean;
   connect(): Promise<void>;
   sendMessage(jid: string, text: string): Promise<void>;
+  sendMedia?(jid: string, type: MediaType, source: MediaSource, options?: MediaOptions): Promise<void>;
   ownsJid(jid: string): boolean;
   isConnected(): boolean;
   disconnect(): Promise<void>;
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
+  sendAsAgent?(jid: string, text: string, agentName: string, groupFolder: string): Promise<void>;
+  sendMediaAsAgent?(jid: string, type: MediaType, source: MediaSource, options: MediaOptions, agentName: string, groupFolder: string): Promise<void>;
+  syncMetadata?(force?: boolean): Promise<void>;
 }
 
 export interface ContainerConfig {

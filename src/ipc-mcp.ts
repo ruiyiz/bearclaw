@@ -75,13 +75,13 @@ IMPORTANT: Your final text output is automatically sent to the user. Do NOT use 
 
 Main group agents can send to any registered group by specifying target_chat (the group folder name).
 
-MEDIA: Attach an image or document by providing file_path (local file) or media_url (remote URL) along with media_type.
+MEDIA: Attach media by providing file_path (local file) or media_url (remote URL) along with media_type (image, document, video, audio).
 The text parameter becomes the caption for media messages. For documents, also provide file_name.`,
         {
           text: z.string().optional().describe('The message text to send (becomes caption for media messages)'),
           sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
           target_chat: z.string().optional().describe('Target group folder (main only, defaults to current group)'),
-          media_type: z.enum(['image', 'document']).optional().describe('Type of media to attach'),
+          media_type: z.enum(['image', 'document', 'video', 'audio']).optional().describe('Type of media to attach'),
           file_path: z.string().optional().describe('Local file path for the media (absolute or relative to group folder)'),
           media_url: z.string().optional().describe('URL of the media to send (alternative to file_path)'),
           file_name: z.string().optional().describe('Display file name for documents (e.g., "report.pdf")'),
