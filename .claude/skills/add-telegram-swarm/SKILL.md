@@ -223,7 +223,7 @@ if (data.sender && data.chatJid.startsWith('tg:')) {
 }
 ```
 
-Note: The assistant name prefix is handled by `formatOutbound()` in the router — Telegram channels have `prefixAssistantName = false` so no prefix is added for `tg:` JIDs.
+Note: Each channel's `sendMessage` handles formatting internally via `renderMarkdown()`. WhatsApp prepends the display name prefix; Telegram does not (bots already show their name).
 
 3. **Initialize pool in `main()` in `src/index.ts`** — after creating the Telegram channel, add:
 

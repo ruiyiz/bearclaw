@@ -87,7 +87,7 @@ NanoClaw uses a **Channel abstraction** (`Channel` interface in `src/types.ts`).
 |------|---------|
 | `src/types.ts` | `Channel` interface definition |
 | `src/channels/whatsapp.ts` | `WhatsAppChannel` class (reference implementation) |
-| `src/router.ts` | `findChannel()`, `routeOutbound()`, `formatOutbound()` |
+| `src/router.ts` | `findChannel()` |
 | `src/index.ts` | Orchestrator: creates channels, wires callbacks, starts subsystems |
 | `src/ipc.ts` | IPC watcher (uses `sendMessage` dep for outbound) |
 
@@ -131,7 +131,7 @@ export interface TelegramChannelOpts {
 
 export class TelegramChannel implements Channel {
   name = "telegram";
-  prefixAssistantName = false; // Telegram bots already display their name
+  // Formatting is handled internally by sendMessage via renderMarkdown
 
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
@@ -353,7 +353,7 @@ Key differences from the old standalone `src/telegram.ts`:
 - Implements `Channel` interface — same pattern as `WhatsAppChannel`
 - Uses `onMessage` / `onChatMetadata` callbacks instead of importing DB functions directly
 - Registration check via `registeredGroups()` callback, not `getAllRegisteredGroups()`
-- `prefixAssistantName = false` — Telegram bots already show their name, so `formatOutbound()` skips the prefix
+- Formatting is handled internally by `sendMessage` via `renderMarkdown()` with `TelegramHtmlRenderer`
 - No `storeMessageDirect` needed — `storeMessage()` in db.ts already accepts `NewMessage` directly
 
 ### Step 3: Update Main Application
@@ -397,8 +397,7 @@ await whatsapp.sendMessage(chatJid, `${ASSISTANT_NAME}: ${text}`);
 ```
 with:
 ```typescript
-const formatted = formatOutbound(channel, text);
-if (formatted) await channel.sendMessage(chatJid, formatted);
+await channel.sendMessage(chatJid, text);
 ```
 
 4. **Update `main()` function** to create channels conditionally and use them for deps:
@@ -451,8 +450,7 @@ async function main(): Promise<void> {
     sendMessage: async (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) return;
-      const text = formatOutbound(channel, rawText);
-      if (text) await channel.sendMessage(jid, text);
+      await channel.sendMessage(jid, rawText);
     },
   });
   startIpcWatcher({
