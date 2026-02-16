@@ -16,6 +16,7 @@ import { createIpcMcp } from './ipc-mcp.js';
 import { emitEvent } from './db.js';
 import { logger } from './logger.js';
 import { Handler, RegisteredGroup } from './types.js';
+import { SYSTEM_PROMPT } from './system-prompt.js';
 
 export interface ContainerInput {
   prompt: string;
@@ -323,6 +324,11 @@ export async function runContainerAgent(
         cwd: groupDir,
         resume: input.sessionId,
         model: input.model || 'claude-opus-4-6',
+        systemPrompt: {
+          type: 'preset',
+          preset: 'claude_code',
+          append: SYSTEM_PROMPT,
+        },
         allowedTools: [
           'Bash',
           'Read', 'Write', 'Edit', 'Glob', 'Grep',

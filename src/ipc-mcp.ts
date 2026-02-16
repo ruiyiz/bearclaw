@@ -541,6 +541,40 @@ Use this to recall past context, decisions, or conversation details.`,
           };
         }
       ),
+
+      tool(
+        'memory_write',
+        `Save a note to your daily memory log. Use this to record decisions, context, observations, or anything worth remembering.
+Entries are appended to today's log and automatically indexed for search.
+Prefer this over Write/Edit for memory — it handles paths and indexing for you.`,
+        {
+          content: z.string().describe('The note to save'),
+          topic: z.string().optional().describe('Optional topic header (e.g., "Ski Trip Plans", "Work Decision")'),
+        },
+        async (args) => {
+          const groupDir = path.join(GROUPS_DIR, groupFolder);
+          const memoryDir = path.join(groupDir, 'memory');
+          fs.mkdirSync(memoryDir, { recursive: true });
+
+          const date = new Date().toISOString().split('T')[0];
+          const memoryFile = path.join(memoryDir, `${date}.md`);
+          const time = new Date().toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          });
+
+          const header = args.topic ? `## ${args.topic} (${time})` : `## ${time}`;
+          const entry = `\n${header}\n\n${args.content}\n`;
+
+          fs.appendFileSync(memoryFile, entry);
+          indexMemoryFiles(groupFolder, groupDir);
+
+          return {
+            content: [{ type: 'text', text: `Saved to memory/${date}.md` }],
+          };
+        }
+      ),
     ]
   });
 }
