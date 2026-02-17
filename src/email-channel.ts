@@ -4,7 +4,7 @@ import path from 'path';
 import { DATA_DIR, EMAIL_DEFAULT_INTERVAL, EMAIL_HANDLER_PREFIX } from './config.js';
 import { createHandler, emitEvent, getAllHandlers, updateHandler } from './db.js';
 import { logger } from './logger.js';
-import { EmailMessage, RegisteredGroup } from './types.js';
+import { EmailMessage, RegisteredAgent } from './types.js';
 import { loadJson, saveJson } from './utils.js';
 
 const GOG_PATH = '/opt/homebrew/bin/gog';
@@ -130,24 +130,24 @@ export function parseEmailAddress(from: string): string {
 const runningLoops = new Set<string>();
 
 /**
- * Start email polling loops for all groups that have email config.
- * Each group gets its own loop with its own state file and interval.
+ * Start email polling loops for all agents that have email config.
+ * Each agent gets its own loop with its own state file and interval.
  */
-export function startEmailLoops(groups: Record<string, RegisteredGroup>): void {
-  for (const group of Object.values(groups)) {
-    if (!group.email) continue;
-    if (runningLoops.has(group.folder)) {
-      logger.debug({ folder: group.folder }, 'Email loop already running, skipping');
+export function startEmailLoops(agents: Record<string, RegisteredAgent>): void {
+  for (const agent of Object.values(agents)) {
+    if (!agent.email) continue;
+    if (runningLoops.has(agent.folder)) {
+      logger.debug({ folder: agent.folder }, 'Email loop already running, skipping');
       continue;
     }
-    runningLoops.add(group.folder);
+    runningLoops.add(agent.folder);
 
-    const { address, interval } = group.email;
+    const { address, interval } = agent.email;
     const pollMs = intervalToMs(interval || EMAIL_DEFAULT_INTERVAL);
-    const processedIds = loadEmailState(group.folder);
+    const processedIds = loadEmailState(agent.folder);
 
     logger.info(
-      { folder: group.folder, address, intervalMs: pollMs },
+      { folder: agent.folder, address, intervalMs: pollMs },
       'Email loop started',
     );
 
@@ -155,7 +155,7 @@ export function startEmailLoops(groups: Record<string, RegisteredGroup>): void {
       try {
         const emails = await fetchUnreadEmails(address);
         if (emails.length > 0) {
-          logger.info({ count: emails.length, folder: group.folder }, 'Found unread emails');
+          logger.info({ count: emails.length, folder: agent.folder }, 'Found unread emails');
         }
 
         for (const email of emails) {
@@ -165,7 +165,7 @@ export function startEmailLoops(groups: Record<string, RegisteredGroup>): void {
           }
 
           emitEvent('email_received', {
-            group_folder: group.folder,
+            group_folder: agent.folder,
             message_id: email.id,
             thread_id: email.threadId,
             from: parseEmailAddress(email.from),
@@ -177,7 +177,7 @@ export function startEmailLoops(groups: Record<string, RegisteredGroup>): void {
           });
 
           processedIds.add(email.id);
-          saveEmailState(group.folder, processedIds);
+          saveEmailState(agent.folder, processedIds);
 
           try {
             await markThreadRead(email.threadId);
@@ -186,7 +186,7 @@ export function startEmailLoops(groups: Record<string, RegisteredGroup>): void {
           }
         }
       } catch (err) {
-        logger.error({ err, folder: group.folder }, 'Error in email poll');
+        logger.error({ err, folder: agent.folder }, 'Error in email poll');
       }
 
       setTimeout(poll, pollMs);
@@ -197,10 +197,10 @@ export function startEmailLoops(groups: Record<string, RegisteredGroup>): void {
 }
 
 /**
- * Register email_received handlers for all groups with email config.
+ * Register email_received handlers for all agents with email config.
  * Mirrors the Odyssey pattern: creates/updates/pauses handlers based on config.
  */
-export function registerEmailHandlers(groups: Record<string, RegisteredGroup>): void {
+export function registerEmailHandlers(agents: Record<string, RegisteredAgent>): void {
   const existingHandlers = getAllHandlers();
   const emailHandlers = new Map(
     existingHandlers
@@ -210,13 +210,13 @@ export function registerEmailHandlers(groups: Record<string, RegisteredGroup>): 
 
   const seenHandlerIds = new Set<string>();
 
-  for (const group of Object.values(groups)) {
-    const handlerId = `${EMAIL_HANDLER_PREFIX}${group.folder}`;
+  for (const agent of Object.values(agents)) {
+    const handlerId = `${EMAIL_HANDLER_PREFIX}${agent.folder}`;
     seenHandlerIds.add(handlerId);
 
     const existing = emailHandlers.get(handlerId);
 
-    if (!group.email) {
+    if (!agent.email) {
       // No email config — pause existing handler if any
       if (existing && existing.status === 'active') {
         updateHandler(handlerId, { status: 'paused' });
@@ -225,7 +225,7 @@ export function registerEmailHandlers(groups: Record<string, RegisteredGroup>): 
       continue;
     }
 
-    const filter = JSON.stringify({ group_folder: group.folder });
+    const filter = JSON.stringify({ group_folder: agent.folder });
     const prompt = `Process this email. The event payload contains the full email (from, subject, body, thread_id, message_id).
 If a response is needed, use the reply_email tool. If no response is needed, do nothing.`;
 
@@ -245,7 +245,7 @@ If a response is needed, use the reply_email tool. If no response is needed, do 
     // Create new handler
     createHandler({
       id: handlerId,
-      group_folder: group.folder,
+      group_folder: agent.folder,
       prompt,
       context_mode: 'group',
       event_type: 'email_received',
@@ -258,14 +258,14 @@ If a response is needed, use the reply_email tool. If no response is needed, do 
       created_at: new Date().toISOString(),
     });
 
-    logger.info({ handlerId, folder: group.folder }, 'Email handler created');
+    logger.info({ handlerId, folder: agent.folder }, 'Email handler created');
   }
 
-  // Pause any email handlers for groups that no longer exist
+  // Pause any email handlers for agents that no longer exist
   for (const [handlerId, handler] of emailHandlers) {
     if (!seenHandlerIds.has(handlerId) && handler.status === 'active') {
       updateHandler(handlerId, { status: 'paused' });
-      logger.info({ handlerId }, 'Email handler paused (group removed)');
+      logger.info({ handlerId }, 'Email handler paused (agent removed)');
     }
   }
 }

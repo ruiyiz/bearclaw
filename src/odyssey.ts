@@ -8,7 +8,7 @@ import {
   updateHandler,
 } from './db.js';
 import { logger } from './logger.js';
-import { OdysseyConfig, RegisteredGroup } from './types.js';
+import { OdysseyConfig, RegisteredAgent } from './types.js';
 
 /**
  * Convert a human-friendly interval like "30m", "1h", "6h", "1d"
@@ -61,11 +61,11 @@ export function isInQuietPeriod(quiet: NonNullable<OdysseyConfig['quiet']>): boo
 }
 
 /**
- * Register or update Odyssey handlers for all groups that have odyssey config.
+ * Register or update Odyssey handlers for all agents that have odyssey config.
  * Called once on startup.
  */
 export function registerOdysseyHandlers(
-  groups: Record<string, RegisteredGroup>,
+  agents: Record<string, RegisteredAgent>,
 ): void {
   const existingHandlers = getAllHandlers();
   const odysseyHandlers = new Map(
@@ -76,13 +76,13 @@ export function registerOdysseyHandlers(
 
   const seenHandlerIds = new Set<string>();
 
-  for (const group of Object.values(groups)) {
-    const handlerId = `${ODYSSEY_HANDLER_PREFIX}${group.folder}`;
+  for (const agent of Object.values(agents)) {
+    const handlerId = `${ODYSSEY_HANDLER_PREFIX}${agent.folder}`;
     seenHandlerIds.add(handlerId);
 
     const existing = odysseyHandlers.get(handlerId);
 
-    if (!group.odyssey) {
+    if (!agent.odyssey) {
       // No odyssey config — pause existing handler if any
       if (existing && existing.status === 'active') {
         updateHandler(handlerId, { status: 'paused' });
@@ -91,7 +91,7 @@ export function registerOdysseyHandlers(
       continue;
     }
 
-    const cron = intervalToCron(group.odyssey.interval);
+    const cron = intervalToCron(agent.odyssey.interval);
 
     if (existing) {
       // Handler exists — check if cron changed
@@ -121,7 +121,7 @@ export function registerOdysseyHandlers(
 
     createHandler({
       id: handlerId,
-      group_folder: group.folder,
+      group_folder: agent.folder,
       prompt: ODYSSEY_PROMPT,
       context_mode: 'isolated',
       event_type: 'cron_trigger',
@@ -135,16 +135,16 @@ export function registerOdysseyHandlers(
     });
 
     logger.info(
-      { handlerId, folder: group.folder, cron, nextRun },
+      { handlerId, folder: agent.folder, cron, nextRun },
       'Odyssey handler created',
     );
   }
 
-  // Pause any odyssey handlers for groups that no longer exist
+  // Pause any odyssey handlers for agents that no longer exist
   for (const [handlerId, handler] of odysseyHandlers) {
     if (!seenHandlerIds.has(handlerId) && handler.status === 'active') {
       updateHandler(handlerId, { status: 'paused' });
-      logger.info({ handlerId }, 'Odyssey handler paused (group removed)');
+      logger.info({ handlerId }, 'Odyssey handler paused (agent removed)');
     }
   }
 }
