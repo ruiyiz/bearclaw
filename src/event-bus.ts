@@ -73,10 +73,9 @@ async function runHandler(
   }
 
   const isMain = handler.group_folder === MAIN_GROUP_FOLDER;
-  const chatJid =
-    Object.entries(groups).find(
-      ([, g]) => g.folder === handler.group_folder,
-    )?.[0] || '';
+  // No originating channel for event handlers; IPC processing will
+  // fan out to all channels registered to the group folder.
+  const chatJid = '';
 
   // Write handlers snapshot for the agent
   const handlers = getAllHandlers();

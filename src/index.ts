@@ -289,64 +289,70 @@ function startIpcWatcher(): void {
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               if (data.type === 'message' && (data.text || data.mediaType)) {
-                let targetJid: string | undefined;
-                if (data.targetFolder && isMain) {
-                  targetJid = Object.entries(registeredGroups).find(
-                    ([, g]) => g.folder === data.targetFolder,
-                  )?.[0];
-                  if (!targetJid) {
-                    logger.warn(
-                      { targetFolder: data.targetFolder, sourceGroup },
-                      'Target group folder not found for message routing',
-                    );
-                  }
+                // Resolve target JIDs: specific JID from chatJid, or all JIDs for the group
+                let targetJids: string[];
+                if (data.chatJid) {
+                  targetJids = [data.chatJid];
+                } else {
+                  // No originating channel (e.g. event handler): send to all channels for the group
+                  targetJids = Object.entries(registeredGroups)
+                    .filter(([, g]) => g.folder === data.groupFolder)
+                    .map(([jid]) => jid);
                 }
-                if (!targetJid) targetJid = data.chatJid;
 
-                if (targetJid) {
+                for (const targetJid of targetJids) {
                   const targetGroup = registeredGroups[targetJid];
                   if (
-                    isMain ||
-                    (targetGroup && targetGroup.folder === sourceGroup)
+                    !isMain &&
+                    !(targetGroup && targetGroup.folder === sourceGroup)
                   ) {
-                    const ipcChannel = findChannel(channels, targetJid);
-                    if (data.mediaType) {
-                      const mediaSource = resolveMediaSource(data.filePath, data.mediaUrl, sourceGroup);
-                      if (mediaSource && ipcChannel?.sendMedia) {
-                        const caption = data.text || undefined;
-                        const mediaType = data.mediaType as MediaType;
-                        const fileName = data.fileName || (data.filePath ? path.basename(data.filePath) : undefined);
-                        const mimetype = data.mimetype || guessMimetype(data.filePath || data.mediaUrl || '');
-
-                        if (data.sender && ipcChannel.sendMediaAsAgent) {
-                          await ipcChannel.sendMediaAsAgent(targetJid, mediaType, mediaSource, { caption, fileName, mimetype }, data.sender, sourceGroup);
-                        } else {
-                          await ipcChannel.sendMedia(targetJid, mediaType, mediaSource, { caption, fileName, mimetype });
-                        }
-                      } else if (!mediaSource) {
-                        logger.error({ targetJid, sourceGroup }, 'Could not resolve media source');
-                      } else {
-                        logger.warn({ targetJid, channel: ipcChannel?.name }, 'Channel does not support media');
-                      }
-                    } else if (data.sender && ipcChannel?.sendAsAgent) {
-                      await ipcChannel.sendAsAgent(targetJid, data.text, data.sender, sourceGroup);
-                    } else if (ipcChannel) {
-                      await ipcChannel.sendMessage(targetJid, data.text);
-                    }
-                    logger.info(
-                      {
-                        targetJid,
-                        sourceGroup,
-                        mediaType: data.mediaType || 'text',
-                      },
-                      'IPC message sent',
-                    );
-                  } else {
                     logger.warn(
                       { targetJid, sourceGroup },
                       'Unauthorized IPC message attempt blocked',
                     );
+                    continue;
                   }
+
+                  const ipcChannel = findChannel(channels, targetJid);
+                  if (!ipcChannel) {
+                    logger.error(
+                      { targetJid, sourceGroup },
+                      'No channel found for target JID',
+                    );
+                    continue;
+                  }
+
+                  if (data.mediaType) {
+                    const mediaSource = resolveMediaSource(data.filePath, data.mediaUrl, sourceGroup);
+                    if (mediaSource && ipcChannel.sendMedia) {
+                      const caption = data.text || undefined;
+                      const mediaType = data.mediaType as MediaType;
+                      const fileName = data.fileName || (data.filePath ? path.basename(data.filePath) : undefined);
+                      const mimetype = data.mimetype || guessMimetype(data.filePath || data.mediaUrl || '');
+
+                      if (data.sender && ipcChannel.sendMediaAsAgent) {
+                        await ipcChannel.sendMediaAsAgent(targetJid, mediaType, mediaSource, { caption, fileName, mimetype }, data.sender, sourceGroup);
+                      } else {
+                        await ipcChannel.sendMedia(targetJid, mediaType, mediaSource, { caption, fileName, mimetype });
+                      }
+                    } else if (!mediaSource) {
+                      logger.error({ targetJid, sourceGroup }, 'Could not resolve media source');
+                    } else {
+                      logger.warn({ targetJid, channel: ipcChannel.name }, 'Channel does not support media');
+                    }
+                  } else if (data.sender && ipcChannel.sendAsAgent) {
+                    await ipcChannel.sendAsAgent(targetJid, data.text, data.sender, sourceGroup);
+                  } else {
+                    await ipcChannel.sendMessage(targetJid, data.text);
+                  }
+                  logger.info(
+                    {
+                      targetJid,
+                      sourceGroup,
+                      mediaType: data.mediaType || 'text',
+                    },
+                    'IPC message sent',
+                  );
                 }
               }
               fs.unlinkSync(filePath);
