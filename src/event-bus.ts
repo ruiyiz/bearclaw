@@ -102,13 +102,13 @@ ${handler.prompt}
     payloadObj = {};
   }
   const sessionKey =
-    handler.context_mode === 'group'
+    handler.context_mode === 'agent'
       ? (payloadObj.session_key as string) || handler.group_folder
       : '';
 
   const sessions = deps.getSessions();
   const sessionId =
-    handler.context_mode === 'group' ? sessions[sessionKey] : undefined;
+    handler.context_mode === 'agent' ? sessions[sessionKey] : undefined;
 
   let result: string | null = null;
   let error: string | null = null;
@@ -136,7 +136,7 @@ ${handler.prompt}
     }
 
     // Persist new session ID for group-mode handlers
-    if (output.newSessionId && handler.context_mode === 'group') {
+    if (output.newSessionId && handler.context_mode === 'agent') {
       sessions[sessionKey] = output.newSessionId;
       deps.saveSessions();
     }

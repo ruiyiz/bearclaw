@@ -247,7 +247,7 @@ If a response is needed, use the reply_email tool. If no response is needed, do 
       id: handlerId,
       group_folder: agent.folder,
       prompt,
-      context_mode: 'group',
+      context_mode: 'agent',
       event_type: 'email_received',
       filter,
       cron: null,

@@ -87,7 +87,7 @@ export interface Handler {
   id: string;
   group_folder: string;
   prompt: string;
-  context_mode: 'group' | 'isolated';
+  context_mode: 'agent' | 'isolated';
   event_type: string;
   filter: string | null;
   cron: string | null;

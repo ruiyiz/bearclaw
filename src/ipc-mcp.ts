@@ -149,7 +149,7 @@ CRON FORMAT (5-field, all times LOCAL timezone):
           prompt: z.string().describe('What the agent should do when the task runs'),
           cron: z.string().optional().describe('Cron expression for recurring tasks (e.g., "0 9 * * *")'),
           run_at: z.string().optional().describe('Local timestamp for one-time tasks (e.g., "2026-02-01T15:30:00", no Z suffix)'),
-          context_mode: z.enum(['group', 'isolated']).default('group').describe('group=shared session, isolated=fresh session'),
+          context_mode: z.enum(['agent', 'isolated']).default('agent').describe('agent=shared session, isolated=fresh session'),
           target_agent: z.string().optional().describe('Target agent folder (main only, defaults to current agent)')
         },
         async (args) => {
@@ -191,7 +191,7 @@ CRON FORMAT (5-field, all times LOCAL timezone):
             prompt: args.prompt,
             cron: args.cron || null,
             runAt: args.run_at || null,
-            context_mode: args.context_mode || 'group',
+            context_mode: args.context_mode || 'agent',
             agentFolder: targetAgent,
             createdBy: agentFolder,
             timestamp: new Date().toISOString()
@@ -300,7 +300,7 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
           event_type: z.string().describe('Event type to listen for (e.g., "earnings_released", "task_complete")'),
           prompt: z.string().describe('Instructions for the agent when the event fires. The event payload will be injected automatically.'),
           filter: z.record(z.string(), z.unknown()).optional().describe('Optional filter: all keys must match event payload to trigger'),
-          context_mode: z.enum(['group', 'isolated']).default('isolated').describe('group=shared session, isolated=fresh session (default)'),
+          context_mode: z.enum(['agent', 'isolated']).default('isolated').describe('agent=shared session, isolated=fresh session (default)'),
           cooldown_ms: z.number().default(0).describe('Minimum ms between triggers (default: 0)'),
           max_triggers: z.number().optional().describe('Max times this handler can fire. Omit for unlimited.'),
           target_agent: z.string().optional().describe('Target agent folder (main only, defaults to current agent)')

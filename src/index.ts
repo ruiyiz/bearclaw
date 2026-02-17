@@ -466,7 +466,7 @@ async function processTaskIpc(
 
         const handlerId = `handler-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const contextMode =
-          data.context_mode === 'group' || data.context_mode === 'isolated'
+          data.context_mode === 'agent' || data.context_mode === 'isolated'
             ? data.context_mode
             : 'isolated';
 
@@ -566,7 +566,7 @@ async function processTaskIpc(
 
         const handlerId = `handler-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const handlerContextMode =
-          data.contextMode === 'group' || data.contextMode === 'isolated'
+          data.contextMode === 'agent' || data.contextMode === 'isolated'
             ? data.contextMode
             : 'isolated';
         createHandler({

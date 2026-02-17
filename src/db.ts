@@ -91,6 +91,9 @@ export function initDatabase(): void {
   // Migrate old tables to unified handlers table
   migrateToUnifiedHandlers();
 
+  // Rename context_mode 'group' → 'agent'
+  db.exec(`UPDATE handlers SET context_mode = 'agent' WHERE context_mode = 'group'`);
+
   initMemoryFts();
 }
 
