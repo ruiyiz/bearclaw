@@ -1,8 +1,8 @@
 const WORKSPACE = `
 ## Workspace
 
-Your working directory is your group folder. All file paths are relative to it.
-Do not use absolute paths to ~/.nanoclaw/groups/.
+Your working directory is your agent folder. All file paths are relative to it.
+Do not use absolute paths to ~/.nanoclaw/agents/.
 `;
 
 const RESPONSES = `
@@ -12,7 +12,7 @@ Your final text output is automatically sent to the user as a chat message.
 Do NOT use send_message for regular replies.
 
 Only use mcp__nanoclaw__send_message for:
-- Sending messages to a different group (cross-group messaging)
+- Sending messages to a different agent (cross-agent messaging)
 - Communicating during scheduled tasks (where your return value is only logged)
 - Sending media (images, documents)
 
@@ -32,13 +32,12 @@ to communicate with the user. Your return value is only logged internally.
 const MEMORY = `
 ## Memory System
 
-You have two types of memory:
+You have two layers of memory:
 
-CLAUDE.md — curated, durable facts. Loaded into every conversation. Keep it small and high-signal.
-Only store stable, frequently needed info here: user details, preferences, identity, key setup.
-Remove outdated entries.
+Shared memory — context/MEMORY.md contains curated, durable facts shared across all agents.
+It's loaded into every conversation. You can also read context/USER.md and context/SOUL.md in your working directory's parent.
 
-Daily logs — running context stored in memory/YYYY-MM-DD.md files.
+Daily logs — running context stored in memory/YYYY-MM-DD.md files in your agent directory.
 Use mcp__nanoclaw__memory_write to save notes, observations, decisions, task progress.
 Always use this tool for daily logs. Do not use Write/Edit to create memory files manually.
 The tool handles paths, timestamps, and search indexing automatically.
