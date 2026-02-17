@@ -8,20 +8,21 @@ import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-a
 
 import {
   AGENT_TIMEOUT,
+  AGENTS_DIR,
+  CONTEXT_DIR,
   DATA_DIR,
-  GROUPS_DIR,
   NANOCLAW_HOME,
 } from './config.js';
 import { createIpcMcp } from './ipc-mcp.js';
 import { emitEvent } from './db.js';
 import { logger } from './logger.js';
-import { Handler, RegisteredGroup } from './types.js';
+import { Handler, RegisteredAgent } from './types.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 
 export interface ContainerInput {
   prompt: string;
   sessionId?: string;
-  groupFolder: string;
+  agentFolder: string;
   chatJid: string;
   isMain: boolean;
   isEventHandler?: boolean;
@@ -69,11 +70,11 @@ function getSessionSummary(sessionId: string, transcriptPath: string): string | 
 
 const DAILY_LOG_MAX_CHARS = 4000;
 
-function createSessionStartHook(groupDir: string): HookCallback {
+function createSessionStartHook(agentDir: string): HookCallback {
   return async (_input, _toolUseId, _context) => {
     const today = new Date().toISOString().split('T')[0];
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().split('T')[0];
-    const memoryDir = path.join(groupDir, 'memory');
+    const memoryDir = path.join(agentDir, 'memory');
 
     const parts: string[] = [];
     for (const date of [yesterday, today]) {
@@ -101,12 +102,12 @@ function createSessionStartHook(groupDir: string): HookCallback {
 }
 
 function flushMemoryFromTranscript(
-  groupDir: string,
+  agentDir: string,
   messages: ParsedMessage[],
   summary: string | null,
 ): void {
   const date = new Date().toISOString().split('T')[0];
-  const memoryDir = path.join(groupDir, 'memory');
+  const memoryDir = path.join(agentDir, 'memory');
   fs.mkdirSync(memoryDir, { recursive: true });
 
   const memoryFile = path.join(memoryDir, `${date}.md`);
@@ -139,7 +140,7 @@ function flushMemoryFromTranscript(
   logger.debug({ memoryFile }, 'Memory flush written');
 }
 
-function createPreCompactHook(groupDir: string): HookCallback {
+function createPreCompactHook(agentDir: string): HookCallback {
   return async (input, _toolUseId, _context) => {
     const preCompact = input as PreCompactHookInput;
     const transcriptPath = preCompact.transcript_path;
@@ -163,10 +164,10 @@ function createPreCompactHook(groupDir: string): HookCallback {
       const name = summary ? sanitizeFilename(summary) : generateFallbackName();
 
       // Flush recent context to daily memory log
-      flushMemoryFromTranscript(groupDir, messages, summary);
+      flushMemoryFromTranscript(agentDir, messages, summary);
 
       // Archive full transcript
-      const conversationsDir = path.join(groupDir, 'conversations');
+      const conversationsDir = path.join(agentDir, 'conversations');
       fs.mkdirSync(conversationsDir, { recursive: true });
 
       const date = new Date().toISOString().split('T')[0];
@@ -259,22 +260,42 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
   return lines.join('\n');
 }
 
+function buildContextPrompt(agentFolder: string): string {
+  const parts: string[] = [];
+
+  for (const file of ['AGENTS.md', 'SOUL.md', 'USER.md', 'MEMORY.md']) {
+    const filePath = path.join(CONTEXT_DIR, file);
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, 'utf-8').trim();
+      if (content) parts.push(content);
+    }
+  }
+
+  const identityPath = path.join(AGENTS_DIR, agentFolder, 'IDENTITY.md');
+  if (fs.existsSync(identityPath)) {
+    const content = fs.readFileSync(identityPath, 'utf-8').trim();
+    if (content) parts.push(content);
+  }
+
+  return parts.join('\n\n---\n\n');
+}
+
 export async function runContainerAgent(
-  group: RegisteredGroup,
+  group: RegisteredAgent,
   input: ContainerInput,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
-  const groupDir = path.join(GROUPS_DIR, group.folder);
-  fs.mkdirSync(groupDir, { recursive: true });
+  const agentDir = path.join(AGENTS_DIR, group.folder);
+  fs.mkdirSync(agentDir, { recursive: true });
 
-  const logsDir = path.join(groupDir, 'logs');
+  const logsDir = path.join(agentDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
-  // Set up per-group IPC namespace
-  const groupIpcDir = path.join(DATA_DIR, 'ipc', group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
+  // Set up per-agent IPC namespace
+  const agentIpcDir = path.join(DATA_DIR, 'ipc', group.folder);
+  fs.mkdirSync(path.join(agentIpcDir, 'messages'), { recursive: true });
+  fs.mkdirSync(path.join(agentIpcDir, 'tasks'), { recursive: true });
 
   logger.info(
     {
@@ -286,9 +307,9 @@ export async function runContainerAgent(
 
   const ipcMcp = createIpcMcp({
     chatJid: input.chatJid,
-    groupFolder: input.groupFolder,
+    groupFolder: input.agentFolder,
     isMain: input.isMain,
-    ipcDir: groupIpcDir,
+    ipcDir: agentIpcDir,
   });
 
   // Load user-configured MCP servers from ~/.nanoclaw/mcp.json
@@ -317,17 +338,20 @@ export async function runContainerAgent(
   try {
     logger.debug({ group: group.name }, 'Starting agent...');
 
+    const contextPrompt = buildContextPrompt(input.agentFolder);
+    const fullSystemPrompt = [contextPrompt, SYSTEM_PROMPT].filter(Boolean).join('\n\n---\n\n');
+
     for await (const message of query({
       prompt,
       options: {
         abortController,
-        cwd: groupDir,
+        cwd: agentDir,
         resume: input.sessionId,
         model: input.model || 'claude-opus-4-6',
         systemPrompt: {
           type: 'preset',
           preset: 'claude_code',
-          append: SYSTEM_PROMPT,
+          append: fullSystemPrompt,
         },
         allowedTools: [
           'Bash',
@@ -343,8 +367,8 @@ export async function runContainerAgent(
           ...userMcpServers,
         },
         hooks: {
-          SessionStart: [{ hooks: [createSessionStartHook(groupDir)] }],
-          PreCompact: [{ hooks: [createPreCompactHook(groupDir)] }],
+          SessionStart: [{ hooks: [createSessionStartHook(agentDir)] }],
+          PreCompact: [{ hooks: [createPreCompactHook(agentDir)] }],
         }
       }
     })) {
@@ -401,7 +425,7 @@ export async function runContainerAgent(
     // Emit agent_complete event
     const triggerType = input.isEventHandler ? 'event_handler' : 'message';
     emitEvent('agent_complete', {
-      group_folder: input.groupFolder,
+      group_folder: input.agentFolder,
       trigger_type: triggerType,
       status: 'success',
       duration_ms: duration,
@@ -440,7 +464,7 @@ export async function runContainerAgent(
     // Emit agent_complete event (error path)
     const triggerType = input.isEventHandler ? 'event_handler' : 'message';
     emitEvent('agent_complete', {
-      group_folder: input.groupFolder,
+      group_folder: input.agentFolder,
       trigger_type: triggerType,
       status: 'error',
       duration_ms: duration,
@@ -463,18 +487,18 @@ export interface AvailableGroup {
 }
 
 export function writeHandlersSnapshot(
-  groupFolder: string,
+  agentFolder: string,
   isMain: boolean,
   handlers: Handler[],
 ): void {
-  const groupIpcDir = path.join(DATA_DIR, 'ipc', groupFolder);
-  fs.mkdirSync(groupIpcDir, { recursive: true });
+  const agentIpcDir = path.join(DATA_DIR, 'ipc', agentFolder);
+  fs.mkdirSync(agentIpcDir, { recursive: true });
 
   const filteredHandlers = isMain
     ? handlers
-    : handlers.filter((h) => h.group_folder === groupFolder);
+    : handlers.filter((h) => h.group_folder === agentFolder);
 
-  const handlersFile = path.join(groupIpcDir, 'current_handlers.json');
+  const handlersFile = path.join(agentIpcDir, 'current_handlers.json');
   fs.writeFileSync(
     handlersFile,
     JSON.stringify(
@@ -498,18 +522,18 @@ export function writeHandlersSnapshot(
   );
 }
 
-export function writeGroupsSnapshot(
-  groupFolder: string,
+export function writeAgentsSnapshot(
+  agentFolder: string,
   isMain: boolean,
   groups: AvailableGroup[],
   registeredJids: Set<string>,
 ): void {
-  const groupIpcDir = path.join(DATA_DIR, 'ipc', groupFolder);
-  fs.mkdirSync(groupIpcDir, { recursive: true });
+  const agentIpcDir = path.join(DATA_DIR, 'ipc', agentFolder);
+  fs.mkdirSync(agentIpcDir, { recursive: true });
 
   const visibleGroups = isMain ? groups : [];
 
-  const groupsFile = path.join(groupIpcDir, 'available_groups.json');
+  const groupsFile = path.join(agentIpcDir, 'available_groups.json');
   fs.writeFileSync(
     groupsFile,
     JSON.stringify(
