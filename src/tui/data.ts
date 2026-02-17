@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
 
-import { STORE_DIR, AGENTS_DIR, DATA_DIR } from '../config.js';
+import { STORE_DIR, AGENTS_DIR, DATA_DIR, NANOCLAW_HOME } from '../config.js';
 import { loadJson } from '../utils.js';
 import type {
   EventRecord,
@@ -279,7 +279,7 @@ export interface SkillInfo {
   source: string;
 }
 
-const SKILLS_DIR = path.join(AGENTS_DIR, '.claude', 'skills');
+const SKILLS_DIR = path.join(NANOCLAW_HOME, 'skills');
 const SKILL_SOURCES_PATH = path.join(DATA_DIR, 'skill_sources.json');
 
 function parseSkillDescription(content: string): string {

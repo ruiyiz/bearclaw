@@ -99,6 +99,13 @@ function migrateToAgents(): void {
     fs.renameSync(oldFile, newFile);
   }
 
+  // Move skills from agents/.claude/skills/ to top-level skills/
+  const oldSkillsDir = path.join(newAgentsDir, '.claude', 'skills');
+  const newSkillsDir = path.join(NANOCLAW_HOME, 'skills');
+  if (fs.existsSync(oldSkillsDir) && !fs.existsSync(newSkillsDir)) {
+    fs.renameSync(oldSkillsDir, newSkillsDir);
+  }
+
   logger.info('Migration complete');
 }
 
