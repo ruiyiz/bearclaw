@@ -184,10 +184,17 @@ async function processMessage(msg: NewMessage): Promise<void> {
   const response = await runAgent(group, prompt, msg.chat_jid);
   if (channel) await channel.setTyping?.(msg.chat_jid, false);
 
-  if (response && !isNonResponse(response) && channel) {
-    lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
-    await channel.sendMessage(msg.chat_jid, response);
+  if (response && channel) {
+    const cleaned = stripInternalTags(response);
+    if (cleaned && !isNonResponse(cleaned)) {
+      lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
+      await channel.sendMessage(msg.chat_jid, cleaned);
+    }
   }
+}
+
+function stripInternalTags(text: string): string {
+  return text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
 }
 
 function isNonResponse(text: string): boolean {

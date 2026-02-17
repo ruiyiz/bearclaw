@@ -61,7 +61,7 @@ export const TelegramHtmlRenderer: RendererObject = {
     return '<pre><code' + cls + '>' + escapeHtml(text) + '</code></pre>\n';
   },
   heading({ tokens }) {
-    return '<b>' + this.parser.parseInline(tokens) + '</b>\n';
+    return '<b>' + this.parser.parseInline(tokens) + '</b>\n\n';
   },
   blockquote({ tokens }) {
     const body = this.parser.parse(tokens).trim();
@@ -116,7 +116,7 @@ export const TelegramHtmlRenderer: RendererObject = {
     return escapeHtml(text);
   },
   space() {
-    return '';
+    return '\n';
   },
   def() {
     return '';
@@ -143,7 +143,7 @@ export const WhatsAppRenderer: RendererObject = {
     return '```' + text + '```\n';
   },
   heading({ tokens }) {
-    return '*' + this.parser.parseInline(tokens) + '*\n';
+    return '*' + this.parser.parseInline(tokens) + '*\n\n';
   },
   blockquote({ tokens }) {
     const body = this.parser.parse(tokens).trim();
@@ -202,7 +202,7 @@ export const WhatsAppRenderer: RendererObject = {
     return text;
   },
   space() {
-    return '';
+    return '\n';
   },
   def() {
     return '';
@@ -219,7 +219,7 @@ export function renderMarkdown(
   try {
     const m = new Marked({ renderer });
     const result = m.parse(markdown) as string;
-    return result.replace(/\n$/, '');
+    return result.replace(/^\n+/, '').replace(/\n+$/, '');
   } catch {
     return markdown.trim();
   }

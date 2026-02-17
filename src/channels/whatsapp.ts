@@ -141,7 +141,7 @@ export class WhatsAppChannel implements Channel {
     if (!this.sock) return;
     try {
       const formatted = renderMarkdown(text, WhatsAppRenderer);
-      const prefixed = `${DISPLAY_NAME}: ${formatted}`;
+      const prefixed = `${DISPLAY_NAME}:\n${formatted}`;
       await this.sock.sendMessage(jid, { text: prefixed });
       logger.info({ jid, length: prefixed.length }, 'Message sent');
     } catch (err) {

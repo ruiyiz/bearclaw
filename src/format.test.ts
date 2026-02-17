@@ -55,6 +55,11 @@ describe('TelegramHtmlRenderer', () => {
       expect(render('## Header 2')).toBe('<b>Header 2</b>');
     });
 
+    it('adds blank lines around headings between content', () => {
+      const result = render('intro\n\n## Title\n\nbody');
+      expect(result).toBe('intro\n\n<b>Title</b>\n\nbody');
+    });
+
     it('renders code blocks with language', () => {
       expect(render('```js\nconst x = 1;\n```')).toBe(
         '<pre><code class="language-js">const x = 1;</code></pre>',
@@ -172,10 +177,9 @@ describe('TelegramHtmlRenderer', () => {
       expect(render('hello world')).toBe('hello world');
     });
 
-    it('handles multi-paragraph text', () => {
+    it('separates paragraphs with blank lines', () => {
       const result = render('paragraph one\n\nparagraph two');
-      expect(result).toContain('paragraph one');
-      expect(result).toContain('paragraph two');
+      expect(result).toBe('paragraph one\n\nparagraph two');
     });
   });
 
@@ -224,6 +228,11 @@ describe('WhatsAppRenderer', () => {
 
     it('renders h2 as bold', () => {
       expect(render('## Header 2')).toBe('*Header 2*');
+    });
+
+    it('adds line breaks around headings between content', () => {
+      const result = render('intro\n\n## Title\n\nbody');
+      expect(result).toBe('intro\n\n*Title*\n\nbody');
     });
 
     it('renders code blocks without language tag', () => {
@@ -311,10 +320,9 @@ describe('WhatsAppRenderer', () => {
       expect(render('hello world')).toBe('hello world');
     });
 
-    it('handles multi-paragraph text', () => {
+    it('separates paragraphs with blank lines', () => {
       const result = render('paragraph one\n\nparagraph two');
-      expect(result).toContain('paragraph one');
-      expect(result).toContain('paragraph two');
+      expect(result).toBe('paragraph one\n\nparagraph two');
     });
   });
 });
