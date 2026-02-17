@@ -3,8 +3,8 @@ import path from 'path';
 
 import {
   EVENT_POLL_INTERVAL,
-  GROUPS_DIR,
-  MAIN_GROUP_FOLDER,
+  AGENTS_DIR,
+  MAIN_AGENT_FOLDER,
   ODYSSEY_HANDLER_PREFIX,
 } from './config.js';
 import {
@@ -23,10 +23,10 @@ import {
 } from './agent-runner.js';
 import { logger } from './logger.js';
 import { isInQuietPeriod } from './odyssey.js';
-import { EventRecord, Handler, RegisteredGroup } from './types.js';
+import { EventRecord, Handler, RegisteredAgent } from './types.js';
 
 export interface EventBusDependencies {
-  registeredGroups: () => Record<string, RegisteredGroup>;
+  registeredAgents: () => Record<string, RegisteredAgent>;
   getSessions: () => Record<string, string>;
   saveSessions: () => void;
 }
@@ -37,18 +37,18 @@ async function runHandler(
   deps: EventBusDependencies,
 ): Promise<void> {
   const startTime = Date.now();
-  const groupDir = path.join(GROUPS_DIR, handler.group_folder);
-  fs.mkdirSync(groupDir, { recursive: true });
+  const agentDir = path.join(AGENTS_DIR, handler.group_folder);
+  fs.mkdirSync(agentDir, { recursive: true });
 
-  const groups = deps.registeredGroups();
-  const group = Object.values(groups).find(
+  const agents = deps.registeredAgents();
+  const agent = Object.values(agents).find(
     (g) => g.folder === handler.group_folder,
   );
 
-  if (!group) {
+  if (!agent) {
     logger.error(
       { handlerId: handler.id, groupFolder: handler.group_folder },
-      'Group not found for handler',
+      'Agent not found for handler',
     );
     logHandlerRun({
       handler_id: handler.id,
@@ -57,7 +57,7 @@ async function runHandler(
       duration_ms: Date.now() - startTime,
       status: 'error',
       result: null,
-      error: `Group not found: ${handler.group_folder}`,
+      error: `Agent not found: ${handler.group_folder}`,
     });
     return;
   }
@@ -65,14 +65,14 @@ async function runHandler(
   // Skip Odyssey handlers during quiet period
   if (
     handler.id.startsWith(ODYSSEY_HANDLER_PREFIX) &&
-    group.odyssey?.quiet &&
-    isInQuietPeriod(group.odyssey.quiet)
+    agent.odyssey?.quiet &&
+    isInQuietPeriod(agent.odyssey.quiet)
   ) {
     logger.debug({ handlerId: handler.id }, 'Odyssey handler skipped (quiet period)');
     return;
   }
 
-  const isMain = handler.group_folder === MAIN_GROUP_FOLDER;
+  const isMain = handler.group_folder === MAIN_AGENT_FOLDER;
   // No originating channel for event handlers; IPC processing will
   // fan out to all channels registered to the group folder.
   const chatJid = '';
@@ -116,13 +116,13 @@ ${handler.prompt}
   try {
     // Pass model override for Odyssey handlers
     const model = handler.id.startsWith(ODYSSEY_HANDLER_PREFIX)
-      ? group.odyssey?.model
+      ? agent.odyssey?.model
       : undefined;
 
-    const output = await runContainerAgent(group, {
+    const output = await runContainerAgent(agent, {
       prompt,
       sessionId,
-      groupFolder: handler.group_folder,
+      agentFolder: handler.group_folder,
       chatJid,
       isMain,
       isEventHandler: true,
