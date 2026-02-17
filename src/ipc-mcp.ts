@@ -9,11 +9,11 @@ import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 import { indexMemoryFiles, searchMemory } from './db.js';
-import { GROUPS_DIR } from './config.js';
+import { AGENTS_DIR, CONTEXT_DIR } from './config.js';
 
 export interface IpcMcpContext {
   chatJid: string;
-  groupFolder: string;
+  agentFolder: string;
   isMain: boolean;
   ipcDir: string;
 }
@@ -55,7 +55,7 @@ async function waitForResult(resultsDir: string, requestId: string, maxWait = 60
 }
 
 export function createIpcMcp(ctx: IpcMcpContext) {
-  const { chatJid, groupFolder, isMain, ipcDir } = ctx;
+  const { chatJid, agentFolder, isMain, ipcDir } = ctx;
   const messagesDir = path.join(ipcDir, 'messages');
   const tasksDir = path.join(ipcDir, 'tasks');
 
@@ -80,7 +80,7 @@ The text parameter becomes the caption for media messages. For documents, also p
           text: z.string().optional().describe('The message text to send (becomes caption for media messages)'),
           sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
           media_type: z.enum(['image', 'document', 'video', 'audio']).optional().describe('Type of media to attach'),
-          file_path: z.string().optional().describe('Local file path for the media (absolute or relative to group folder)'),
+          file_path: z.string().optional().describe('Local file path for the media (absolute or relative to agent folder)'),
           media_url: z.string().optional().describe('URL of the media to send (alternative to file_path)'),
           file_name: z.string().optional().describe('Display file name for documents (e.g., "report.pdf")'),
           mimetype: z.string().optional().describe('MIME type for documents (e.g., "application/pdf"). Auto-detected if omitted.')
@@ -106,7 +106,7 @@ The text parameter becomes the caption for media messages. For documents, also p
             chatJid,
             text: args.text || null,
             sender: args.sender || undefined,
-            groupFolder,
+            agentFolder,
             timestamp: new Date().toISOString()
           };
 
@@ -137,7 +137,7 @@ RECURRING: Provide a cron expression.
 ONE-TIME: Provide a run_at timestamp.
 
 CONTEXT MODE:
-• "group" (recommended): Task runs with chat history and memory
+• "agent" (recommended): Task runs with chat history and memory
 • "isolated": Task runs in a fresh session (include all context in prompt)
 
 CRON FORMAT (5-field, all times LOCAL timezone):
@@ -150,7 +150,7 @@ CRON FORMAT (5-field, all times LOCAL timezone):
           cron: z.string().optional().describe('Cron expression for recurring tasks (e.g., "0 9 * * *")'),
           run_at: z.string().optional().describe('Local timestamp for one-time tasks (e.g., "2026-02-01T15:30:00", no Z suffix)'),
           context_mode: z.enum(['group', 'isolated']).default('group').describe('group=shared session, isolated=fresh session'),
-          target_group: z.string().optional().describe('Target group folder (main only, defaults to current group)')
+          target_agent: z.string().optional().describe('Target agent folder (main only, defaults to current agent)')
         },
         async (args) => {
           if (!args.cron && !args.run_at) {
@@ -183,8 +183,8 @@ CRON FORMAT (5-field, all times LOCAL timezone):
             }
           }
 
-          // Non-main groups can only schedule for themselves
-          const targetGroup = isMain && args.target_group ? args.target_group : groupFolder;
+          // Non-main agents can only schedule for themselves
+          const targetAgent = isMain && args.target_agent ? args.target_agent : agentFolder;
 
           const data = {
             type: 'schedule_task',
@@ -192,8 +192,8 @@ CRON FORMAT (5-field, all times LOCAL timezone):
             cron: args.cron || null,
             runAt: args.run_at || null,
             context_mode: args.context_mode || 'group',
-            groupFolder: targetGroup,
-            createdBy: groupFolder,
+            agentFolder: targetAgent,
+            createdBy: agentFolder,
             timestamp: new Date().toISOString()
           };
 
@@ -230,7 +230,7 @@ Sends the reply via Gmail, threading it under the original message.`,
             to: args.to,
             subject: args.subject,
             body: args.body,
-            groupFolder,
+            agentFolder,
             timestamp: new Date().toISOString(),
           });
 
@@ -264,7 +264,7 @@ You can emit any custom event type for pipeline chaining (e.g., "earnings_releas
             type: 'emit_event',
             eventType: args.type,
             payload: args.payload || {},
-            groupFolder,
+            agentFolder,
             timestamp: new Date().toISOString()
           };
 
@@ -286,7 +286,7 @@ You can emit any custom event type for pipeline chaining (e.g., "earnings_releas
 Use this to build multi-step pipelines where each step is independent with its own timeout and retry.
 
 CONTEXT MODE:
-• "group": Handler runs in the group's conversation context (shared session)
+• "agent": Handler runs in the agent's conversation context (shared session)
 • "isolated" (default): Handler runs in a fresh session. Include all needed context in the prompt.
 
 FILTER: Optional JSON object. All keys must match the event payload for the handler to trigger.
@@ -303,11 +303,11 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
           context_mode: z.enum(['group', 'isolated']).default('isolated').describe('group=shared session, isolated=fresh session (default)'),
           cooldown_ms: z.number().default(0).describe('Minimum ms between triggers (default: 0)'),
           max_triggers: z.number().optional().describe('Max times this handler can fire. Omit for unlimited.'),
-          target_group: z.string().optional().describe('Target group folder (main only, defaults to current group)')
+          target_agent: z.string().optional().describe('Target agent folder (main only, defaults to current agent)')
         },
         async (args) => {
-          // Non-main groups can only register handlers for themselves
-          const targetGroup = isMain && args.target_group ? args.target_group : groupFolder;
+          // Non-main agents can only register handlers for themselves
+          const targetAgent = isMain && args.target_agent ? args.target_agent : agentFolder;
 
           const data = {
             type: 'register_handler',
@@ -317,8 +317,8 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
             contextMode: args.context_mode || 'isolated',
             cooldownMs: args.cooldown_ms || 0,
             maxTriggers: args.max_triggers ?? null,
-            targetGroup,
-            createdBy: groupFolder,
+            targetAgent,
+            createdBy: agentFolder,
             timestamp: new Date().toISOString()
           };
 
@@ -327,7 +327,7 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
           return {
             content: [{
               type: 'text',
-              text: `Event handler registered for "${args.event_type}" in group "${targetGroup}".`
+              text: `Event handler registered for "${args.event_type}" in agent "${targetAgent}".`
             }]
           };
         }
@@ -335,7 +335,7 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
 
       tool(
         'list_handlers',
-        'List all registered handlers (both scheduled tasks and event handlers). From main: shows all. From other groups: shows only that group\'s handlers.',
+        'List all registered handlers (both scheduled tasks and event handlers). From main: shows all. From other agents: shows only that agent\'s handlers.',
         {},
         async () => {
           const handlersFile = path.join(ipcDir, 'current_handlers.json');
@@ -354,7 +354,7 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
 
             const handlers = isMain
               ? allHandlers
-              : allHandlers.filter((h: { group_folder: string }) => h.group_folder === groupFolder);
+              : allHandlers.filter((h: { group_folder: string }) => h.group_folder === agentFolder);
 
             if (handlers.length === 0) {
               return {
@@ -397,7 +397,7 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
           const data = {
             type: 'pause_handler',
             handlerId: args.handler_id,
-            groupFolder,
+            agentFolder,
             isMain,
             timestamp: new Date().toISOString()
           };
@@ -423,7 +423,7 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
           const data = {
             type: 'resume_handler',
             handlerId: args.handler_id,
-            groupFolder,
+            agentFolder,
             isMain,
             timestamp: new Date().toISOString()
           };
@@ -449,7 +449,7 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
           const data = {
             type: 'cancel_handler',
             handlerId: args.handler_id,
-            groupFolder,
+            agentFolder,
             isMain,
             timestamp: new Date().toISOString()
           };
@@ -466,26 +466,26 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
       ),
 
       tool(
-        'register_group',
-        `Register a new WhatsApp group so the agent can respond to messages there. Main group only.
+        'register_agent',
+        `Register a new agent so it can respond to messages in a WhatsApp group. Main agent only.
 
 Use available_groups.json to find the JID for a group. The folder name should be lowercase with hyphens (e.g., "family-chat").`,
         {
           jid: z.string().describe('The WhatsApp JID (e.g., "120363336345536173@g.us")'),
-          name: z.string().describe('Display name for the group'),
-          folder: z.string().describe('Folder name for group files (lowercase, hyphens, e.g., "family-chat")'),
+          name: z.string().describe('Display name for the agent'),
+          folder: z.string().describe('Folder name for agent files (lowercase, hyphens, e.g., "family-chat")'),
           trigger: z.string().describe('Trigger word (e.g., "@Andy")')
         },
         async (args) => {
           if (!isMain) {
             return {
-              content: [{ type: 'text', text: 'Only the main group can register new groups.' }],
+              content: [{ type: 'text', text: 'Only the main agent can register new agents.' }],
               isError: true
             };
           }
 
           const data = {
-            type: 'register_group',
+            type: 'register_agent',
             jid: args.jid,
             name: args.name,
             folder: args.folder,
@@ -498,7 +498,7 @@ Use available_groups.json to find the JID for a group. The folder name should be
           return {
             content: [{
               type: 'text',
-              text: `Group "${args.name}" registered. It will start receiving messages immediately.`
+              text: `Agent "${args.name}" registered. It will start receiving messages immediately.`
             }]
           };
         }
@@ -514,9 +514,9 @@ Use this to recall past context, decisions, or conversation details.`,
           limit: z.number().default(5).describe('Max results to return (default: 5)'),
         },
         async (args) => {
-          const groupDir = path.join(GROUPS_DIR, groupFolder);
-          indexMemoryFiles(groupFolder, groupDir);
-          const results = searchMemory(groupFolder, args.query, args.limit);
+          const agentDir = path.join(AGENTS_DIR, agentFolder);
+          indexMemoryFiles(agentFolder, agentDir);
+          const results = searchMemory(agentFolder, args.query, args.limit);
 
           if (results.length === 0) {
             return {
@@ -536,16 +536,27 @@ Use this to recall past context, decisions, or conversation details.`,
 
       tool(
         'memory_write',
-        `Save a note to your daily memory log. Use this to record decisions, context, observations, or anything worth remembering.
-Entries are appended to today's log and automatically indexed for search.
+        `Save a note to your daily memory log or shared memory. Use this to record decisions, context, observations, or anything worth remembering.
+Entries are appended to today's log (or shared MEMORY.md) and automatically indexed for search.
 Prefer this over Write/Edit for memory — it handles paths and indexing for you.`,
         {
           content: z.string().describe('The note to save'),
           topic: z.string().optional().describe('Optional topic header (e.g., "Ski Trip Plans", "Work Decision")'),
+          shared: z.boolean().default(false).describe('Write to shared MEMORY.md instead of daily log'),
         },
         async (args) => {
-          const groupDir = path.join(GROUPS_DIR, groupFolder);
-          const memoryDir = path.join(groupDir, 'memory');
+          if (args.shared) {
+            const memoryFile = path.join(CONTEXT_DIR, 'MEMORY.md');
+            fs.mkdirSync(path.dirname(memoryFile), { recursive: true });
+            const entry = args.topic
+              ? `\n## ${args.topic}\n\n${args.content}\n`
+              : `\n${args.content}\n`;
+            fs.appendFileSync(memoryFile, entry);
+            return { content: [{ type: 'text', text: 'Saved to shared context/MEMORY.md' }] };
+          }
+
+          const agentDir = path.join(AGENTS_DIR, agentFolder);
+          const memoryDir = path.join(agentDir, 'memory');
           fs.mkdirSync(memoryDir, { recursive: true });
 
           const date = new Date().toISOString().split('T')[0];
@@ -560,7 +571,7 @@ Prefer this over Write/Edit for memory — it handles paths and indexing for you
           const entry = `\n${header}\n\n${args.content}\n`;
 
           fs.appendFileSync(memoryFile, entry);
-          indexMemoryFiles(groupFolder, groupDir);
+          indexMemoryFiles(agentFolder, agentDir);
 
           return {
             content: [{ type: 'text', text: `Saved to memory/${date}.md` }],
