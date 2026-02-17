@@ -10,19 +10,19 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 
-import { DISPLAY_NAME, GROUPS_DIR, STORE_DIR } from '../config.js';
+import { DISPLAY_NAME, AGENTS_DIR, STORE_DIR } from '../config.js';
 import { renderMarkdown, WhatsAppRenderer } from '../format.js';
 import { getLastGroupSync, setLastGroupSync, storeChatMetadata, updateChatName } from '../db.js';
 import { logger } from '../logger.js';
 import { transcribeAudio } from '../transcribe.js';
-import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredGroup } from '../types.js';
+import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredAgent } from '../types.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
-  registeredGroups: () => Record<string, RegisteredGroup>;
+  registeredAgents: () => Record<string, RegisteredAgent>;
 }
 
 export class WhatsAppChannel implements Channel {
@@ -126,8 +126,8 @@ export class WhatsAppChannel implements Channel {
 
         storeChatMetadata(chatJid, timestamp);
 
-        const registeredGroups = this.opts.registeredGroups();
-        if (registeredGroups[chatJid]) {
+        const registeredAgents = this.opts.registeredAgents();
+        if (registeredAgents[chatJid]) {
           const normalized = await this.normalizeMessage(msg, chatJid);
           if (normalized) {
             this.opts.onMessage(chatJid, normalized);
@@ -332,10 +332,10 @@ export class WhatsAppChannel implements Channel {
       const buffer = await downloadMediaMessage(msg, 'buffer', {});
       if (!buffer) return null;
 
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) return null;
+      const agent = this.opts.registeredAgents()[chatJid];
+      if (!agent) return null;
 
-      const mediaDir = path.join(GROUPS_DIR, group.folder, 'media');
+      const mediaDir = path.join(AGENTS_DIR, agent.folder, 'media');
       fs.mkdirSync(mediaDir, { recursive: true });
       const filePath = path.join(mediaDir, `${baseName}${ext}`);
       fs.writeFileSync(filePath, buffer as Buffer);

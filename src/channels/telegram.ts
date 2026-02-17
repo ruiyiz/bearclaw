@@ -3,16 +3,16 @@ import path from 'path';
 
 import { Api, Bot, InputFile } from 'grammy';
 
-import { ASSISTANT_NAME, GROUPS_DIR, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, AGENTS_DIR, TRIGGER_PATTERN } from '../config.js';
 import { renderMarkdown, TelegramHtmlRenderer } from '../format.js';
 import { logger } from '../logger.js';
 import { transcribeAudio } from '../transcribe.js';
-import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredGroup } from '../types.js';
+import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredAgent } from '../types.js';
 
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
-  registeredGroups: () => Record<string, RegisteredGroup>;
+  registeredAgents: () => Record<string, RegisteredAgent>;
 }
 
 export class TelegramChannel implements Channel {
@@ -85,9 +85,9 @@ export class TelegramChannel implements Channel {
 
       this.opts.onChatMetadata(chatJid, timestamp, chatName);
 
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) {
-        logger.debug({ chatJid, chatName }, 'Message from unregistered Telegram chat');
+      const agent = this.opts.registeredAgents()[chatJid];
+      if (!agent) {
+        logger.debug({ chatJid, chatName }, 'Message from unregistered Telegram agent');
         return;
       }
 
@@ -105,8 +105,8 @@ export class TelegramChannel implements Channel {
 
     const storeNonText = (ctx: any, placeholder: string) => {
       const chatJid = `tg:${ctx.chat.id}`;
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) return;
+      const agent = this.opts.registeredAgents()[chatJid];
+      if (!agent) return;
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -126,8 +126,8 @@ export class TelegramChannel implements Channel {
 
     this.bot.on('message:photo', async (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) return;
+      const agent = this.opts.registeredAgents()[chatJid];
+      if (!agent) return;
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -147,7 +147,7 @@ export class TelegramChannel implements Channel {
           if (response.ok) {
             const buffer = Buffer.from(await response.arrayBuffer());
             const ext = path.extname(file.file_path) || '.jpg';
-            const mediaDir = path.join(GROUPS_DIR, group.folder, 'media');
+            const mediaDir = path.join(AGENTS_DIR, agent.folder, 'media');
             fs.mkdirSync(mediaDir, { recursive: true });
             const filename = `photo-${ctx.message.message_id}${ext}`;
             const filePath = path.join(mediaDir, filename);
@@ -171,8 +171,8 @@ export class TelegramChannel implements Channel {
     });
     this.bot.on('message:video', async (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) return;
+      const agent = this.opts.registeredAgents()[chatJid];
+      if (!agent) return;
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -184,7 +184,7 @@ export class TelegramChannel implements Channel {
       let content = `[Video]${caption}`;
       try {
         const fileId = ctx.message.video.file_id;
-        const filePath = await this.downloadTelegramFile(fileId, group.folder, `video-${ctx.message.message_id}`, '.mp4');
+        const filePath = await this.downloadTelegramFile(fileId, agent.folder, `video-${ctx.message.message_id}`, '.mp4');
         if (filePath) content = `[Video: ${filePath}]${caption}`;
       } catch (err) {
         logger.warn({ err }, 'Failed to download Telegram video');
@@ -202,8 +202,8 @@ export class TelegramChannel implements Channel {
 
     this.bot.on('message:voice', async (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) return;
+      const agent = this.opts.registeredAgents()[chatJid];
+      if (!agent) return;
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -240,8 +240,8 @@ export class TelegramChannel implements Channel {
 
     this.bot.on('message:audio', async (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) return;
+      const agent = this.opts.registeredAgents()[chatJid];
+      if (!agent) return;
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -254,7 +254,7 @@ export class TelegramChannel implements Channel {
       try {
         const fileId = ctx.message.audio.file_id;
         const ext = path.extname(ctx.message.audio.file_name || '') || '.mp3';
-        const filePath = await this.downloadTelegramFile(fileId, group.folder, `audio-${ctx.message.message_id}`, ext);
+        const filePath = await this.downloadTelegramFile(fileId, agent.folder, `audio-${ctx.message.message_id}`, ext);
         if (filePath) content = `[Audio: ${filePath}]${caption}`;
       } catch (err) {
         logger.warn({ err }, 'Failed to download Telegram audio');
@@ -272,8 +272,8 @@ export class TelegramChannel implements Channel {
 
     this.bot.on('message:document', async (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) return;
+      const agent = this.opts.registeredAgents()[chatJid];
+      if (!agent) return;
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -287,7 +287,7 @@ export class TelegramChannel implements Channel {
       try {
         const fileId = ctx.message.document.file_id;
         const ext = path.extname(name) || '';
-        const filePath = await this.downloadTelegramFile(fileId, group.folder, `doc-${ctx.message.message_id}`, ext);
+        const filePath = await this.downloadTelegramFile(fileId, agent.folder, `doc-${ctx.message.message_id}`, ext);
         if (filePath) content = `[Document: ${filePath}]${caption}`;
       } catch (err) {
         logger.warn({ err }, 'Failed to download Telegram document');
@@ -410,12 +410,12 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  async sendAsAgent(jid: string, text: string, agentName: string, groupFolder: string): Promise<void> {
-    await sendPoolMessage(jid, text, agentName, groupFolder);
+  async sendAsAgent(jid: string, text: string, agentName: string, agentFolder: string): Promise<void> {
+    await sendPoolMessage(jid, text, agentName, agentFolder);
   }
 
-  async sendMediaAsAgent(jid: string, type: MediaType, source: MediaSource, options: MediaOptions, agentName: string, groupFolder: string): Promise<void> {
-    await sendPoolMessage(jid, '', agentName, groupFolder, { type, source, options });
+  async sendMediaAsAgent(jid: string, type: MediaType, source: MediaSource, options: MediaOptions, agentName: string, agentFolder: string): Promise<void> {
+    await sendPoolMessage(jid, '', agentName, agentFolder, { type, source, options });
   }
 
   private async downloadTelegramFileBuffer(fileId: string): Promise<Buffer | null> {
@@ -428,10 +428,10 @@ export class TelegramChannel implements Channel {
     return Buffer.from(await response.arrayBuffer());
   }
 
-  private async downloadTelegramFile(fileId: string, groupFolder: string, baseName: string, ext: string): Promise<string | null> {
+  private async downloadTelegramFile(fileId: string, agentFolder: string, baseName: string, ext: string): Promise<string | null> {
     const buffer = await this.downloadTelegramFileBuffer(fileId);
     if (!buffer) return null;
-    const mediaDir = path.join(GROUPS_DIR, groupFolder, 'media');
+    const mediaDir = path.join(AGENTS_DIR, agentFolder, 'media');
     fs.mkdirSync(mediaDir, { recursive: true });
     const filePath = path.join(mediaDir, `${baseName}${ext}`);
     fs.writeFileSync(filePath, buffer);
@@ -468,12 +468,12 @@ export async function sendPoolMessage(
   chatId: string,
   text: string,
   sender: string,
-  groupFolder: string,
+  agentFolder: string,
   media?: { type: MediaType; source: MediaSource; options?: MediaOptions },
 ): Promise<void> {
   if (poolApis.length === 0) return;
 
-  const key = `${groupFolder}:${sender}`;
+  const key = `${agentFolder}:${sender}`;
   let idx = senderBotMap.get(key);
   if (idx === undefined) {
     idx = nextPoolIndex % poolApis.length;
@@ -482,7 +482,7 @@ export async function sendPoolMessage(
     try {
       await poolApis[idx].setMyName(sender);
       await new Promise((r) => setTimeout(r, 2000));
-      logger.info({ sender, groupFolder, poolIndex: idx }, 'Assigned and renamed pool bot');
+      logger.info({ sender, agentFolder, poolIndex: idx }, 'Assigned and renamed pool bot');
     } catch (err) {
       logger.warn({ sender, err }, 'Failed to rename pool bot');
     }
