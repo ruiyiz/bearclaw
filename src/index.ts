@@ -100,10 +100,17 @@ function migrateToAgents(): void {
   }
 
   // Move skills from agents/.claude/skills/ to top-level skills/
+  // Then create .claude/skills symlink so the SDK auto-discovers them
   const oldSkillsDir = path.join(newAgentsDir, '.claude', 'skills');
   const newSkillsDir = path.join(NANOCLAW_HOME, 'skills');
   if (fs.existsSync(oldSkillsDir) && !fs.existsSync(newSkillsDir)) {
     fs.renameSync(oldSkillsDir, newSkillsDir);
+  }
+  const symlinkDir = path.join(NANOCLAW_HOME, '.claude');
+  const symlinkPath = path.join(symlinkDir, 'skills');
+  if (fs.existsSync(newSkillsDir) && !fs.existsSync(symlinkPath)) {
+    fs.mkdirSync(symlinkDir, { recursive: true });
+    fs.symlinkSync('../skills', symlinkPath);
   }
 
   logger.info('Migration complete');
