@@ -4,7 +4,7 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 ## Quick Context
 
-Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running directly on the host. Each group has its own working directory and memory.
+Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running directly on the host. Each agent has its own working directory and memory.
 
 ## Key Files
 
@@ -17,7 +17,8 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 | `src/email-channel.ts` | Gmail email polling and processing |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
-| `~/.nanoclaw/groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
+| `~/.nanoclaw/context/` | Shared context: AGENTS.md, SOUL.md, USER.md, MEMORY.md |
+| `~/.nanoclaw/agents/{name}/IDENTITY.md` | Per-agent identity |
 
 ## Skills
 
