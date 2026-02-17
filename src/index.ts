@@ -73,9 +73,15 @@ function migrateToAgents(): void {
 
   const globalClaudeMd = path.join(newAgentsDir, 'CLAUDE.md');
   if (fs.existsSync(globalClaudeMd)) {
-    fs.mkdirSync(contextDir, { recursive: true });
-    fs.renameSync(globalClaudeMd, path.join(contextDir, 'AGENTS.md'));
-    logger.info('Moved groups/CLAUDE.md to context/AGENTS.md — split into SOUL.md, USER.md, MEMORY.md manually');
+    const targetAgentsMd = path.join(contextDir, 'AGENTS.md');
+    if (!fs.existsSync(targetAgentsMd)) {
+      fs.mkdirSync(contextDir, { recursive: true });
+      fs.renameSync(globalClaudeMd, targetAgentsMd);
+      logger.info('Moved groups/CLAUDE.md to context/AGENTS.md — split into SOUL.md, USER.md, MEMORY.md manually');
+    } else {
+      fs.unlinkSync(globalClaudeMd);
+      logger.info('Removed groups/CLAUDE.md (context/ already has split files)');
+    }
   }
 
   for (const entry of fs.readdirSync(newAgentsDir, { withFileTypes: true })) {
