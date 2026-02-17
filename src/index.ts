@@ -346,7 +346,7 @@ function startIpcWatcher(): void {
                 } else {
                   // No originating channel (e.g. event handler): send to all channels for the agent
                   targetJids = Object.entries(registeredAgents)
-                    .filter(([, a]) => a.folder === data.groupFolder)
+                    .filter(([, a]) => a.folder === data.agentFolder)
                     .map(([jid]) => jid);
                 }
 
@@ -471,7 +471,7 @@ async function processTaskIpc(
     cron?: string | null;
     runAt?: string | null;
     context_mode?: string;
-    groupFolder?: string;
+    agentFolder?: string;
     jid?: string;
     name?: string;
     folder?: string;
@@ -488,7 +488,7 @@ async function processTaskIpc(
     contextMode?: string;
     cooldownMs?: number;
     maxTriggers?: number | null;
-    targetGroup?: string;
+    targetAgent?: string;
   },
   sourceAgent: string,
   isMain: boolean,
@@ -497,8 +497,8 @@ async function processTaskIpc(
 
   switch (data.type) {
     case 'schedule_task':
-      if (data.prompt && data.groupFolder) {
-        const targetAgent = data.groupFolder;
+      if (data.prompt && data.agentFolder) {
+        const targetAgent = data.agentFolder;
         if (!isMain && targetAgent !== sourceAgent) {
           logger.warn(
             { sourceAgent, targetAgent },
@@ -598,7 +598,7 @@ async function processTaskIpc(
 
     case 'register_handler':
       if (data.eventType && data.prompt) {
-        const handlerTarget = data.targetGroup || sourceAgent;
+        const handlerTarget = data.targetAgent || sourceAgent;
         if (!isMain && handlerTarget !== sourceAgent) {
           logger.warn(
             { sourceAgent, targetAgent: handlerTarget },

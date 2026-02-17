@@ -394,10 +394,10 @@ export function readSkillContent(skillPath: string): string {
 // ─── Odyssey ────────────────────────────────────────────────────────────────
 
 export function getOdysseyLogTail(
-  groupFolder: string,
+  agentFolder: string,
   lines = 20,
 ): string {
-  const logPath = path.join(AGENTS_DIR, groupFolder, 'odyssey-log.md');
+  const logPath = path.join(AGENTS_DIR, agentFolder, 'odyssey-log.md');
   try {
     const content = fs.readFileSync(logPath, 'utf-8');
     const allLines = content.split('\n');

@@ -47,7 +47,7 @@ async function runHandler(
 
   if (!agent) {
     logger.error(
-      { handlerId: handler.id, groupFolder: handler.group_folder },
+      { handlerId: handler.id, agentFolder: handler.group_folder },
       'Agent not found for handler',
     );
     logHandlerRun({

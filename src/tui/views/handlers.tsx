@@ -67,7 +67,7 @@ export function HandlersView({ listHeight, detailHeight }: ViewProps) {
   const detailContent = handler
     ? [
         `**ID:** ${handler.id}`,
-        `**Group:** ${handler.group_folder}`,
+        `**Agent:** ${handler.group_folder}`,
         `**Event:** ${handler.event_type}`,
         `**Status:** ${handler.status}`,
         `**Context:** ${handler.context_mode}`,
