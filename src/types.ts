@@ -23,8 +23,8 @@ export interface Channel {
   isConnected(): boolean;
   disconnect(): Promise<void>;
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
-  sendAsAgent?(jid: string, text: string, agentName: string, groupFolder: string): Promise<void>;
-  sendMediaAsAgent?(jid: string, type: MediaType, source: MediaSource, options: MediaOptions, agentName: string, groupFolder: string): Promise<void>;
+  sendAsAgent?(jid: string, text: string, agentName: string, agentFolder: string): Promise<void>;
+  sendMediaAsAgent?(jid: string, type: MediaType, source: MediaSource, options: MediaOptions, agentName: string, agentFolder: string): Promise<void>;
   syncMetadata?(force?: boolean): Promise<void>;
 }
 
@@ -43,7 +43,7 @@ export interface EmailConfig {
   interval?: string;     // Poll interval: "30m", "1h", etc. Default: "1h"
 }
 
-export interface RegisteredGroup {
+export interface RegisteredAgent {
   name: string;
   folder: string;
   trigger: string;

@@ -23,9 +23,10 @@ export const EVENT_POLL_INTERVAL = 5000;
 export const NANOCLAW_HOME = path.resolve(os.homedir(), '.nanoclaw');
 
 export const STORE_DIR = path.resolve(NANOCLAW_HOME, 'store');
-export const GROUPS_DIR = path.resolve(NANOCLAW_HOME, 'groups');
+export const CONTEXT_DIR = path.resolve(NANOCLAW_HOME, 'context');
+export const AGENTS_DIR = path.resolve(NANOCLAW_HOME, 'agents');
 export const DATA_DIR = path.resolve(NANOCLAW_HOME, 'data');
-export const MAIN_GROUP_FOLDER = 'main';
+export const MAIN_AGENT_FOLDER = 'main';
 
 export const AGENT_TIMEOUT = parseInt(
   process.env.AGENT_TIMEOUT || '300000',
