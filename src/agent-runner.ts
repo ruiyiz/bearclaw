@@ -357,6 +357,7 @@ export async function runContainerAgent(
           'Bash',
           'Read', 'Write', 'Edit', 'Glob', 'Grep',
           'WebSearch', 'WebFetch',
+          'Skill',
           'mcp__*'
         ],
         permissionMode: 'bypassPermissions',
