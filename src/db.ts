@@ -468,12 +468,12 @@ export function getAllHandlers(): Handler[] {
     .all() as Handler[];
 }
 
-export function getHandlersForGroup(groupFolder: string): Handler[] {
+export function getHandlersForAgent(agentFolder: string): Handler[] {
   return db
     .prepare(
       'SELECT * FROM handlers WHERE group_folder = ? ORDER BY created_at DESC',
     )
-    .all(groupFolder) as Handler[];
+    .all(agentFolder) as Handler[];
 }
 
 export function updateHandler(
@@ -559,10 +559,10 @@ function initMemoryFts(): void {
   `);
 }
 
-export function indexMemoryFiles(groupFolder: string, groupDir: string): void {
+export function indexMemoryFiles(agentFolder: string, agentDir: string): void {
   const dirs = [
-    { dir: path.join(groupDir, 'memory'), prefix: 'memory' },
-    { dir: path.join(groupDir, 'conversations'), prefix: 'conversations' },
+    { dir: path.join(agentDir, 'memory'), prefix: 'memory' },
+    { dir: path.join(agentDir, 'conversations'), prefix: 'conversations' },
   ];
 
   const currentFiles = new Map<string, number>();
@@ -578,10 +578,10 @@ export function indexMemoryFiles(groupFolder: string, groupDir: string): void {
     }
   }
 
-  // Get already-indexed files for this group
+  // Get already-indexed files for this agent
   const indexed = db.prepare(
     'SELECT path, mtime FROM memory_files WHERE group_folder = ?',
-  ).all(groupFolder) as Array<{ path: string; mtime: number }>;
+  ).all(agentFolder) as Array<{ path: string; mtime: number }>;
 
   const indexedMap = new Map(indexed.map((r) => [r.path, r.mtime]));
 
@@ -589,8 +589,8 @@ export function indexMemoryFiles(groupFolder: string, groupDir: string): void {
     // Remove deleted files
     for (const [iPath] of indexedMap) {
       if (!currentFiles.has(iPath)) {
-        db.prepare('DELETE FROM memory_fts WHERE path = ? AND group_folder = ?').run(iPath, groupFolder);
-        db.prepare('DELETE FROM memory_files WHERE path = ? AND group_folder = ?').run(iPath, groupFolder);
+        db.prepare('DELETE FROM memory_fts WHERE path = ? AND group_folder = ?').run(iPath, agentFolder);
+        db.prepare('DELETE FROM memory_files WHERE path = ? AND group_folder = ?').run(iPath, agentFolder);
       }
     }
 
@@ -600,17 +600,17 @@ export function indexMemoryFiles(groupFolder: string, groupDir: string): void {
       if (existingMtime !== undefined && Math.abs(existingMtime - mtime) < 1000) continue;
 
       const prefix = relPath.split('/')[0];
-      const fullPath = path.join(groupDir, relPath);
+      const fullPath = path.join(agentDir, relPath);
       const content = fs.readFileSync(fullPath, 'utf-8');
       if (!content.trim()) continue;
 
       // Remove old entry
-      db.prepare('DELETE FROM memory_fts WHERE path = ? AND group_folder = ?').run(relPath, groupFolder);
-      db.prepare('DELETE FROM memory_files WHERE path = ? AND group_folder = ?').run(relPath, groupFolder);
+      db.prepare('DELETE FROM memory_fts WHERE path = ? AND group_folder = ?').run(relPath, agentFolder);
+      db.prepare('DELETE FROM memory_files WHERE path = ? AND group_folder = ?').run(relPath, agentFolder);
 
       // Insert new
-      db.prepare('INSERT INTO memory_fts (content, path, group_folder) VALUES (?, ?, ?)').run(content, relPath, groupFolder);
-      db.prepare('INSERT INTO memory_files (path, group_folder, mtime) VALUES (?, ?, ?)').run(relPath, groupFolder, mtime);
+      db.prepare('INSERT INTO memory_fts (content, path, group_folder) VALUES (?, ?, ?)').run(content, relPath, agentFolder);
+      db.prepare('INSERT INTO memory_files (path, group_folder, mtime) VALUES (?, ?, ?)').run(relPath, agentFolder, mtime);
     }
   });
 
@@ -624,7 +624,7 @@ export interface MemorySearchResult {
 }
 
 export function searchMemory(
-  groupFolder: string,
+  agentFolder: string,
   query: string,
   limit = 10,
 ): MemorySearchResult[] {
@@ -641,5 +641,5 @@ export function searchMemory(
     WHERE memory_fts MATCH ? AND group_folder = ?
     ORDER BY rank
     LIMIT ?
-  `).all(safeQuery, groupFolder, limit) as MemorySearchResult[];
+  `).all(safeQuery, agentFolder, limit) as MemorySearchResult[];
 }
