@@ -8,6 +8,7 @@ import {
   AGENTS_DIR,
   IPC_POLL_INTERVAL,
   MAIN_AGENT_FOLDER,
+  NANOCLAW_HOME,
   POLL_INTERVAL,
   SESSION_IDLE_MINUTES,
   SESSION_RESET_HOUR,
@@ -58,6 +59,42 @@ let messageLoopRunning = false;
 let ipcWatcherRunning = false;
 
 const channels: Channel[] = [];
+
+function migrateToAgents(): void {
+  const oldGroupsDir = path.join(NANOCLAW_HOME, 'groups');
+  const newAgentsDir = path.join(NANOCLAW_HOME, 'agents');
+  const contextDir = path.join(NANOCLAW_HOME, 'context');
+
+  if (fs.existsSync(newAgentsDir) || !fs.existsSync(oldGroupsDir)) return;
+
+  logger.info('Migrating groups/ to agents/ and context/...');
+
+  fs.renameSync(oldGroupsDir, newAgentsDir);
+
+  const globalClaudeMd = path.join(newAgentsDir, 'CLAUDE.md');
+  if (fs.existsSync(globalClaudeMd)) {
+    fs.mkdirSync(contextDir, { recursive: true });
+    fs.renameSync(globalClaudeMd, path.join(contextDir, 'AGENTS.md'));
+    logger.info('Moved groups/CLAUDE.md to context/AGENTS.md — split into SOUL.md, USER.md, MEMORY.md manually');
+  }
+
+  for (const entry of fs.readdirSync(newAgentsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const claudePath = path.join(newAgentsDir, entry.name, 'CLAUDE.md');
+    const identityPath = path.join(newAgentsDir, entry.name, 'IDENTITY.md');
+    if (fs.existsSync(claudePath) && !fs.existsSync(identityPath)) {
+      fs.renameSync(claudePath, identityPath);
+    }
+  }
+
+  const oldFile = path.join(DATA_DIR, 'registered_groups.json');
+  const newFile = path.join(DATA_DIR, 'registered_agents.json');
+  if (fs.existsSync(oldFile) && !fs.existsSync(newFile)) {
+    fs.renameSync(oldFile, newFile);
+  }
+
+  logger.info('Migration complete');
+}
 
 function loadState(): void {
   const statePath = path.join(DATA_DIR, 'router_state.json');
@@ -792,6 +829,7 @@ async function startMessageLoop(): Promise<void> {
 async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
+  migrateToAgents();
   loadState();
 
   registerOdysseyHandlers(registeredAgents);
