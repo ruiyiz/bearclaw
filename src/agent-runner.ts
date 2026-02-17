@@ -307,7 +307,7 @@ export async function runContainerAgent(
 
   const ipcMcp = createIpcMcp({
     chatJid: input.chatJid,
-    groupFolder: input.agentFolder,
+    agentFolder: input.agentFolder,
     isMain: input.isMain,
     ipcDir: agentIpcDir,
   });

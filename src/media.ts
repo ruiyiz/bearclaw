@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { GROUPS_DIR } from './config.js';
+import { AGENTS_DIR } from './config.js';
 import { logger } from './logger.js';
 import { MediaSource } from './types.js';
 
@@ -39,7 +39,7 @@ export function guessMimetype(filePath: string): string {
 export function resolveMediaSource(
   filePath: string | null | undefined,
   mediaUrl: string | null | undefined,
-  sourceGroup: string,
+  sourceAgent: string,
 ): MediaSource | null {
   if (mediaUrl) {
     return { url: mediaUrl };
@@ -48,10 +48,10 @@ export function resolveMediaSource(
   if (filePath) {
     const resolvedPath = path.isAbsolute(filePath)
       ? filePath
-      : path.join(GROUPS_DIR, sourceGroup, filePath);
+      : path.join(AGENTS_DIR, sourceAgent, filePath);
 
     if (!fs.existsSync(resolvedPath)) {
-      logger.error({ resolvedPath, sourceGroup }, 'Media file not found');
+      logger.error({ resolvedPath, sourceAgent }, 'Media file not found');
       return null;
     }
     return { buffer: fs.readFileSync(resolvedPath) };

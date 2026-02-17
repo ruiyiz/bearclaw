@@ -5,12 +5,12 @@ import { ListView } from '../components/list-view.js';
 import { DetailPanel } from '../components/detail-panel.js';
 import { StatusBar } from '../components/status-bar.js';
 import type { ViewProps } from '../app.js';
-import { getRegisteredGroups, getAllHandlers, getOdysseyLogTail } from '../data.js';
-import type { RegisteredGroup, Handler } from '../../types.js';
+import { getRegisteredAgents, getAllHandlers, getOdysseyLogTail } from '../data.js';
+import type { RegisteredAgent, Handler } from '../../types.js';
 import { ODYSSEY_HANDLER_PREFIX } from '../../config.js';
 
-interface OdysseyGroup {
-  group: RegisteredGroup;
+interface OdysseyAgent {
+  agent: RegisteredAgent;
   handler?: Handler;
   status: 'active' | 'paused' | 'no config';
 }
@@ -22,17 +22,17 @@ const STATUS_COLORS = {
 } as const;
 
 export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
-  const [items, setItems] = useState<OdysseyGroup[]>([]);
+  const [items, setItems] = useState<OdysseyAgent[]>([]);
   const [selected, setSelected] = useState(0);
   const [focusDetail, setFocusDetail] = useState(false);
 
   useEffect(() => {
-    let groups: RegisteredGroup[];
+    let agents: RegisteredAgent[];
     let handlers: Handler[];
     try {
-      groups = getRegisteredGroups();
+      agents = getRegisteredAgents();
     } catch {
-      groups = [];
+      agents = [];
     }
     try {
       handlers = getAllHandlers();
@@ -40,17 +40,17 @@ export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
       handlers = [];
     }
 
-    const odysseyItems: OdysseyGroup[] = groups.map((g) => {
+    const odysseyItems: OdysseyAgent[] = agents.map((a) => {
       const handler = handlers.find(
-        (h) => h.id === `${ODYSSEY_HANDLER_PREFIX}${g.folder}`,
+        (h) => h.id === `${ODYSSEY_HANDLER_PREFIX}${a.folder}`,
       );
 
-      if (!g.odyssey) {
-        return { group: g, handler, status: 'no config' as const };
+      if (!a.odyssey) {
+        return { agent: a, handler, status: 'no config' as const };
       }
 
       return {
-        group: g,
+        agent: a,
         handler,
         status: handler?.status === 'active' ? 'active' : 'paused',
       };
@@ -70,19 +70,19 @@ export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
 
   if (item) {
     const lines: string[] = [
-      `**Group:** ${item.group.name}`,
+      `**Agent:** ${item.agent.name}`,
       `**Status:** ${item.status}`,
     ];
 
-    if (item.group.odyssey) {
+    if (item.agent.odyssey) {
       lines.push('', '### Config');
-      lines.push(`**Interval:** ${item.group.odyssey.interval}`);
-      if (item.group.odyssey.model) {
-        lines.push(`**Model:** ${item.group.odyssey.model}`);
+      lines.push(`**Interval:** ${item.agent.odyssey.interval}`);
+      if (item.agent.odyssey.model) {
+        lines.push(`**Model:** ${item.agent.odyssey.model}`);
       }
-      if (item.group.odyssey.quiet) {
+      if (item.agent.odyssey.quiet) {
         lines.push(
-          `**Quiet Hours:** ${item.group.odyssey.quiet.start} - ${item.group.odyssey.quiet.end}`,
+          `**Quiet Hours:** ${item.agent.odyssey.quiet.start} - ${item.agent.odyssey.quiet.end}`,
         );
       }
     }
@@ -97,7 +97,7 @@ export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
     }
 
     lines.push('', '### Recent Log');
-    lines.push(getOdysseyLogTail(item.group.folder));
+    lines.push(getOdysseyLogTail(item.agent.folder));
 
     detailContent = lines.join('\n');
   }
@@ -114,19 +114,19 @@ export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
           renderItem={(o, _i, isSel) => (
             <Box gap={1}>
               <Text inverse={isSel}>{isSel ? '>' : ' '}</Text>
-              <Text bold={isSel}>{o.group.name}</Text>
+              <Text bold={isSel}>{o.agent.name}</Text>
               <Text color={STATUS_COLORS[o.status]}>
                 [{o.status}]
               </Text>
-              {o.group.odyssey && (
-                <Text dimColor>{o.group.odyssey.interval}</Text>
+              {o.agent.odyssey && (
+                <Text dimColor>{o.agent.odyssey.interval}</Text>
               )}
             </Box>
           )}
         />
       </Box>
       <DetailPanel
-        title={item ? `${item.group.name} — Odyssey` : 'Odyssey Details'}
+        title={item ? `${item.agent.name} — Odyssey` : 'Odyssey Details'}
         content={detailContent}
         height={detailHeight}
         isFocused={focusDetail}
