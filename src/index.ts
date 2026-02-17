@@ -5,9 +5,9 @@ import {
   ASSISTANT_NAME,
   DATA_DIR,
   DISPLAY_NAME,
-  GROUPS_DIR,
+  AGENTS_DIR,
   IPC_POLL_INTERVAL,
-  MAIN_GROUP_FOLDER,
+  MAIN_AGENT_FOLDER,
   POLL_INTERVAL,
   SESSION_IDLE_MINUTES,
   SESSION_RESET_HOUR,
@@ -19,7 +19,7 @@ import {
 import {
   AvailableGroup,
   runContainerAgent,
-  writeGroupsSnapshot,
+  writeAgentsSnapshot,
   writeHandlersSnapshot,
 } from './agent-runner.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
@@ -44,13 +44,13 @@ import { startEventBusLoop } from './event-bus.js';
 import { registerOdysseyHandlers } from './odyssey.js';
 import { findChannel } from './router.js';
 import { startSchedulerEmitter } from './task-scheduler.js';
-import { Channel, MediaType, NewMessage, RegisteredGroup, Session } from './types.js';
+import { Channel, MediaType, NewMessage, RegisteredAgent, Session } from './types.js';
 import { loadJson, saveJson } from './utils.js';
 import { logger } from './logger.js';
 
 let lastTimestamp = '';
 let sessions: Session = {};
-let registeredGroups: Record<string, RegisteredGroup> = {};
+let registeredAgents: Record<string, RegisteredAgent> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let sessionLastActivity: Record<string, string> = {};
 let lastDailyReset = '';
@@ -72,12 +72,12 @@ function loadState(): void {
   sessionLastActivity = state.session_last_activity || {};
   lastDailyReset = state.last_daily_reset || '';
   sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
-  registeredGroups = loadJson(
-    path.join(DATA_DIR, 'registered_groups.json'),
+  registeredAgents = loadJson(
+    path.join(DATA_DIR, 'registered_agents.json'),
     {},
   );
   logger.info(
-    { groupCount: Object.keys(registeredGroups).length },
+    { agentCount: Object.keys(registeredAgents).length },
     'State loaded',
   );
 }
@@ -92,22 +92,22 @@ function saveState(): void {
   saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
 }
 
-function registerGroup(jid: string, group: RegisteredGroup): void {
-  registeredGroups[jid] = group;
-  saveJson(path.join(DATA_DIR, 'registered_groups.json'), registeredGroups);
+function registerAgent(jid: string, agent: RegisteredAgent): void {
+  registeredAgents[jid] = agent;
+  saveJson(path.join(DATA_DIR, 'registered_agents.json'), registeredAgents);
 
-  const groupDir = path.join(GROUPS_DIR, group.folder);
-  fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
+  const agentDir = path.join(AGENTS_DIR, agent.folder);
+  fs.mkdirSync(path.join(agentDir, 'logs'), { recursive: true });
 
   logger.info(
-    { jid, name: group.name, folder: group.folder },
-    'Group registered',
+    { jid, name: agent.name, folder: agent.folder },
+    'Agent registered',
   );
 }
 
 function getAvailableGroups(): AvailableGroup[] {
   const chats = getAllChats();
-  const registeredJids = new Set(Object.keys(registeredGroups));
+  const registeredJids = new Set(Object.keys(registeredAgents));
 
   return chats
     .filter((c) => c.jid !== '__group_sync__' && (c.jid.endsWith('@g.us') || c.jid.startsWith('tg:')))
@@ -120,23 +120,23 @@ function getAvailableGroups(): AvailableGroup[] {
 }
 
 async function processMessage(msg: NewMessage): Promise<void> {
-  const group = registeredGroups[msg.chat_jid];
-  if (!group) return;
+  const agent = registeredAgents[msg.chat_jid];
+  if (!agent) return;
 
   let content = msg.content.trim();
-  const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
+  const isMainAgent = agent.folder === MAIN_AGENT_FOLDER;
 
-  if (!isMainGroup) {
-    if (group.trigger) {
-      const triggerPattern = new RegExp(`^${group.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+  if (!isMainAgent) {
+    if (agent.trigger) {
+      const triggerPattern = new RegExp(`^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
       if (!triggerPattern.test(content)) return;
     }
   }
 
   if (content === '/new' || content.toLowerCase().startsWith('/new ')) {
-    delete sessions[group.folder];
+    delete sessions[agent.folder];
     saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
-    logger.info({ group: group.name }, 'Session cleared by user');
+    logger.info({ agent: agent.name }, 'Session cleared by user');
 
     const followUp = content.slice(4).trim();
     if (!followUp) {
@@ -175,13 +175,13 @@ async function processMessage(msg: NewMessage): Promise<void> {
   if (!prompt) return;
 
   logger.info(
-    { group: group.name, messageCount: missedMessages.length },
+    { agent: agent.name, messageCount: missedMessages.length },
     'Processing message',
   );
 
   const channel = findChannel(channels, msg.chat_jid);
   if (channel) await channel.setTyping?.(msg.chat_jid, true);
-  const response = await runAgent(group, prompt, msg.chat_jid);
+  const response = await runAgent(agent, prompt, msg.chat_jid);
   if (channel) await channel.setTyping?.(msg.chat_jid, false);
 
   if (response && channel) {
@@ -209,43 +209,43 @@ function isNonResponse(text: string): boolean {
 }
 
 async function runAgent(
-  group: RegisteredGroup,
+  agent: RegisteredAgent,
   prompt: string,
   chatJid: string,
 ): Promise<string | null> {
-  const isMain = group.folder === MAIN_GROUP_FOLDER;
-  const sessionId = sessions[group.folder];
+  const isMain = agent.folder === MAIN_AGENT_FOLDER;
+  const sessionId = sessions[agent.folder];
 
   const availableGroups = getAvailableGroups();
-  writeGroupsSnapshot(
-    group.folder,
+  writeAgentsSnapshot(
+    agent.folder,
     isMain,
     availableGroups,
-    new Set(Object.keys(registeredGroups)),
+    new Set(Object.keys(registeredAgents)),
   );
 
   const handlers = getAllHandlers();
-  writeHandlersSnapshot(group.folder, isMain, handlers);
+  writeHandlersSnapshot(agent.folder, isMain, handlers);
 
   try {
-    const output = await runContainerAgent(group, {
+    const output = await runContainerAgent(agent, {
       prompt,
       sessionId,
-      groupFolder: group.folder,
+      agentFolder: agent.folder,
       chatJid,
       isMain,
     });
 
     if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
+      sessions[agent.folder] = output.newSessionId;
       saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
     }
 
-    sessionLastActivity[group.folder] = new Date().toISOString();
+    sessionLastActivity[agent.folder] = new Date().toISOString();
 
     if (output.status === 'error') {
       logger.error(
-        { group: group.name, error: output.error },
+        { agent: agent.name, error: output.error },
         'Container agent error',
       );
       return null;
@@ -253,7 +253,7 @@ async function runAgent(
 
     return output.result;
   } catch (err) {
-    logger.error({ group: group.name, err }, 'Agent error');
+    logger.error({ agent: agent.name, err }, 'Agent error');
     return null;
   }
 }
@@ -269,9 +269,9 @@ function startIpcWatcher(): void {
   fs.mkdirSync(ipcBaseDir, { recursive: true });
 
   const processIpcFiles = async () => {
-    let groupFolders: string[];
+    let agentFolders: string[];
     try {
-      groupFolders = fs.readdirSync(ipcBaseDir).filter((f) => {
+      agentFolders = fs.readdirSync(ipcBaseDir).filter((f) => {
         const stat = fs.statSync(path.join(ipcBaseDir, f));
         return stat.isDirectory() && f !== 'errors';
       });
@@ -281,10 +281,10 @@ function startIpcWatcher(): void {
       return;
     }
 
-    for (const sourceGroup of groupFolders) {
-      const isMain = sourceGroup === MAIN_GROUP_FOLDER;
-      const messagesDir = path.join(ipcBaseDir, sourceGroup, 'messages');
-      const tasksDir = path.join(ipcBaseDir, sourceGroup, 'tasks');
+    for (const sourceAgent of agentFolders) {
+      const isMain = sourceAgent === MAIN_AGENT_FOLDER;
+      const messagesDir = path.join(ipcBaseDir, sourceAgent, 'messages');
+      const tasksDir = path.join(ipcBaseDir, sourceAgent, 'tasks');
 
       try {
         if (fs.existsSync(messagesDir)) {
@@ -296,25 +296,25 @@ function startIpcWatcher(): void {
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               if (data.type === 'message' && (data.text || data.mediaType)) {
-                // Resolve target JIDs: specific JID from chatJid, or all JIDs for the group
+                // Resolve target JIDs: specific JID from chatJid, or all JIDs for the agent
                 let targetJids: string[];
                 if (data.chatJid) {
                   targetJids = [data.chatJid];
                 } else {
-                  // No originating channel (e.g. event handler): send to all channels for the group
-                  targetJids = Object.entries(registeredGroups)
-                    .filter(([, g]) => g.folder === data.groupFolder)
+                  // No originating channel (e.g. event handler): send to all channels for the agent
+                  targetJids = Object.entries(registeredAgents)
+                    .filter(([, a]) => a.folder === data.groupFolder)
                     .map(([jid]) => jid);
                 }
 
                 for (const targetJid of targetJids) {
-                  const targetGroup = registeredGroups[targetJid];
+                  const targetAgent = registeredAgents[targetJid];
                   if (
                     !isMain &&
-                    !(targetGroup && targetGroup.folder === sourceGroup)
+                    !(targetAgent && targetAgent.folder === sourceAgent)
                   ) {
                     logger.warn(
-                      { targetJid, sourceGroup },
+                      { targetJid, sourceAgent },
                       'Unauthorized IPC message attempt blocked',
                     );
                     continue;
@@ -323,14 +323,14 @@ function startIpcWatcher(): void {
                   const ipcChannel = findChannel(channels, targetJid);
                   if (!ipcChannel) {
                     logger.error(
-                      { targetJid, sourceGroup },
+                      { targetJid, sourceAgent },
                       'No channel found for target JID',
                     );
                     continue;
                   }
 
                   if (data.mediaType) {
-                    const mediaSource = resolveMediaSource(data.filePath, data.mediaUrl, sourceGroup);
+                    const mediaSource = resolveMediaSource(data.filePath, data.mediaUrl, sourceAgent);
                     if (mediaSource && ipcChannel.sendMedia) {
                       const caption = data.text || undefined;
                       const mediaType = data.mediaType as MediaType;
@@ -338,24 +338,24 @@ function startIpcWatcher(): void {
                       const mimetype = data.mimetype || guessMimetype(data.filePath || data.mediaUrl || '');
 
                       if (data.sender && ipcChannel.sendMediaAsAgent) {
-                        await ipcChannel.sendMediaAsAgent(targetJid, mediaType, mediaSource, { caption, fileName, mimetype }, data.sender, sourceGroup);
+                        await ipcChannel.sendMediaAsAgent(targetJid, mediaType, mediaSource, { caption, fileName, mimetype }, data.sender, sourceAgent);
                       } else {
                         await ipcChannel.sendMedia(targetJid, mediaType, mediaSource, { caption, fileName, mimetype });
                       }
                     } else if (!mediaSource) {
-                      logger.error({ targetJid, sourceGroup }, 'Could not resolve media source');
+                      logger.error({ targetJid, sourceAgent }, 'Could not resolve media source');
                     } else {
                       logger.warn({ targetJid, channel: ipcChannel.name }, 'Channel does not support media');
                     }
                   } else if (data.sender && ipcChannel.sendAsAgent) {
-                    await ipcChannel.sendAsAgent(targetJid, data.text, data.sender, sourceGroup);
+                    await ipcChannel.sendAsAgent(targetJid, data.text, data.sender, sourceAgent);
                   } else {
                     await ipcChannel.sendMessage(targetJid, data.text);
                   }
                   logger.info(
                     {
                       targetJid,
-                      sourceGroup,
+                      sourceAgent,
                       mediaType: data.mediaType || 'text',
                     },
                     'IPC message sent',
@@ -365,21 +365,21 @@ function startIpcWatcher(): void {
               fs.unlinkSync(filePath);
             } catch (err) {
               logger.error(
-                { file, sourceGroup, err },
+                { file, sourceAgent, err },
                 'Error processing IPC message',
               );
               const errorDir = path.join(ipcBaseDir, 'errors');
               fs.mkdirSync(errorDir, { recursive: true });
               fs.renameSync(
                 filePath,
-                path.join(errorDir, `${sourceGroup}-${file}`),
+                path.join(errorDir, `${sourceAgent}-${file}`),
               );
             }
           }
         }
       } catch (err) {
         logger.error(
-          { err, sourceGroup },
+          { err, sourceAgent },
           'Error reading IPC messages directory',
         );
       }
@@ -393,24 +393,24 @@ function startIpcWatcher(): void {
             const filePath = path.join(tasksDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              await processTaskIpc(data, sourceGroup, isMain);
+              await processTaskIpc(data, sourceAgent, isMain);
               fs.unlinkSync(filePath);
             } catch (err) {
               logger.error(
-                { file, sourceGroup, err },
+                { file, sourceAgent, err },
                 'Error processing IPC task',
               );
               const errorDir = path.join(ipcBaseDir, 'errors');
               fs.mkdirSync(errorDir, { recursive: true });
               fs.renameSync(
                 filePath,
-                path.join(errorDir, `${sourceGroup}-${file}`),
+                path.join(errorDir, `${sourceAgent}-${file}`),
               );
             }
           }
         }
       } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
+        logger.error({ err, sourceAgent }, 'Error reading IPC tasks directory');
       }
     }
 
@@ -418,7 +418,7 @@ function startIpcWatcher(): void {
   };
 
   processIpcFiles();
-  logger.info('IPC watcher started (per-group namespaces)');
+  logger.info('IPC watcher started (per-agent namespaces)');
 }
 
 async function processTaskIpc(
@@ -447,7 +447,7 @@ async function processTaskIpc(
     maxTriggers?: number | null;
     targetGroup?: string;
   },
-  sourceGroup: string,
+  sourceAgent: string,
   isMain: boolean,
 ): Promise<void> {
   const { CronExpressionParser } = await import('cron-parser');
@@ -455,10 +455,10 @@ async function processTaskIpc(
   switch (data.type) {
     case 'schedule_task':
       if (data.prompt && data.groupFolder) {
-        const targetGroup = data.groupFolder;
-        if (!isMain && targetGroup !== sourceGroup) {
+        const targetAgent = data.groupFolder;
+        if (!isMain && targetAgent !== sourceAgent) {
           logger.warn(
-            { sourceGroup, targetGroup },
+            { sourceAgent, targetAgent },
             'Unauthorized schedule_task attempt blocked',
           );
           break;
@@ -500,7 +500,7 @@ async function processTaskIpc(
         const filter = JSON.stringify({ handler_id: handlerId });
         createHandler({
           id: handlerId,
-          group_folder: targetGroup,
+          group_folder: targetAgent,
           prompt: data.prompt,
           context_mode: contextMode,
           event_type: 'cron_trigger',
@@ -513,32 +513,32 @@ async function processTaskIpc(
           created_at: new Date().toISOString(),
         });
         logger.info(
-          { handlerId, sourceGroup, targetGroup, contextMode, cron },
+          { handlerId, sourceAgent, targetAgent, contextMode, cron },
           'Scheduled handler created via IPC',
         );
       }
       break;
 
-    case 'refresh_groups':
+    case 'refresh_agents':
       if (isMain) {
         logger.info(
-          { sourceGroup },
-          'Group metadata refresh requested via IPC',
+          { sourceAgent },
+          'Agent metadata refresh requested via IPC',
         );
         for (const ch of channels) {
           await ch.syncMetadata?.(true);
         }
         const availableGroups = getAvailableGroups();
-        writeGroupsSnapshot(
-          sourceGroup,
+        writeAgentsSnapshot(
+          sourceAgent,
           true,
           availableGroups,
-          new Set(Object.keys(registeredGroups)),
+          new Set(Object.keys(registeredAgents)),
         );
       } else {
         logger.warn(
-          { sourceGroup },
-          'Unauthorized refresh_groups attempt blocked',
+          { sourceAgent },
+          'Unauthorized refresh_agents attempt blocked',
         );
       }
       break;
@@ -547,7 +547,7 @@ async function processTaskIpc(
       if (data.eventType) {
         emitEvent(data.eventType, data.payload || {});
         logger.info(
-          { eventType: data.eventType, sourceGroup },
+          { eventType: data.eventType, sourceAgent },
           'Event emitted via IPC',
         );
       }
@@ -555,10 +555,10 @@ async function processTaskIpc(
 
     case 'register_handler':
       if (data.eventType && data.prompt) {
-        const handlerTarget = data.targetGroup || sourceGroup;
-        if (!isMain && handlerTarget !== sourceGroup) {
+        const handlerTarget = data.targetGroup || sourceAgent;
+        if (!isMain && handlerTarget !== sourceAgent) {
           logger.warn(
-            { sourceGroup, targetGroup: handlerTarget },
+            { sourceAgent, targetAgent: handlerTarget },
             'Unauthorized register_handler attempt blocked',
           );
           break;
@@ -584,7 +584,7 @@ async function processTaskIpc(
           created_at: new Date().toISOString(),
         });
         logger.info(
-          { handlerId, eventType: data.eventType, sourceGroup, targetGroup: handlerTarget },
+          { handlerId, eventType: data.eventType, sourceAgent, targetAgent: handlerTarget },
           'Handler registered via IPC',
         );
       }
@@ -593,15 +593,15 @@ async function processTaskIpc(
     case 'pause_handler':
       if (data.handlerId) {
         const handler = getHandlerById(data.handlerId);
-        if (handler && (isMain || handler.group_folder === sourceGroup)) {
+        if (handler && (isMain || handler.group_folder === sourceAgent)) {
           updateHandler(data.handlerId, { status: 'paused' });
           logger.info(
-            { handlerId: data.handlerId, sourceGroup },
+            { handlerId: data.handlerId, sourceAgent },
             'Handler paused via IPC',
           );
         } else {
           logger.warn(
-            { handlerId: data.handlerId, sourceGroup },
+            { handlerId: data.handlerId, sourceAgent },
             'Unauthorized handler pause attempt',
           );
         }
@@ -611,15 +611,15 @@ async function processTaskIpc(
     case 'resume_handler':
       if (data.handlerId) {
         const handler = getHandlerById(data.handlerId);
-        if (handler && (isMain || handler.group_folder === sourceGroup)) {
+        if (handler && (isMain || handler.group_folder === sourceAgent)) {
           updateHandler(data.handlerId, { status: 'active' });
           logger.info(
-            { handlerId: data.handlerId, sourceGroup },
+            { handlerId: data.handlerId, sourceAgent },
             'Handler resumed via IPC',
           );
         } else {
           logger.warn(
-            { handlerId: data.handlerId, sourceGroup },
+            { handlerId: data.handlerId, sourceAgent },
             'Unauthorized handler resume attempt',
           );
         }
@@ -629,31 +629,31 @@ async function processTaskIpc(
     case 'cancel_handler':
       if (data.handlerId) {
         const handler = getHandlerById(data.handlerId);
-        if (handler && (isMain || handler.group_folder === sourceGroup)) {
+        if (handler && (isMain || handler.group_folder === sourceAgent)) {
           deleteHandler(data.handlerId);
           logger.info(
-            { handlerId: data.handlerId, sourceGroup },
+            { handlerId: data.handlerId, sourceAgent },
             'Handler cancelled via IPC',
           );
         } else {
           logger.warn(
-            { handlerId: data.handlerId, sourceGroup },
+            { handlerId: data.handlerId, sourceAgent },
             'Unauthorized handler cancel attempt',
           );
         }
       }
       break;
 
-    case 'register_group':
+    case 'register_agent':
       if (!isMain) {
         logger.warn(
-          { sourceGroup },
-          'Unauthorized register_group attempt blocked',
+          { sourceAgent },
+          'Unauthorized register_agent attempt blocked',
         );
         break;
       }
       if (data.jid && data.name && data.folder && data.trigger) {
-        registerGroup(data.jid, {
+        registerAgent(data.jid, {
           name: data.name,
           folder: data.folder,
           trigger: data.trigger,
@@ -662,25 +662,25 @@ async function processTaskIpc(
       } else {
         logger.warn(
           { data },
-          'Invalid register_group request - missing required fields',
+          'Invalid register_agent request - missing required fields',
         );
       }
       break;
 
     case 'reply_email':
       if (data.requestId && data.messageId && data.to && data.subject && data.body) {
-        const emailResultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'email_results');
+        const emailResultsDir = path.join(DATA_DIR, 'ipc', sourceAgent, 'email_results');
         fs.mkdirSync(emailResultsDir, { recursive: true });
         try {
           await sendEmailReply(data.messageId, data.to, data.subject, data.body);
           const resultFile = path.join(emailResultsDir, `${data.requestId}.json`);
           fs.writeFileSync(resultFile, JSON.stringify({ success: true, message: 'Email reply sent' }));
-          logger.info({ messageId: data.messageId, to: data.to, sourceGroup }, 'Email reply sent via IPC');
+          logger.info({ messageId: data.messageId, to: data.to, sourceAgent }, 'Email reply sent via IPC');
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           const resultFile = path.join(emailResultsDir, `${data.requestId}.json`);
           fs.writeFileSync(resultFile, JSON.stringify({ success: false, message: `Failed to send email: ${errorMsg}` }));
-          logger.error({ messageId: data.messageId, err, sourceGroup }, 'Failed to send email reply via IPC');
+          logger.error({ messageId: data.messageId, err, sourceAgent }, 'Failed to send email reply via IPC');
         }
       }
       break;
@@ -761,7 +761,7 @@ async function startMessageLoop(): Promise<void> {
 
   while (true) {
     try {
-      const jids = Object.keys(registeredGroups);
+      const jids = Object.keys(registeredAgents);
       const botPrefixes = DISPLAY_NAME !== ASSISTANT_NAME
         ? [DISPLAY_NAME, ASSISTANT_NAME]
         : [ASSISTANT_NAME];
@@ -794,15 +794,15 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
-  registerOdysseyHandlers(registeredGroups);
-  registerEmailHandlers(registeredGroups);
+  registerOdysseyHandlers(registeredAgents);
+  registerEmailHandlers(registeredAgents);
 
   // Initialize channels based on config
   if (!TELEGRAM_ONLY) {
     const whatsapp = new WhatsAppChannel({
       onMessage: (_chatJid, msg) => storeMessage(msg),
       onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
-      registeredGroups: () => registeredGroups,
+      registeredAgents: () => registeredAgents,
     });
     channels.push(whatsapp);
     whatsapp.connect(); // fire-and-forget, internal reconnection
@@ -812,7 +812,7 @@ async function main(): Promise<void> {
     const telegram = new TelegramChannel(TELEGRAM_BOT_TOKEN, {
       onMessage: (_chatJid, msg) => storeMessage(msg),
       onChatMetadata: (chatJid, timestamp, name) => storeChatMetadata(chatJid, timestamp, name),
-      registeredGroups: () => registeredGroups,
+      registeredAgents: () => registeredAgents,
     });
     channels.push(telegram);
     await telegram.connect();
@@ -825,13 +825,13 @@ async function main(): Promise<void> {
   startSessionResetLoop();
   startSchedulerEmitter();
   startEventBusLoop({
-    registeredGroups: () => registeredGroups,
+    registeredAgents: () => registeredAgents,
     getSessions: () => sessions,
     saveSessions: () => saveJson(path.join(DATA_DIR, 'sessions.json'), sessions),
   });
   startIpcWatcher();
   startMessageLoop();
-  startEmailLoops(registeredGroups);
+  startEmailLoops(registeredAgents);
 }
 
 main().catch((err) => {
