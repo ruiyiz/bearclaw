@@ -5,7 +5,7 @@ import { TabBar, type Tab } from './components/tab-bar.js';
 import { SkillsView } from './views/skills.js';
 import { EventsView } from './views/events.js';
 import { HandlersView } from './views/handlers.js';
-import { GroupsView } from './views/groups.js';
+import { AgentsView } from './views/agents.js';
 import { HealthView } from './views/health.js';
 import { OdysseyView } from './views/odyssey.js';
 
@@ -18,7 +18,7 @@ const TABS: Tab[] = [
   { key: 'skills', label: 'Skills', shortcut: '1' },
   { key: 'events', label: 'Events', shortcut: '2' },
   { key: 'handlers', label: 'Handlers', shortcut: '3' },
-  { key: 'groups', label: 'Groups', shortcut: '4' },
+  { key: 'agents', label: 'Agents', shortcut: '4' },
   { key: 'health', label: 'Health', shortcut: '5' },
   { key: 'odyssey', label: 'Odyssey', shortcut: '6' },
 ];
@@ -57,8 +57,8 @@ export function App() {
         return <EventsView {...props} />;
       case 'handlers':
         return <HandlersView {...props} />;
-      case 'groups':
-        return <GroupsView {...props} />;
+      case 'agents':
+        return <AgentsView {...props} />;
       case 'health':
         return <HealthView {...props} />;
       case 'odyssey':

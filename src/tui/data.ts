@@ -4,13 +4,13 @@ import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
 
-import { STORE_DIR, GROUPS_DIR, DATA_DIR } from '../config.js';
+import { STORE_DIR, AGENTS_DIR, DATA_DIR } from '../config.js';
 import { loadJson } from '../utils.js';
 import type {
   EventRecord,
   Handler,
   HandlerRunLog,
-  RegisteredGroup,
+  RegisteredAgent,
 } from '../types.js';
 
 const DB_PATH = path.join(STORE_DIR, 'messages.db');
@@ -113,14 +113,14 @@ export function getRecentHandlerLogs(limit = 100): HandlerRunLog[] {
   }
 }
 
-// ─── Groups ─────────────────────────────────────────────────────────────────
+// ─── Agents ─────────────────────────────────────────────────────────────────
 
-export function getRegisteredGroups(): RegisteredGroup[] {
-  const filePath = path.join(DATA_DIR, 'registered_groups.json');
-  const raw = loadJson<Record<string, RegisteredGroup> | RegisteredGroup[]>(filePath, []);
+export function getRegisteredAgents(): RegisteredAgent[] {
+  const filePath = path.join(DATA_DIR, 'registered_agents.json');
+  const raw = loadJson<Record<string, RegisteredAgent> | RegisteredAgent[]>(filePath, []);
   if (Array.isArray(raw)) return raw;
   // File is an object keyed by JID — convert to array
-  return Object.entries(raw).map(([jid, group]) => ({ ...group, jid }));
+  return Object.entries(raw).map(([jid, agent]) => ({ ...agent, jid }));
 }
 
 // ─── Health checks ──────────────────────────────────────────────────────────
@@ -279,7 +279,7 @@ export interface SkillInfo {
   source: string;
 }
 
-const SKILLS_DIR = path.join(GROUPS_DIR, '.claude', 'skills');
+const SKILLS_DIR = path.join(AGENTS_DIR, '.claude', 'skills');
 const SKILL_SOURCES_PATH = path.join(DATA_DIR, 'skill_sources.json');
 
 function parseSkillDescription(content: string): string {
@@ -397,7 +397,7 @@ export function getOdysseyLogTail(
   groupFolder: string,
   lines = 20,
 ): string {
-  const logPath = path.join(GROUPS_DIR, groupFolder, 'odyssey-log.md');
+  const logPath = path.join(AGENTS_DIR, groupFolder, 'odyssey-log.md');
   try {
     const content = fs.readFileSync(logPath, 'utf-8');
     const allLines = content.split('\n');
