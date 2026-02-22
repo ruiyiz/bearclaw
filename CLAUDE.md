@@ -19,6 +19,7 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 | `src/db.ts` | SQLite operations |
 | `~/.nanoclaw/context/` | Shared context: AGENTS.md, SOUL.md, USER.md, MEMORY.md |
 | `~/.nanoclaw/agents/{name}/IDENTITY.md` | Per-agent identity |
+| `~/.nanoclaw/skills/` | Skill definitions (SKILL.md per skill) |
 
 ## Skills
 
