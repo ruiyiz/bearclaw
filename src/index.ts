@@ -254,11 +254,19 @@ async function processMessage(msg: NewMessage): Promise<void> {
   // Set up streaming if the channel supports it (Telegram)
   let streamingMsgId: number | undefined;
   let onText: ((text: string) => void) | undefined;
+  let typingInterval: ReturnType<typeof setInterval> | undefined;
   if (channel?.sendMessageWithId && channel?.editMessage) {
     try {
-      streamingMsgId = await channel.sendMessageWithId(msg.chat_jid, '…');
+      streamingMsgId = await channel.sendMessageWithId(msg.chat_jid, '💬⏳\u200B');
+      // Animated typing indicator in the chat header, refreshed every 4s
+      channel.setTyping?.(msg.chat_jid, true).catch(() => {});
+      typingInterval = setInterval(() => {
+        channel.setTyping?.(msg.chat_jid, true).catch(() => {});
+      }, 4000);
       let lastEditTime = 0;
       onText = (text: string) => {
+        // Stop typing indicator once text starts appearing
+        if (typingInterval) { clearInterval(typingInterval); typingInterval = undefined; }
         if (Date.now() - lastEditTime >= 800) {
           lastEditTime = Date.now();
           channel.editMessage!(msg.chat_jid, streamingMsgId!, text).catch(() => {});
@@ -271,6 +279,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   if (!streamingMsgId && channel) await channel.setTyping?.(msg.chat_jid, true);
   const response = await runAgent(agent, prompt, msg.chat_jid, onText);
+  if (typingInterval) { clearInterval(typingInterval); typingInterval = undefined; }
   if (!streamingMsgId && channel) await channel.setTyping?.(msg.chat_jid, false);
 
   if (channel) {
