@@ -30,6 +30,7 @@ export interface ContainerInput {
   isMain: boolean;
   isEventHandler?: boolean;
   model?: string;
+  onText?: (text: string) => void;
 }
 
 export interface ContainerOutput {
@@ -344,6 +345,7 @@ export async function runContainerAgent(
     const contextPrompt = buildContextPrompt(input.agentFolder);
     const fullSystemPrompt = [contextPrompt, SYSTEM_PROMPT].filter(Boolean).join('\n\n---\n\n');
 
+    let streamText = '';
     for await (const message of query({
       prompt,
       options: {
@@ -366,6 +368,7 @@ export async function runContainerAgent(
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         settingSources: ['project'],
+        includePartialMessages: !!input.onText,
         mcpServers: {
           nanoclaw: ipcMcp,
           ...userMcpServers,
@@ -379,6 +382,16 @@ export async function runContainerAgent(
       if (message.type === 'system' && message.subtype === 'init') {
         newSessionId = message.session_id;
         logger.debug({ sessionId: newSessionId, group: group.name }, 'Session initialized');
+      }
+
+      if (input.onText && message.type === 'stream_event') {
+        const event = (message as any).event;
+        if (event?.type === 'message_start') {
+          streamText = '';
+        } else if (event?.type === 'content_block_delta' && event?.delta?.type === 'text_delta') {
+          streamText += event.delta.text;
+          if (streamText.trim()) input.onText(streamText);
+        }
       }
 
       if ('result' in message && message.result) {

@@ -351,6 +351,31 @@ export class TelegramChannel implements Channel {
     }
   }
 
+  async sendMessageWithId(jid: string, text: string): Promise<number> {
+    const numericId = jid.replace(/^tg:/, '');
+    const msg = await this.bot!.api.sendMessage(numericId, text);
+    return msg.message_id;
+  }
+
+  async editMessage(jid: string, messageId: number, text: string): Promise<void> {
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      const formatted = renderMarkdown(text, TelegramHtmlRenderer).slice(0, 4096);
+      await this.bot!.api.editMessageText(numericId, messageId, formatted, { parse_mode: 'HTML' });
+    } catch {
+      // Ignore "message is not modified" and other transient edit errors
+    }
+  }
+
+  async deleteMessage(jid: string, messageId: number): Promise<void> {
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      await this.bot!.api.deleteMessage(numericId, messageId);
+    } catch {
+      // Ignore if already deleted or not found
+    }
+  }
+
   async sendMedia(jid: string, type: MediaType, source: MediaSource, options?: MediaOptions): Promise<void> {
     if (!this.bot) {
       logger.warn('Telegram bot not initialized');

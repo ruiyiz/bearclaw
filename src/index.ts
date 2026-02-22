@@ -251,22 +251,45 @@ async function processMessage(msg: NewMessage): Promise<void> {
     }
   }
 
-  if (channel) await channel.setTyping?.(msg.chat_jid, true);
-  const response = await runAgent(agent, prompt, msg.chat_jid);
-  if (channel) await channel.setTyping?.(msg.chat_jid, false);
+  // Set up streaming if the channel supports it (Telegram)
+  let streamingMsgId: number | undefined;
+  let onText: ((text: string) => void) | undefined;
+  if (channel?.sendMessageWithId && channel?.editMessage) {
+    try {
+      streamingMsgId = await channel.sendMessageWithId(msg.chat_jid, '…');
+      let lastEditTime = 0;
+      onText = (text: string) => {
+        if (Date.now() - lastEditTime >= 800) {
+          lastEditTime = Date.now();
+          channel.editMessage!(msg.chat_jid, streamingMsgId!, text).catch(() => {});
+        }
+      };
+    } catch (err) {
+      logger.debug({ err }, 'Failed to send streaming placeholder');
+    }
+  }
 
-  if (response && channel) {
-    const cleaned = stripInternalTags(response);
+  if (!streamingMsgId && channel) await channel.setTyping?.(msg.chat_jid, true);
+  const response = await runAgent(agent, prompt, msg.chat_jid, onText);
+  if (!streamingMsgId && channel) await channel.setTyping?.(msg.chat_jid, false);
+
+  if (channel) {
+    const cleaned = response ? stripInternalTags(response) : null;
     if (cleaned && !isNonResponse(cleaned)) {
       lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
-      await channel.sendMessage(msg.chat_jid, cleaned);
-
+      if (streamingMsgId && channel.editMessage) {
+        await channel.editMessage(msg.chat_jid, streamingMsgId, cleaned);
+      } else {
+        await channel.sendMessage(msg.chat_jid, cleaned);
+      }
       if (isVoice && channel.sendMedia) {
         const audio = await generateSpeech(cleaned);
         if (audio) {
           await channel.sendMedia(msg.chat_jid, 'audio', { buffer: audio }, { ptt: true });
         }
       }
+    } else if (streamingMsgId && channel.deleteMessage) {
+      await channel.deleteMessage(msg.chat_jid, streamingMsgId).catch(() => {});
     }
   }
 }
@@ -291,6 +314,7 @@ async function runAgent(
   agent: RegisteredAgent,
   prompt: string,
   chatJid: string,
+  onText?: (text: string) => void,
 ): Promise<string | null> {
   const isMain = agent.folder === MAIN_AGENT_FOLDER;
   const sessionId = sessions[agent.folder];
@@ -313,6 +337,7 @@ async function runAgent(
       agentFolder: agent.folder,
       chatJid,
       isMain,
+      onText,
     });
 
     if (output.newSessionId) {
