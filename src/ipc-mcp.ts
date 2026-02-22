@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 import { indexMemoryFiles, searchMemory } from './db.js';
-import { AGENTS_DIR, CONTEXT_DIR } from './config.js';
+import { AGENTS_DIR, CONTEXT_DIR, localDate, localTime } from './config.js';
 
 export interface IpcMcpContext {
   chatJid: string;
@@ -561,13 +561,9 @@ Prefer this over Write/Edit for memory — it handles paths and indexing for you
           const memoryDir = path.join(agentDir, 'memory');
           fs.mkdirSync(memoryDir, { recursive: true });
 
-          const date = new Date().toISOString().split('T')[0];
+          const date = localDate();
           const memoryFile = path.join(memoryDir, `${date}.md`);
-          const time = new Date().toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true,
-          });
+          const time = localTime();
 
           const header = args.topic ? `## ${args.topic} (${time})` : `## ${time}`;
           const entry = `\n${header}\n\n${args.content}\n`;

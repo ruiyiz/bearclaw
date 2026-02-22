@@ -17,6 +17,8 @@ import {
   TELEGRAM_ONLY,
   TIMEZONE,
   STT_ECHO_ENABLED,
+  localDate,
+  localHour,
 } from './config.js';
 import {
   AvailableGroup,
@@ -769,12 +771,12 @@ async function processTaskIpc(
 
 function checkSessionResets(): void {
   const now = new Date();
-  const today = now.toISOString().split('T')[0];
+  const today = localDate(now);
   let changed = false;
 
   // Daily reset at configured hour
   if (SESSION_RESET_HOUR >= 0 && SESSION_RESET_HOUR <= 23) {
-    if (now.getHours() === SESSION_RESET_HOUR && lastDailyReset !== today) {
+    if (localHour(now) === SESSION_RESET_HOUR && lastDailyReset !== today) {
       const folders = Object.keys(sessions);
       if (folders.length > 0) {
         for (const folder of folders) {

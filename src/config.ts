@@ -75,7 +75,25 @@ MEMORY: Read odyssey-log.md in your working directory (create it if missing). Th
 If nothing needs attention, reply with exactly: ODYSSEY_OK
 If something does need attention, take action (send messages, run commands, etc.) and describe what you did. Do NOT include ODYSSEY_OK in your response if you took action.`;
 
-// Timezone for scheduled tasks (cron expressions, etc.)
-// Uses system timezone by default
+// Timezone — uses TZ env var or system default
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+export function localDate(d = new Date()): string {
+  return d.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+}
+
+export function localTime(d = new Date()): string {
+  return d.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: TIMEZONE,
+  });
+}
+
+export function localHour(d = new Date()): number {
+  return parseInt(
+    d.toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: TIMEZONE }),
+  );
+}

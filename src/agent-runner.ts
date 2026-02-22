@@ -12,6 +12,9 @@ import {
   CONTEXT_DIR,
   DATA_DIR,
   NANOCLAW_HOME,
+  TIMEZONE,
+  localDate,
+  localTime,
 } from './config.js';
 import { createIpcMcp } from './ipc-mcp.js';
 import { emitEvent } from './db.js';
@@ -106,16 +109,12 @@ function flushMemoryFromTranscript(
   messages: ParsedMessage[],
   summary: string | null,
 ): void {
-  const date = new Date().toISOString().split('T')[0];
+  const date = localDate();
   const memoryDir = path.join(agentDir, 'memory');
   fs.mkdirSync(memoryDir, { recursive: true });
 
   const memoryFile = path.join(memoryDir, `${date}.md`);
-  const time = new Date().toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
+  const time = localTime();
 
   // Extract the last few user messages and assistant responses as context
   const recentMessages = messages.slice(-6);
@@ -237,7 +236,8 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-    hour12: true
+    hour12: true,
+    timeZone: TIMEZONE,
   });
 
   const lines: string[] = [];
