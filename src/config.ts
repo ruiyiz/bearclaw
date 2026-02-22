@@ -54,6 +54,8 @@ export const SESSION_IDLE_MINUTES = parseInt(
   10,
 );
 
+export const STT_ECHO_ENABLED = process.env.STT_ECHO_ENABLED !== 'false';
+
 export const EMAIL_DEFAULT_INTERVAL = '1h';
 export const EMAIL_HANDLER_PREFIX = 'email-';
 

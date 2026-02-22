@@ -16,6 +16,7 @@ import {
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
   TIMEZONE,
+  STT_ECHO_ENABLED,
 } from './config.js';
 import {
   AvailableGroup,
@@ -240,7 +241,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
   const isVoice = content.startsWith('[Voice message]');
   const channel = findChannel(channels, msg.chat_jid);
 
-  if (isVoice && channel) {
+  if (isVoice && channel && STT_ECHO_ENABLED) {
     const transcription = content.replace(/^\[Voice message\]\s*/, '');
     if (transcription) {
       await channel.sendMessage(msg.chat_jid, `> ${transcription}`);
