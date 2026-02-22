@@ -61,6 +61,7 @@ let sessionLastActivity: Record<string, string> = {};
 let lastDailyReset = '';
 let messageLoopRunning = false;
 let ipcWatcherRunning = false;
+const folderQueues = new Map<string, Promise<void>>();
 
 const channels: Channel[] = [];
 
@@ -326,6 +327,9 @@ async function runAgent(
         { agent: agent.name, error: output.error },
         'Container agent error',
       );
+      if (output.timedOut) {
+        return "Sorry, I ran out of time on that one. Try again?";
+      }
       return null;
     }
 
@@ -849,17 +853,15 @@ async function startMessageLoop(): Promise<void> {
       if (messages.length > 0)
         logger.info({ count: messages.length }, 'New messages');
       for (const msg of messages) {
-        try {
-          await processMessage(msg);
-          lastTimestamp = msg.timestamp;
-          saveState();
-        } catch (err) {
-          logger.error(
-            { err, msg: msg.id },
-            'Error processing message, will retry',
-          );
-          break;
-        }
+        lastTimestamp = msg.timestamp;
+        saveState();
+        const agent = registeredAgents[msg.chat_jid];
+        const folderKey = agent?.folder ?? msg.chat_jid;
+        const prev = folderQueues.get(folderKey) ?? Promise.resolve();
+        const next = prev
+          .then(() => processMessage(msg))
+          .catch((err) => logger.error({ err, msg: msg.id }, 'Error processing message'));
+        folderQueues.set(folderKey, next);
       }
     } catch (err) {
       logger.error({ err }, 'Error in message loop');

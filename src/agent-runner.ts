@@ -37,6 +37,7 @@ export interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  timedOut?: boolean;
 }
 
 interface SessionEntry {
@@ -330,7 +331,9 @@ export async function runContainerAgent(
   // Timeout via AbortController
   const abortController = new AbortController();
   const timeout = group.containerConfig?.timeout || AGENT_TIMEOUT;
+  let timedOut = false;
   const timeoutHandle = setTimeout(() => {
+    timedOut = true;
     logger.error({ group: group.name }, `Agent timeout after ${timeout}ms, aborting`);
     abortController.abort();
   }, timeout);
@@ -476,6 +479,7 @@ export async function runContainerAgent(
       result: null,
       newSessionId,
       error: errorMessage,
+      timedOut,
     };
   }
 }
