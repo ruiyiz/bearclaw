@@ -7,9 +7,18 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { CronExpressionParser } from 'cron-parser';
 import { indexMemoryFiles, searchMemory } from './db.js';
 import { AGENTS_DIR, CONTEXT_DIR, localDate, localTime } from './config.js';
+import {
+  startSubprocess,
+  readSubprocessOutput,
+  writeSubprocessInput,
+  pollSubprocess,
+  killSubprocess,
+  listSubprocesses,
+} from './subprocess-manager.js';
 
 export interface IpcMcpContext {
   chatJid: string;
@@ -52,6 +61,26 @@ async function waitForResult(resultsDir: string, requestId: string, maxWait = 60
   }
 
   return { success: false, message: 'Request timed out' };
+}
+
+function injectSettingsHooks(workdir: string, hooks: Record<string, string>, sessionId: string): void {
+  const claudeDir = path.join(workdir, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+
+  const settingsFile = path.join(claudeDir, 'settings.local.json');
+  let settings: Record<string, unknown> = {};
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')) as Record<string, unknown>;
+  } catch { /* no existing settings */ }
+
+  const existing = (settings.hooks as Record<string, unknown[]>) || {};
+  for (const [hookName, cmdTemplate] of Object.entries(hooks)) {
+    const cmd = cmdTemplate.replace(/\{sessionId\}/g, sessionId);
+    existing[hookName] = [{ hooks: [{ type: 'command', command: cmd }] }];
+  }
+  settings.hooks = existing;
+
+  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
 }
 
 export function createIpcMcp(ctx: IpcMcpContext) {
@@ -533,6 +562,153 @@ Use this to recall past context, decisions, or conversation details.`,
           return {
             content: [{ type: 'text', text: formatted }],
           };
+        }
+      ),
+
+      // ─── Subprocess tools ────────────────────────────────────────────────
+
+      tool(
+        'subprocess_start',
+        `Spawn a PTY subprocess and optionally register event handlers for completion/notifications.
+
+PTY exit always fires a subprocess_exit event (universal). Additional notification wiring depends on the CLI tool — see the claude-code-cli and codex-cli skills for the exact parameters to pass.
+
+on_exit: one-shot handler prompt that runs when the subprocess exits.
+on_notification: repeating handler prompt that runs on each subprocess_notification event.
+settings_hooks: written to {workdir}/.claude/settings.local.json before spawn (Claude Code). Map of hook name → command template with {sessionId} placeholder.
+prompt_suffix: appended to the command string before spawn (other CLIs). Use {sessionId} placeholder.
+
+Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
+        {
+          name: z.string().optional().describe('Short human-readable name for this session (e.g. "auth-fix", "youtube-skill")'),
+          description: z.string().optional().describe('What this session is doing — shown in subprocess_list so the agent can distinguish sessions'),
+          command: z.string().describe('Shell command to run'),
+          workdir: z.string().optional().describe('Working directory (absolute or ~/relative)'),
+          cols: z.number().default(220).describe('Terminal columns (default: 220)'),
+          rows: z.number().default(50).describe('Terminal rows (default: 50)'),
+          on_exit: z.string().optional().describe('Agent prompt to run when subprocess exits (one-shot)'),
+          on_notification: z.string().optional().describe('Agent prompt to run on each subprocess_notification event (repeating)'),
+          settings_hooks: z.record(z.string(), z.string()).optional().describe('Hook name → command template. Written to {workdir}/.claude/settings.local.json before spawn. Use {sessionId} in commands.'),
+          prompt_suffix: z.string().optional().describe('Appended to command before spawn. Use {sessionId} as placeholder.'),
+        },
+        async (args) => {
+          try {
+            const resolvedWorkdir = args.workdir
+              ? path.resolve(args.workdir.replace(/^~/, os.homedir()))
+              : undefined;
+
+            const pre_spawn = args.settings_hooks
+              ? (sessionId: string) => injectSettingsHooks(resolvedWorkdir!, args.settings_hooks!, sessionId)
+              : undefined;
+
+            const sessionId = startSubprocess({
+              name: args.name,
+              description: args.description,
+              command: args.command,
+              workdir: args.workdir,
+              agentFolder,
+              chatJid,
+              cols: args.cols,
+              rows: args.rows,
+              on_exit: args.on_exit,
+              on_notification: args.on_notification,
+              prompt_suffix: args.prompt_suffix,
+              pre_spawn,
+            });
+            return {
+              content: [{ type: 'text', text: JSON.stringify({ sessionId }) }]
+            };
+          } catch (err) {
+            return {
+              content: [{ type: 'text', text: `Failed to start subprocess: ${err instanceof Error ? err.message : String(err)}` }],
+              isError: true
+            };
+          }
+        }
+      ),
+
+      tool(
+        'subprocess_read',
+        'Read buffered output from a subprocess. Use offset from previous call to get only new output.',
+        {
+          session_id: z.string().describe('Session ID from subprocess_start'),
+          offset: z.number().default(0).describe('Byte offset from previous read (default: 0 = read all)'),
+        },
+        async (args) => {
+          const result = readSubprocessOutput(args.session_id, args.offset);
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result) }]
+          };
+        }
+      ),
+
+      tool(
+        'subprocess_write',
+        'Write input to a running subprocess stdin. Use \\r for Enter.',
+        {
+          session_id: z.string().describe('Session ID from subprocess_start'),
+          data: z.string().describe('Data to write (use \\r for Enter, \\x03 for Ctrl+C)'),
+        },
+        async (args) => {
+          const ok = writeSubprocessInput(args.session_id, args.data);
+          return {
+            content: [{ type: 'text', text: ok ? 'Written.' : 'Subprocess not found or not running.' }],
+            isError: !ok
+          };
+        }
+      ),
+
+      tool(
+        'subprocess_poll',
+        'Check the status of a subprocess (running/exited, exit code, PID).',
+        {
+          session_id: z.string().describe('Session ID from subprocess_start'),
+        },
+        async (args) => {
+          const state = pollSubprocess(args.session_id);
+          if (!state) {
+            return {
+              content: [{ type: 'text', text: 'Session not found.' }],
+              isError: true
+            };
+          }
+          return {
+            content: [{ type: 'text', text: JSON.stringify(state) }]
+          };
+        }
+      ),
+
+      tool(
+        'subprocess_kill',
+        'Terminate a running subprocess.',
+        {
+          session_id: z.string().describe('Session ID from subprocess_start'),
+        },
+        async (args) => {
+          const ok = killSubprocess(args.session_id);
+          return {
+            content: [{ type: 'text', text: ok ? 'Process killed.' : 'Subprocess not found or already exited.' }],
+            isError: !ok
+          };
+        }
+      ),
+
+      tool(
+        'subprocess_list',
+        'List all subprocess sessions (running and exited).',
+        {},
+        async () => {
+          const sessions = listSubprocesses();
+          if (sessions.length === 0) {
+            return { content: [{ type: 'text', text: 'No subprocess sessions found.' }] };
+          }
+          const summary = sessions.map(s => {
+            const label = s.name ? `[${s.name}] ${s.sessionId}` : `[${s.sessionId}]`;
+            const desc = s.description ? `\n  ${s.description}` : '';
+            const detail = `${s.status} pid=${s.pid} workdir=${s.workdir || '~'}`;
+            return `${label} ${detail}${desc}`;
+          }).join('\n');
+          return { content: [{ type: 'text', text: summary }] };
         }
       ),
 

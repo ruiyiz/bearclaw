@@ -52,6 +52,7 @@ import { generateSpeech } from './tts.js';
 import { Channel, MediaType, NewMessage, RegisteredAgent, Session } from './types.js';
 import { loadJson, saveJson } from './utils.js';
 import { logger } from './logger.js';
+import { initSubprocessManager } from './subprocess-manager.js';
 
 let lastTimestamp = '';
 let sessions: Session = {};
@@ -917,6 +918,7 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   migrateToAgents();
   loadState();
+  initSubprocessManager();
 
   registerOdysseyHandlers(registeredAgents);
   registerEmailHandlers(registeredAgents);
