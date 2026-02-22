@@ -834,6 +834,23 @@ function startSessionResetLoop(): void {
   );
 }
 
+function dispatchMessage(msg: NewMessage): void {
+  const agent = registeredAgents[msg.chat_jid];
+  if (!agent) return;
+  const botPrefixes = DISPLAY_NAME !== ASSISTANT_NAME
+    ? [DISPLAY_NAME, ASSISTANT_NAME]
+    : [ASSISTANT_NAME];
+  if (botPrefixes.some(p => msg.content.startsWith(`${p}:`))) return;
+
+  lastTimestamp = msg.timestamp;
+  saveState();
+  const prev = folderQueues.get(agent.folder) ?? Promise.resolve();
+  const next = prev
+    .then(() => processMessage(msg))
+    .catch((err) => logger.error({ err, msg: msg.id }, 'Error processing message'));
+  folderQueues.set(agent.folder, next);
+}
+
 async function startMessageLoop(): Promise<void> {
   if (messageLoopRunning) {
     logger.debug('Message loop already running, skipping duplicate start');
@@ -844,24 +861,15 @@ async function startMessageLoop(): Promise<void> {
 
   while (true) {
     try {
+      // Recovery sweep: catches messages missed during channel disconnects or restarts
       const jids = Object.keys(registeredAgents);
       const botPrefixes = DISPLAY_NAME !== ASSISTANT_NAME
         ? [DISPLAY_NAME, ASSISTANT_NAME]
         : [ASSISTANT_NAME];
       const { messages } = getNewMessages(jids, lastTimestamp, botPrefixes);
-
-      if (messages.length > 0)
-        logger.info({ count: messages.length }, 'New messages');
-      for (const msg of messages) {
-        lastTimestamp = msg.timestamp;
-        saveState();
-        const agent = registeredAgents[msg.chat_jid];
-        const folderKey = agent?.folder ?? msg.chat_jid;
-        const prev = folderQueues.get(folderKey) ?? Promise.resolve();
-        const next = prev
-          .then(() => processMessage(msg))
-          .catch((err) => logger.error({ err, msg: msg.id }, 'Error processing message'));
-        folderQueues.set(folderKey, next);
+      if (messages.length > 0) {
+        logger.info({ count: messages.length }, 'Recovery: dispatching missed messages');
+        for (const msg of messages) dispatchMessage(msg);
       }
     } catch (err) {
       logger.error({ err }, 'Error in message loop');
@@ -882,7 +890,7 @@ async function main(): Promise<void> {
   // Initialize channels based on config
   if (!TELEGRAM_ONLY) {
     const whatsapp = new WhatsAppChannel({
-      onMessage: (_chatJid, msg) => storeMessage(msg),
+      onMessage: (_chatJid, msg) => { storeMessage(msg); dispatchMessage(msg); },
       onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
       registeredAgents: () => registeredAgents,
     });
@@ -892,7 +900,7 @@ async function main(): Promise<void> {
 
   if (TELEGRAM_BOT_TOKEN) {
     const telegram = new TelegramChannel(TELEGRAM_BOT_TOKEN, {
-      onMessage: (_chatJid, msg) => storeMessage(msg),
+      onMessage: (_chatJid, msg) => { storeMessage(msg); dispatchMessage(msg); },
       onChatMetadata: (chatJid, timestamp, name) => storeChatMetadata(chatJid, timestamp, name),
       registeredAgents: () => registeredAgents,
     });

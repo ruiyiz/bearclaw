@@ -16,7 +16,7 @@ export const TELEGRAM_BOT_POOL = (process.env.TELEGRAM_BOT_POOL || '')
 
 export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Andy';
 export const DISPLAY_NAME = process.env.DISPLAY_NAME || ASSISTANT_NAME;
-export const POLL_INTERVAL = 2000;
+export const POLL_INTERVAL = 30000; // Recovery sweep interval; normal dispatch is event-driven
 export const SCHEDULER_POLL_INTERVAL = 60000;
 export const EVENT_POLL_INTERVAL = 5000;
 
