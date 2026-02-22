@@ -45,6 +45,7 @@ import { startEventBusLoop } from './event-bus.js';
 import { registerOdysseyHandlers } from './odyssey.js';
 import { findChannel } from './router.js';
 import { startSchedulerEmitter } from './task-scheduler.js';
+import { generateSpeech } from './tts.js';
 import { Channel, MediaType, NewMessage, RegisteredAgent, Session } from './types.js';
 import { loadJson, saveJson } from './utils.js';
 import { logger } from './logger.js';
@@ -236,7 +237,16 @@ async function processMessage(msg: NewMessage): Promise<void> {
     'Processing message',
   );
 
+  const isVoice = content.startsWith('[Voice message]');
   const channel = findChannel(channels, msg.chat_jid);
+
+  if (isVoice && channel) {
+    const transcription = content.replace(/^\[Voice message\]\s*/, '');
+    if (transcription) {
+      await channel.sendMessage(msg.chat_jid, `> ${transcription}`);
+    }
+  }
+
   if (channel) await channel.setTyping?.(msg.chat_jid, true);
   const response = await runAgent(agent, prompt, msg.chat_jid);
   if (channel) await channel.setTyping?.(msg.chat_jid, false);
@@ -246,6 +256,13 @@ async function processMessage(msg: NewMessage): Promise<void> {
     if (cleaned && !isNonResponse(cleaned)) {
       lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
       await channel.sendMessage(msg.chat_jid, cleaned);
+
+      if (isVoice && channel.sendMedia) {
+        const audio = await generateSpeech(cleaned);
+        if (audio) {
+          await channel.sendMedia(msg.chat_jid, 'audio', { buffer: audio }, { ptt: true });
+        }
+      }
     }
   }
 }
@@ -253,6 +270,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
 function stripInternalTags(text: string): string {
   return text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
 }
+
 
 function isNonResponse(text: string): boolean {
   const normalized = text.trim().toLowerCase().replace(/[.\s]+$/g, '');
@@ -394,10 +412,11 @@ function startIpcWatcher(): void {
                       const fileName = data.fileName || (data.filePath ? path.basename(data.filePath) : undefined);
                       const mimetype = data.mimetype || guessMimetype(data.filePath || data.mediaUrl || '');
 
+                      const ptt = (data as any).ptt || false;
                       if (data.sender && ipcChannel.sendMediaAsAgent) {
-                        await ipcChannel.sendMediaAsAgent(targetJid, mediaType, mediaSource, { caption, fileName, mimetype }, data.sender, sourceAgent);
+                        await ipcChannel.sendMediaAsAgent(targetJid, mediaType, mediaSource, { caption, fileName, mimetype, ptt }, data.sender, sourceAgent);
                       } else {
-                        await ipcChannel.sendMedia(targetJid, mediaType, mediaSource, { caption, fileName, mimetype });
+                        await ipcChannel.sendMedia(targetJid, mediaType, mediaSource, { caption, fileName, mimetype, ptt });
                       }
                     } else if (!mediaSource) {
                       logger.error({ targetJid, sourceAgent }, 'Could not resolve media source');

@@ -49,9 +49,17 @@ During long conversations, proactively use memory_write to save important decisi
 Do not wait until the end. Your context may be compacted without warning.
 `;
 
+const VOICE = `
+## Voice Mode
+
+When the user's message starts with [Voice message], they sent you audio.
+Your text response will automatically be converted to a voice note and sent alongside the text.
+`;
+
 export const SYSTEM_PROMPT = [
   WORKSPACE,
   RESPONSES,
   SCHEDULED_TASKS,
   MEMORY,
+  VOICE,
 ].map((s) => s.trim()).join('\n\n');

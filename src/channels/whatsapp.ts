@@ -116,6 +116,7 @@ export class WhatsAppChannel implements Channel {
     this.sock.ev.on('messages.upsert', async ({ messages }) => {
       for (const msg of messages) {
         if (!msg.message) continue;
+        if (msg.key.fromMe) continue;
         const rawJid = msg.key.remoteJid;
         if (!rawJid || rawJid === 'status@broadcast') continue;
 
@@ -172,7 +173,11 @@ export class WhatsAppChannel implements Channel {
           await this.sock.sendMessage(jid, { video: media, caption });
           break;
         case 'audio':
-          await this.sock.sendMessage(jid, { audio: media, mimetype: options?.mimetype || 'audio/mpeg' });
+          await this.sock.sendMessage(jid, {
+            audio: media,
+            mimetype: options?.mimetype || 'audio/ogg; codecs=opus',
+            ptt: options?.ptt || false,
+          });
           break;
       }
       logger.info({ jid, type }, 'WhatsApp media sent');

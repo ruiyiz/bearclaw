@@ -12,6 +12,7 @@ export interface MediaOptions {
   caption?: string;
   fileName?: string;
   mimetype?: string;
+  ptt?: boolean;
 }
 
 export interface Channel {

@@ -375,7 +375,11 @@ export class TelegramChannel implements Channel {
           await this.bot.api.sendVideo(numericId, input, { caption });
           break;
         case 'audio':
-          await this.bot.api.sendAudio(numericId, input, { caption });
+          if (options?.ptt) {
+            await this.bot.api.sendVoice(numericId, input, { caption });
+          } else {
+            await this.bot.api.sendAudio(numericId, input, { caption });
+          }
           break;
       }
       logger.info({ jid, type }, 'Telegram media sent');

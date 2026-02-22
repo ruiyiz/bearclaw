@@ -83,7 +83,8 @@ The text parameter becomes the caption for media messages. For documents, also p
           file_path: z.string().optional().describe('Local file path for the media (absolute or relative to agent folder)'),
           media_url: z.string().optional().describe('URL of the media to send (alternative to file_path)'),
           file_name: z.string().optional().describe('Display file name for documents (e.g., "report.pdf")'),
-          mimetype: z.string().optional().describe('MIME type for documents (e.g., "application/pdf"). Auto-detected if omitted.')
+          mimetype: z.string().optional().describe('MIME type for documents (e.g., "application/pdf"). Auto-detected if omitted.'),
+          ptt: z.boolean().optional().describe('Send audio as a voice note (push-to-talk bubble)')
         },
         async (args) => {
           // Validation: must have text or media
@@ -116,6 +117,7 @@ The text parameter becomes the caption for media messages. For documents, also p
             data.mediaUrl = args.media_url || null;
             data.fileName = args.file_name || null;
             data.mimetype = args.mimetype || null;
+            data.ptt = args.ptt || false;
           }
 
           const filename = writeIpcFile(messagesDir, data);
