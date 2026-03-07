@@ -4,7 +4,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
+import { query, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 
 import {
   AGENT_TIMEOUT,
@@ -52,7 +52,7 @@ interface SessionsIndex {
   entries: SessionEntry[];
 }
 
-function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
+export function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
   const projectDir = path.dirname(transcriptPath);
   const indexPath = path.join(projectDir, 'sessions-index.json');
 
@@ -73,8 +73,6 @@ function getSessionSummary(sessionId: string, transcriptPath: string): string | 
   return null;
 }
 
-const DAILY_LOG_MAX_CHARS = 4000;
-
 function createSessionStartHook(agentDir: string): HookCallback {
   return async (_input, _toolUseId, _context) => {
     const today = new Date().toISOString().split('T')[0];
@@ -87,8 +85,8 @@ function createSessionStartHook(agentDir: string): HookCallback {
       if (fs.existsSync(filePath)) {
         let content = fs.readFileSync(filePath, 'utf-8').trim();
         if (content) {
-          if (content.length > DAILY_LOG_MAX_CHARS) {
-            content = content.slice(-DAILY_LOG_MAX_CHARS) + '\n[...truncated]';
+          if (content.length > 4000) {
+            content = content.slice(-4000) + '\n[...truncated]';
           }
           parts.push(`=== memory/${date}.md ===\n${content}`);
         }
@@ -106,88 +104,7 @@ function createSessionStartHook(agentDir: string): HookCallback {
   };
 }
 
-function flushMemoryFromTranscript(
-  agentDir: string,
-  messages: ParsedMessage[],
-  summary: string | null,
-): void {
-  const date = localDate();
-  const memoryDir = path.join(agentDir, 'memory');
-  fs.mkdirSync(memoryDir, { recursive: true });
-
-  const memoryFile = path.join(memoryDir, `${date}.md`);
-  const time = localTime();
-
-  // Extract the last few user messages and assistant responses as context
-  const recentMessages = messages.slice(-6);
-  const contextLines = recentMessages.map((m) => {
-    const prefix = m.role === 'user' ? 'User' : 'Assistant';
-    const text = m.content.length > 200 ? m.content.slice(0, 200) + '...' : m.content;
-    return `  - ${prefix}: ${text}`;
-  });
-
-  const entry = [
-    '',
-    `## Pre-compaction flush (${time})`,
-    '',
-    summary ? `Topic: ${summary}` : 'Topic: (no summary available)',
-    '',
-    'Recent context before compaction:',
-    ...contextLines,
-    '',
-  ].join('\n');
-
-  fs.appendFileSync(memoryFile, entry);
-  logger.debug({ memoryFile }, 'Memory flush written');
-}
-
-function createPreCompactHook(agentDir: string): HookCallback {
-  return async (input, _toolUseId, _context) => {
-    const preCompact = input as PreCompactHookInput;
-    const transcriptPath = preCompact.transcript_path;
-    const sessionId = preCompact.session_id;
-
-    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-      logger.debug('No transcript found for archiving');
-      return {};
-    }
-
-    try {
-      const content = fs.readFileSync(transcriptPath, 'utf-8');
-      const messages = parseTranscript(content);
-
-      if (messages.length === 0) {
-        logger.debug('No messages to archive');
-        return {};
-      }
-
-      const summary = getSessionSummary(sessionId, transcriptPath);
-      const name = summary ? sanitizeFilename(summary) : generateFallbackName();
-
-      // Flush recent context to daily memory log
-      flushMemoryFromTranscript(agentDir, messages, summary);
-
-      // Archive full transcript
-      const conversationsDir = path.join(agentDir, 'conversations');
-      fs.mkdirSync(conversationsDir, { recursive: true });
-
-      const date = new Date().toISOString().split('T')[0];
-      const filename = `${date}-${name}.md`;
-      const filePath = path.join(conversationsDir, filename);
-
-      const markdown = formatTranscriptMarkdown(messages, summary);
-      fs.writeFileSync(filePath, markdown);
-
-      logger.debug({ filePath }, 'Archived conversation');
-    } catch (err) {
-      logger.error({ err }, 'Failed to archive transcript');
-    }
-
-    return {};
-  };
-}
-
-function sanitizeFilename(summary: string): string {
+export function sanitizeFilename(summary: string): string {
   return summary
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -195,17 +112,17 @@ function sanitizeFilename(summary: string): string {
     .slice(0, 50);
 }
 
-function generateFallbackName(): string {
+export function generateFallbackName(): string {
   const time = new Date();
   return `conversation-${time.getHours().toString().padStart(2, '0')}${time.getMinutes().toString().padStart(2, '0')}`;
 }
 
-interface ParsedMessage {
+export interface ParsedMessage {
   role: 'user' | 'assistant';
   content: string;
 }
 
-function parseTranscript(content: string): ParsedMessage[] {
+export function parseTranscript(content: string): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
 
   for (const line of content.split('\n')) {
@@ -231,7 +148,7 @@ function parseTranscript(content: string): ParsedMessage[] {
   return messages;
 }
 
-function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | null): string {
+export function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | null): string {
   const now = new Date();
   const formatDateTime = (d: Date) => d.toLocaleString('en-US', {
     month: 'short',
@@ -375,7 +292,6 @@ export async function runContainerAgent(
         },
         hooks: {
           SessionStart: [{ hooks: [createSessionStartHook(agentDir)] }],
-          PreCompact: [{ hooks: [createPreCompactHook(agentDir)] }],
         }
       }
     })) {

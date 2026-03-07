@@ -51,6 +51,7 @@ import { startSchedulerEmitter } from './task-scheduler.js';
 import { generateSpeech } from './tts.js';
 import { Channel, MediaType, NewMessage, RegisteredAgent, Session } from './types.js';
 import { loadJson, saveJson } from './utils.js';
+import { startMemoryFlusher, flushBeforeSessionClear, initFlushCursors } from './memory-flusher.js';
 import { logger } from './logger.js';
 import { initSubprocessManager } from './subprocess-manager.js';
 
@@ -197,6 +198,9 @@ async function processMessage(msg: NewMessage): Promise<void> {
   }
 
   if (content === '/new' || content.toLowerCase().startsWith('/new ')) {
+    if (sessions[agent.folder]) {
+      flushBeforeSessionClear(agent.folder, sessions[agent.folder]);
+    }
     delete sessions[agent.folder];
     saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
     logger.info({ agent: agent.name }, 'Session cleared by user');
@@ -819,6 +823,9 @@ function checkSessionResets(): void {
       const folders = Object.keys(sessions);
       if (folders.length > 0) {
         for (const folder of folders) {
+          if (sessions[folder]) {
+            flushBeforeSessionClear(folder, sessions[folder]);
+          }
           delete sessions[folder];
           delete sessionLastActivity[folder];
         }
@@ -840,6 +847,9 @@ function checkSessionResets(): void {
     for (const folder of Object.keys(sessions)) {
       const lastActive = sessionLastActivity[folder];
       if (lastActive && new Date(lastActive).getTime() < cutoff) {
+        if (sessions[folder]) {
+          flushBeforeSessionClear(folder, sessions[folder]);
+        }
         delete sessions[folder];
         delete sessionLastActivity[folder];
         changed = true;
@@ -918,6 +928,8 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   migrateToAgents();
   loadState();
+  initFlushCursors(sessions);
+  startMemoryFlusher({ getSessions: () => sessions });
   initSubprocessManager();
 
   registerOdysseyHandlers(registeredAgents);
