@@ -505,7 +505,9 @@ Use available_groups.json to find the JID for a group. The folder name should be
           jid: z.string().describe('The WhatsApp JID (e.g., "120363336345536173@g.us")'),
           name: z.string().describe('Display name for the agent'),
           folder: z.string().describe('Folder name for agent files (lowercase, hyphens, e.g., "family-chat")'),
-          trigger: z.string().describe('Trigger word (e.g., "@Andy")')
+          trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
+          active_hours_cron: z.union([z.string(), z.array(z.string())]).optional().describe('Cron expression(s) defining when the agent is active. Pass a string or array of strings (OR logic). E.g. ["* 18-22 * * 1-5", "* * * * 0,6"] for weekday evenings + all-day weekends.'),
+          active_hours_reply: z.string().optional().describe('Custom auto-reply message sent when a message arrives outside active hours. Defaults to a message with the next active time.'),
         },
         async (args) => {
           if (!isMain) {
@@ -515,13 +517,19 @@ Use available_groups.json to find the JID for a group. The folder name should be
             };
           }
 
-          const data = {
+          const data: Record<string, unknown> = {
             type: 'register_agent',
             jid: args.jid,
             name: args.name,
             folder: args.folder,
             trigger: args.trigger,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            ...(args.active_hours_cron ? {
+              activeHours: {
+                cron: args.active_hours_cron,
+                ...(args.active_hours_reply ? { autoReply: args.active_hours_reply } : {}),
+              }
+            } : {}),
           };
 
           writeIpcFile(tasksDir, data);

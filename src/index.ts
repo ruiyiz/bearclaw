@@ -48,6 +48,7 @@ import {
 import { registerEmailHandlers, sendEmailReply, startEmailLoops } from './email-channel.js';
 import { startEventBusLoop } from './event-bus.js';
 import { registerOdysseyHandlers } from './odyssey.js';
+import { isInActiveWindow, getNextActiveTime, formatNextActiveTime } from './time-utils.js';
 import { findChannel } from './router.js';
 import { startSchedulerEmitter } from './task-scheduler.js';
 import { generateSpeech } from './tts.js';
@@ -66,6 +67,7 @@ let lastDailyReset = '';
 let messageLoopRunning = false;
 let ipcWatcherRunning = false;
 const folderQueues = new Map<string, Promise<void>>();
+const lastAutoReply: Record<string, string> = {}; // chat_jid → ISO timestamp of last off-hours reply
 
 const channels: Channel[] = [];
 
@@ -185,6 +187,32 @@ function getAvailableGroups(): AvailableGroup[] {
     }));
 }
 
+const AUTO_REPLY_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+
+async function handleOffHoursReply(msg: NewMessage, agent: RegisteredAgent): Promise<void> {
+  const last = lastAutoReply[msg.chat_jid];
+  if (last && Date.now() - new Date(last).getTime() < AUTO_REPLY_COOLDOWN_MS) return;
+
+  const ch = findChannel(channels, msg.chat_jid);
+  if (!ch) return;
+
+  let reply: string;
+  if (agent.activeHours?.autoReply) {
+    reply = agent.activeHours.autoReply;
+  } else {
+    try {
+      const nextTime = getNextActiveTime(agent.activeHours!.cron);
+      reply = `I'm currently offline. I'll be back ${formatNextActiveTime(nextTime)} and will catch up on messages then.`;
+    } catch {
+      reply = "I'm currently offline and will respond during active hours.";
+    }
+  }
+
+  await ch.sendMessage(msg.chat_jid, reply);
+  lastAutoReply[msg.chat_jid] = new Date().toISOString();
+  logger.debug({ agent: agent.name, jid: msg.chat_jid }, 'Sent off-hours auto-reply');
+}
+
 async function processMessage(msg: NewMessage): Promise<void> {
   const agent = registeredAgents[msg.chat_jid];
   if (!agent) return;
@@ -197,6 +225,11 @@ async function processMessage(msg: NewMessage): Promise<void> {
       const triggerPattern = new RegExp(`^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
       if (!triggerPattern.test(content)) return;
     }
+  }
+
+  if (agent.activeHours && !isInActiveWindow(agent.activeHours.cron)) {
+    await handleOffHoursReply(msg, agent);
+    return;
   }
 
   if (content === '/new' || content.toLowerCase().startsWith('/new ')) {
@@ -570,6 +603,7 @@ async function processTaskIpc(
     cooldownMs?: number;
     maxTriggers?: number | null;
     targetAgent?: string;
+    activeHours?: { cron: string; autoReply?: string };
   },
   sourceAgent: string,
   isMain: boolean,
@@ -782,6 +816,7 @@ async function processTaskIpc(
           folder: data.folder,
           trigger: data.trigger,
           added_at: new Date().toISOString(),
+          ...(data.activeHours ? { activeHours: data.activeHours } : {}),
         });
       } else {
         logger.warn(

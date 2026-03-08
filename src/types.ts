@@ -47,6 +47,11 @@ export interface EmailConfig {
   interval?: string;     // Poll interval: "30m", "1h", etc. Default: "1h"
 }
 
+export interface ActiveHoursConfig {
+  cron: string | string[];  // one or more cron expressions (OR logic); e.g. ["* 18-22 * * 1-5", "* * * * 0,6"]
+  autoReply?: string;       // custom off-hours message
+}
+
 export interface RegisteredAgent {
   name: string;
   folder: string;
@@ -55,6 +60,7 @@ export interface RegisteredAgent {
   containerConfig?: ContainerConfig;
   odyssey?: OdysseyConfig;
   email?: EmailConfig;
+  activeHours?: ActiveHoursConfig;
 }
 
 export interface Session {

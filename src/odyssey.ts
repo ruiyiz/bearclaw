@@ -8,57 +8,8 @@ import {
   updateHandler,
 } from './db.js';
 import { logger } from './logger.js';
-import { OdysseyConfig, RegisteredAgent } from './types.js';
-
-/**
- * Convert a human-friendly interval like "30m", "1h", "6h", "1d"
- * into a cron expression.
- */
-export function intervalToCron(interval: string): string {
-  const match = interval.match(/^(\d+)(m|h|d)$/);
-  if (!match) {
-    throw new Error(`Invalid interval format: "${interval}". Use e.g. "30m", "1h", "6h", "1d".`);
-  }
-
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-
-  switch (unit) {
-    case 'm':
-      if (value < 1 || value > 59) throw new Error(`Invalid minute interval: ${value}`);
-      return `*/${value} * * * *`;
-    case 'h':
-      if (value < 1 || value > 23) throw new Error(`Invalid hour interval: ${value}`);
-      return `0 */${value} * * *`;
-    case 'd':
-      if (value < 1 || value > 28) throw new Error(`Invalid day interval: ${value}`);
-      return `0 9 */${value} * *`; // Run at 9 AM
-    default:
-      throw new Error(`Unknown interval unit: ${unit}`);
-  }
-}
-
-/**
- * Check if the current time falls within a quiet period.
- * Handles overnight ranges like { start: "23:00", end: "07:00" }.
- */
-export function isInQuietPeriod(quiet: NonNullable<OdysseyConfig['quiet']>): boolean {
-  const now = new Date();
-  const localTime = new Date(now.toLocaleString('en-US', { timeZone: TIMEZONE }));
-  const currentMinutes = localTime.getHours() * 60 + localTime.getMinutes();
-
-  const [startH, startM] = quiet.start.split(':').map(Number);
-  const [endH, endM] = quiet.end.split(':').map(Number);
-  const startMinutes = startH * 60 + startM;
-  const endMinutes = endH * 60 + endM;
-
-  if (startMinutes <= endMinutes) {
-    // Same-day range, e.g. "09:00" to "17:00"
-    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
-  }
-  // Overnight range, e.g. "23:00" to "07:00"
-  return currentMinutes >= startMinutes || currentMinutes < endMinutes;
-}
+import { RegisteredAgent } from './types.js';
+import { intervalToCron, isInQuietPeriod } from './time-utils.js';
 
 /**
  * Register or update Odyssey handlers for all agents that have odyssey config.

@@ -22,7 +22,7 @@ import {
   writeHandlersSnapshot,
 } from './agent-runner.js';
 import { logger } from './logger.js';
-import { isInQuietPeriod } from './odyssey.js';
+import { isInQuietPeriod } from './time-utils.js';
 import { EventRecord, Handler, RegisteredAgent } from './types.js';
 
 export interface EventBusDependencies {
