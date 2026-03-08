@@ -212,6 +212,53 @@ export const WhatsAppRenderer: RendererObject = {
   },
 };
 
+export const PlainTextRenderer: RendererObject = {
+  strong({ tokens }) { return this.parser.parseInline(tokens); },
+  em({ tokens }) { return this.parser.parseInline(tokens); },
+  del({ tokens }) { return this.parser.parseInline(tokens); },
+  codespan({ text }) { return text; },
+  code({ text }) { return text + '\n'; },
+  heading({ tokens, depth }) {
+    const text = this.parser.parseInline(tokens);
+    const emoji = depth === 1 ? '◆' : depth === 2 ? '▸' : '•';
+    return `${emoji} ${text}\n\n`;
+  },
+  blockquote({ tokens }) { return this.parser.parse(tokens).trim() + '\n'; },
+  hr() { return '---\n'; },
+  list(token) {
+    let result = '';
+    for (let i = 0; i < token.items.length; i++) {
+      const item = token.items[i];
+      const body = this.parser.parse(item.tokens);
+      if (token.ordered) {
+        const start = typeof token.start === 'number' ? token.start : 1;
+        result += formatListItem(`${start + i}. `, body, '   ');
+      } else {
+        result += formatListItem('- ', body, '  ');
+      }
+    }
+    return result;
+  },
+  paragraph({ tokens }) { return this.parser.parseInline(tokens) + '\n'; },
+  link({ href, tokens }) {
+    const text = this.parser.parseInline(tokens);
+    return text === href ? href : `${text} (${href})`;
+  },
+  image({ text }) { return text; },
+  table(token) {
+    return renderTable(token.header, token.rows, (c) => this.parser.parseInline(c.tokens)) + '\n';
+  },
+  text(token) {
+    if ('tokens' in token && token.tokens) return this.parser.parseInline(token.tokens) + '\n';
+    return token.text;
+  },
+  br() { return '\n'; },
+  html() { return ''; },
+  space() { return '\n'; },
+  def() { return ''; },
+  checkbox({ checked }) { return checked ? '[x] ' : '[ ] '; },
+};
+
 export function renderMarkdown(
   markdown: string,
   renderer: RendererObject,

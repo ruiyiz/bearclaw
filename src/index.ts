@@ -7,6 +7,7 @@ import {
   DISPLAY_NAME,
   AGENTS_DIR,
   IPC_POLL_INTERVAL,
+  IMESSAGE_ENABLED,
   MAIN_AGENT_FOLDER,
   NANOCLAW_HOME,
   POLL_INTERVAL,
@@ -28,6 +29,7 @@ import {
 } from './agent-runner.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { initBotPool, TelegramChannel } from './channels/telegram.js';
+import { IMessageChannel } from './channels/imessage.js';
 import { guessMimetype, resolveMediaSource } from './media.js';
 import {
   createHandler,
@@ -174,7 +176,7 @@ function getAvailableGroups(): AvailableGroup[] {
   const registeredJids = new Set(Object.keys(registeredAgents));
 
   return chats
-    .filter((c) => c.jid !== '__group_sync__' && (c.jid.endsWith('@g.us') || c.jid.startsWith('tg:')))
+    .filter((c) => c.jid !== '__group_sync__' && (c.jid.endsWith('@g.us') || c.jid.startsWith('tg:') || c.jid.startsWith('imsg:')))
     .map((c) => ({
       jid: c.jid,
       name: c.name,
@@ -957,6 +959,16 @@ async function main(): Promise<void> {
     if (TELEGRAM_BOT_POOL.length > 0) {
       await initBotPool(TELEGRAM_BOT_POOL);
     }
+  }
+
+  if (IMESSAGE_ENABLED) {
+    const imessage = new IMessageChannel({
+      onMessage: (_chatJid, msg) => { storeMessage(msg); dispatchMessage(msg); },
+      onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
+      registeredAgents: () => registeredAgents,
+    });
+    channels.push(imessage);
+    await imessage.connect();
   }
 
   // Start all subsystems unconditionally
