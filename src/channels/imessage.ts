@@ -39,7 +39,7 @@ interface ImsgAttachment {
   transfer_name?: string;
 }
 
-const POLL_MS = 2000;
+const POLL_MS = 1000;
 
 export class IMessageChannel implements Channel {
   name = 'imessage';
