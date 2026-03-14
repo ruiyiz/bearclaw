@@ -5,11 +5,11 @@ import { ListView } from '../components/list-view.js';
 import { DetailPanel } from '../components/detail-panel.js';
 import { StatusBar } from '../components/status-bar.js';
 import type { ViewProps } from '../app.js';
-import { getRegisteredAgents, getAllHandlers, getOdysseyLogTail } from '../data.js';
+import { getRegisteredAgents, getAllHandlers, getHeartbeatLogTail } from '../data.js';
 import type { RegisteredAgent, Handler } from '../../types.js';
-import { ODYSSEY_HANDLER_PREFIX } from '../../config.js';
+import { HEARTBEAT_HANDLER_PREFIX } from '../../config.js';
 
-interface OdysseyAgent {
+interface HeartbeatAgent {
   agent: RegisteredAgent;
   handler?: Handler;
   status: 'active' | 'paused' | 'no config';
@@ -21,8 +21,8 @@ const STATUS_COLORS = {
   'no config': 'gray',
 } as const;
 
-export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
-  const [items, setItems] = useState<OdysseyAgent[]>([]);
+export function HeartbeatView({ listHeight, detailHeight }: ViewProps) {
+  const [items, setItems] = useState<HeartbeatAgent[]>([]);
   const [selected, setSelected] = useState(0);
   const [focusDetail, setFocusDetail] = useState(false);
 
@@ -40,12 +40,12 @@ export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
       handlers = [];
     }
 
-    const odysseyItems: OdysseyAgent[] = agents.map((a) => {
+    const heartbeatItems: HeartbeatAgent[] = agents.map((a) => {
       const handler = handlers.find(
-        (h) => h.id === `${ODYSSEY_HANDLER_PREFIX}${a.folder}`,
+        (h) => h.id === `${HEARTBEAT_HANDLER_PREFIX}${a.folder}`,
       );
 
-      if (!a.odyssey) {
+      if (!a.heartbeat) {
         return { agent: a, handler, status: 'no config' as const };
       }
 
@@ -56,7 +56,7 @@ export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
       };
     });
 
-    setItems(odysseyItems);
+    setItems(heartbeatItems);
   }, []);
 
   useInput((_, key) => {
@@ -74,15 +74,15 @@ export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
       `**Status:** ${item.status}`,
     ];
 
-    if (item.agent.odyssey) {
+    if (item.agent.heartbeat) {
       lines.push('', '### Config');
-      lines.push(`**Interval:** ${item.agent.odyssey.interval}`);
-      if (item.agent.odyssey.model) {
-        lines.push(`**Model:** ${item.agent.odyssey.model}`);
+      lines.push(`**Interval:** ${item.agent.heartbeat.interval}`);
+      if (item.agent.heartbeat.model) {
+        lines.push(`**Model:** ${item.agent.heartbeat.model}`);
       }
-      if (item.agent.odyssey.quiet) {
+      if (item.agent.heartbeat.quiet) {
         lines.push(
-          `**Quiet Hours:** ${item.agent.odyssey.quiet.start} - ${item.agent.odyssey.quiet.end}`,
+          `**Quiet Hours:** ${item.agent.heartbeat.quiet.start} - ${item.agent.heartbeat.quiet.end}`,
         );
       }
     }
@@ -97,7 +97,7 @@ export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
     }
 
     lines.push('', '### Recent Log');
-    lines.push(getOdysseyLogTail(item.agent.folder));
+    lines.push(getHeartbeatLogTail(item.agent.folder));
 
     detailContent = lines.join('\n');
   }
@@ -118,15 +118,15 @@ export function OdysseyView({ listHeight, detailHeight }: ViewProps) {
               <Text color={STATUS_COLORS[o.status]}>
                 [{o.status}]
               </Text>
-              {o.agent.odyssey && (
-                <Text dimColor>{o.agent.odyssey.interval}</Text>
+              {o.agent.heartbeat && (
+                <Text dimColor>{o.agent.heartbeat.interval}</Text>
               )}
             </Box>
           )}
         />
       </Box>
       <DetailPanel
-        title={item ? `${item.agent.name} — Odyssey` : 'Odyssey Details'}
+        title={item ? `${item.agent.name} — Heartbeat` : 'Heartbeat Details'}
         content={detailContent}
         height={detailHeight}
         isFocused={focusDetail}

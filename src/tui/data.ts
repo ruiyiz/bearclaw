@@ -508,18 +508,18 @@ export function readSkillContent(skillPath: string): string {
   }
 }
 
-// ─── Odyssey ────────────────────────────────────────────────────────────────
+// ─── Heartbeat ──────────────────────────────────────────────────────────────
 
-export function getOdysseyLogTail(
+export function getHeartbeatLogTail(
   agentFolder: string,
   lines = 20,
 ): string {
-  const logPath = path.join(AGENTS_DIR, agentFolder, 'odyssey-log.md');
+  const logPath = path.join(AGENTS_DIR, agentFolder, 'heartbeat-log.md');
   try {
     const content = fs.readFileSync(logPath, 'utf-8');
     const allLines = content.split('\n');
     return allLines.slice(-lines).join('\n');
   } catch {
-    return '(no odyssey log found)';
+    return '(no heartbeat log found)';
   }
 }

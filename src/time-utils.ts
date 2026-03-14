@@ -1,7 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 
 import { TIMEZONE } from './config.js';
-import { OdysseyConfig } from './types.js';
+import { HeartbeatConfig } from './types.js';
 
 /**
  * Convert a human-friendly interval like "30m", "1h", "6h", "1d"
@@ -35,7 +35,7 @@ export function intervalToCron(interval: string): string {
  * Check if the current time falls within a quiet period.
  * Handles overnight ranges like { start: "23:00", end: "07:00" }.
  */
-export function isInQuietPeriod(quiet: NonNullable<OdysseyConfig['quiet']>): boolean {
+export function isInQuietPeriod(quiet: NonNullable<HeartbeatConfig['quiet']>): boolean {
   const now = new Date();
   const localTime = new Date(now.toLocaleString('en-US', { timeZone: TIMEZONE }));
   const currentMinutes = localTime.getHours() * 60 + localTime.getMinutes();

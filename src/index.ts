@@ -47,7 +47,7 @@ import {
 } from './db.js';
 import { registerEmailHandlers, sendEmailReply, startEmailLoops } from './email-channel.js';
 import { startEventBusLoop } from './event-bus.js';
-import { registerOdysseyHandlers } from './odyssey.js';
+import { registerHeartbeatHandlers } from './heartbeat.js';
 import { isInActiveWindow, getNextActiveTime, formatNextActiveTime } from './time-utils.js';
 import { findChannel } from './router.js';
 import { startSchedulerEmitter } from './task-scheduler.js';
@@ -969,7 +969,7 @@ async function main(): Promise<void> {
   startMemoryFlusher({ getSessions: () => sessions });
   initSubprocessManager();
 
-  registerOdysseyHandlers(registeredAgents);
+  registerHeartbeatHandlers(registeredAgents);
   registerEmailHandlers(registeredAgents);
 
   // Initialize channels based on config

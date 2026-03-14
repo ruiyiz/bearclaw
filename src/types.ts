@@ -36,7 +36,7 @@ export interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }
 
-export interface OdysseyConfig {
+export interface HeartbeatConfig {
   interval: string; // "30m", "1h", "6h"
   model?: string; // optional model override (e.g., cheaper model for routine checks)
   quiet?: { start: string; end: string }; // e.g. { start: "23:00", end: "07:00" }
@@ -58,7 +58,7 @@ export interface RegisteredAgent {
   trigger: string;
   added_at: string;
   containerConfig?: ContainerConfig;
-  odyssey?: OdysseyConfig;
+  heartbeat?: HeartbeatConfig;
   email?: EmailConfig;
   activeHours?: ActiveHoursConfig;
 }

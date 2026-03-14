@@ -5,7 +5,7 @@ import {
   EVENT_POLL_INTERVAL,
   AGENTS_DIR,
   MAIN_AGENT_FOLDER,
-  ODYSSEY_HANDLER_PREFIX,
+  HEARTBEAT_HANDLER_PREFIX,
 } from './config.js';
 import {
   cleanupProcessedEvents,
@@ -62,13 +62,13 @@ async function runHandler(
     return;
   }
 
-  // Skip Odyssey handlers during quiet period
+  // Skip Heartbeat handlers during quiet period
   if (
-    handler.id.startsWith(ODYSSEY_HANDLER_PREFIX) &&
-    agent.odyssey?.quiet &&
-    isInQuietPeriod(agent.odyssey.quiet)
+    handler.id.startsWith(HEARTBEAT_HANDLER_PREFIX) &&
+    agent.heartbeat?.quiet &&
+    isInQuietPeriod(agent.heartbeat.quiet)
   ) {
-    logger.debug({ handlerId: handler.id }, 'Odyssey handler skipped (quiet period)');
+    logger.debug({ handlerId: handler.id }, 'Heartbeat handler skipped (quiet period)');
     return;
   }
 
@@ -114,9 +114,9 @@ ${handler.prompt}
   let error: string | null = null;
 
   try {
-    // Pass model override for Odyssey handlers
-    const model = handler.id.startsWith(ODYSSEY_HANDLER_PREFIX)
-      ? agent.odyssey?.model
+    // Pass model override for Heartbeat handlers
+    const model = handler.id.startsWith(HEARTBEAT_HANDLER_PREFIX)
+      ? agent.heartbeat?.model
       : undefined;
 
     const output = await runContainerAgent(agent, {

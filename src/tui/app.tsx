@@ -7,7 +7,7 @@ import { EventsView } from './views/events.js';
 import { HandlersView } from './views/handlers.js';
 import { AgentsView } from './views/agents.js';
 import { HealthView } from './views/health.js';
-import { OdysseyView } from './views/odyssey.js';
+import { HeartbeatView } from './views/heartbeat.js';
 
 export interface ViewProps {
   listHeight: number;
@@ -20,7 +20,7 @@ const TABS: Tab[] = [
   { key: 'handlers', label: 'Handlers', shortcut: '3' },
   { key: 'agents', label: 'Agents', shortcut: '4' },
   { key: 'health', label: 'Health', shortcut: '5' },
-  { key: 'odyssey', label: 'Odyssey', shortcut: '6' },
+  { key: 'heartbeat', label: 'Heartbeat', shortcut: '6' },
 ];
 
 const TAB_CHROME = 2; // tab bar + separator
@@ -61,8 +61,8 @@ export function App() {
         return <AgentsView {...props} />;
       case 'health':
         return <HealthView {...props} />;
-      case 'odyssey':
-        return <OdysseyView {...props} />;
+      case 'heartbeat':
+        return <HeartbeatView {...props} />;
       default:
         return null;
     }

@@ -41,12 +41,12 @@ export function AgentsView({ listHeight, detailHeight }: ViewProps) {
       lines.push(`**Timeout:** ${agent.containerConfig.timeout || 300000}ms`);
     }
 
-    if (agent.odyssey) {
-      lines.push('', '### Odyssey');
-      lines.push(`**Interval:** ${agent.odyssey.interval}`);
-      if (agent.odyssey.model) lines.push(`**Model:** ${agent.odyssey.model}`);
-      if (agent.odyssey.quiet) {
-        lines.push(`**Quiet:** ${agent.odyssey.quiet.start} - ${agent.odyssey.quiet.end}`);
+    if (agent.heartbeat) {
+      lines.push('', '### Heartbeat');
+      lines.push(`**Interval:** ${agent.heartbeat.interval}`);
+      if (agent.heartbeat.model) lines.push(`**Model:** ${agent.heartbeat.model}`);
+      if (agent.heartbeat.quiet) {
+        lines.push(`**Quiet:** ${agent.heartbeat.quiet.start} - ${agent.heartbeat.quiet.end}`);
       }
     }
 

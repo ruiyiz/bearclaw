@@ -198,7 +198,7 @@ export function startEmailLoops(agents: Record<string, RegisteredAgent>): void {
 
 /**
  * Register email_received handlers for all agents with email config.
- * Mirrors the Odyssey pattern: creates/updates/pauses handlers based on config.
+ * Mirrors the Heartbeat pattern: creates/updates/pauses handlers based on config.
  */
 export function registerEmailHandlers(agents: Record<string, RegisteredAgent>): void {
   const existingHandlers = getAllHandlers();

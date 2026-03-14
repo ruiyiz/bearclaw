@@ -61,21 +61,21 @@ export const STT_ECHO_ENABLED = process.env.STT_ECHO_ENABLED !== 'false';
 export const EMAIL_DEFAULT_INTERVAL = '1h';
 export const EMAIL_HANDLER_PREFIX = 'email-';
 
-// Odyssey — proactive agent initiative loop
-export const ODYSSEY_HANDLER_PREFIX = 'odyssey-';
+// Heartbeat — proactive agent initiative loop
+export const HEARTBEAT_HANDLER_PREFIX = 'heartbeat-';
 
-export const ODYSSEY_PROMPT = `[ODYSSEY — Proactive check-in. You are waking up on your own to look around.]
+export const HEARTBEAT_PROMPT = `[HEARTBEAT — Proactive check-in. You are waking up on your own to look around.]
 
-Read ODYSSEY.md in your working directory. Follow its instructions exactly.
-Do not infer tasks from previous conversations — only act on what ODYSSEY.md says.
+Read HEARTBEAT.md in your working directory. Follow its instructions exactly.
+Do not infer tasks from previous conversations — only act on what HEARTBEAT.md says.
 
-MEMORY: Read odyssey-log.md in your working directory (create it if missing). This is your persistent memory across runs. It tracks what you have already suggested, asked about, or acted on. Use it to avoid repeating yourself:
+MEMORY: Read heartbeat-log.md in your working directory (create it if missing). This is your persistent memory across runs. It tracks what you have already suggested, asked about, or acted on. Use it to avoid repeating yourself:
 - Before messaging the user, check if you already suggested or asked about the same thing recently.
 - If nothing has changed since your last check-in on a topic, do not bring it up again.
 - After each run, append a timestamped entry summarizing what you did or observed (keep the log concise — prune entries older than 7 days).
 
-If nothing needs attention, reply with exactly: ODYSSEY_OK
-If something does need attention, take action (send messages, run commands, etc.) and describe what you did. Do NOT include ODYSSEY_OK in your response if you took action.`;
+If nothing needs attention, reply with exactly: HEARTBEAT_OK
+If something does need attention, take action (send messages, run commands, etc.) and describe what you did. Do NOT include HEARTBEAT_OK in your response if you took action.`;
 
 // Timezone — uses TZ env var or system default
 export const TIMEZONE =
