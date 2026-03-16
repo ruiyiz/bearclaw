@@ -3,12 +3,11 @@
 set -euo pipefail
 
 NANOCLAW_HOME="${NANOCLAW_HOME:-$HOME/.nanoclaw}"
-APP_DIR="$HOME/Applications"
-APP_PATH="$APP_DIR/ImsgWatcher.app"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+APP_PATH="$HOME/Applications/ImsgWatcher.app"
 BINARY_PATH="$APP_PATH/Contents/MacOS/ImsgWatcher"
 PLIST_PATH="$HOME/Library/LaunchAgents/com.nanoclaw.imsg-watcher.plist"
 ENV_FILE="$NANOCLAW_HOME/.env"
-WATCH_FILE="$NANOCLAW_HOME/data/imsg-watch.jsonl"
 
 echo "==> Setting up iMessage channel"
 
@@ -22,84 +21,9 @@ if ! command -v swiftc &>/dev/null; then
   exit 1
 fi
 
-# Create app bundle structure
-echo "--> Creating ImsgWatcher.app"
-mkdir -p "$APP_PATH/Contents/MacOS"
-
-# Write Info.plist
-cat > "$APP_PATH/Contents/Info.plist" << 'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleIdentifier</key>
-    <string>com.nanoclaw.imsg-watcher</string>
-    <key>CFBundleName</key>
-    <string>ImsgWatcher</string>
-    <key>CFBundleExecutable</key>
-    <string>ImsgWatcher</string>
-    <key>CFBundleVersion</key>
-    <string>1.0</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>LSBackgroundOnly</key>
-    <true/>
-</dict>
-</plist>
-PLIST
-
-# Compile Swift binary
-echo "--> Compiling binary"
-SWIFT_SRC=$(mktemp /tmp/ImsgWatcher.XXXXXX.swift)
-cat > "$SWIFT_SRC" << 'SWIFT'
-import Foundation
-
-let home = FileManager.default.homeDirectoryForCurrentUser.path
-let outputPath = "\(home)/.nanoclaw/data/imsg-watch.jsonl"
-
-try? FileManager.default.createDirectory(
-    atPath: "\(home)/.nanoclaw/data",
-    withIntermediateDirectories: true
-)
-
-guard let outputFile = FileHandle(forWritingAtPath: outputPath) ?? {
-    FileManager.default.createFile(atPath: outputPath, contents: nil)
-    return FileHandle(forWritingAtPath: outputPath)
-}() else {
-    exit(1)
-}
-outputFile.seekToEndOfFile()
-
-let proc = Process()
-proc.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/imsg")
-proc.arguments = ["watch", "--json", "--attachments"]
-proc.standardOutput = outputFile
-proc.standardError = FileHandle.nullDevice
-
-try! proc.run()
-proc.waitUntilExit()
-SWIFT
-
-swiftc "$SWIFT_SRC" -o "$BINARY_PATH"
-rm "$SWIFT_SRC"
-
-# Sign with FDA entitlement
-echo "--> Signing app"
-ENTITLEMENTS=$(mktemp /tmp/imsg-entitlements.XXXXXX.plist)
-cat > "$ENTITLEMENTS" << 'ENT'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.files.all</key>
-    <true/>
-</dict>
-</plist>
-ENT
-codesign --force --sign - --options runtime --entitlements "$ENTITLEMENTS" "$APP_PATH"
-rm "$ENTITLEMENTS"
+# Build ImsgWatcher.app
+echo "--> Building ImsgWatcher.app"
+make -C "$REPO_DIR/imsg-watcher" build
 
 # Install LaunchAgent
 echo "--> Installing LaunchAgent"
