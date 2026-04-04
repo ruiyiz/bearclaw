@@ -66,7 +66,8 @@ export class WhatsAppChannel implements Channel {
         exec(
           `osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`,
         );
-        setTimeout(() => process.exit(1), 1000);
+        this.sock = null;
+        logger.warn('WhatsApp channel disabled (auth required). Other channels remain active.');
       }
 
       if (connection === 'close') {
@@ -79,8 +80,8 @@ export class WhatsAppChannel implements Channel {
           this.sock = null;
           this.connect();
         } else {
-          logger.info('Logged out. Run /setup to re-authenticate.');
-          process.exit(0);
+          logger.warn('WhatsApp logged out. Run /setup to re-authenticate. Other channels remain active.');
+          this.sock = null;
         }
       } else if (connection === 'open') {
         logger.info('Connected to WhatsApp');
