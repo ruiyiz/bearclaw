@@ -269,7 +269,7 @@ export async function runContainerAgent(
         abortController,
         cwd: agentDir,
         resume: input.sessionId,
-        model: input.model || 'claude-opus-4-6',
+        model: input.model || 'claude-opus-4-7',
         systemPrompt: {
           type: 'preset',
           preset: 'claude_code',
