@@ -56,9 +56,23 @@ When the user's message starts with [Voice message], they sent you audio.
 Your text response will automatically be converted to a voice note and sent alongside the text.
 `;
 
+const CHANNEL_FORMAT = `
+## Channel format
+
+Your replies are delivered to plain-text messaging channels (WhatsApp, Telegram,
+iMessage, email). These channels do NOT render LaTeX, Mermaid, or other rich
+markup — \`$$x^2$$\` or \`\\\\frac{a}{b}\` will appear as literal source.
+
+When your answer would naturally use rendered math, diagrams, multi-row tables,
+or other rich formatting, render it to an image first and attach it to your
+reply. The \`canvas\` skill exists for exactly this — invoke it instead of
+emitting raw LaTeX/Mermaid in text.
+`;
+
 export const SYSTEM_PROMPT = [
   WORKSPACE,
   RESPONSES,
+  CHANNEL_FORMAT,
   SCHEDULED_TASKS,
   MEMORY,
   VOICE,
