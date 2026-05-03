@@ -15,6 +15,15 @@ export interface TelegramChannelOpts {
   registeredAgents: () => Record<string, RegisteredAgent>;
 }
 
+// PNGs sent via sendPhoto get recompressed to JPEG and capped at ~1280px,
+// which destroys small text on canvas renders. Route them through sendDocument
+// to preserve byte-for-byte quality. JPEGs (user-forwarded photos) still go
+// through sendPhoto so they appear inline.
+function isPng(buffer: Buffer | undefined): boolean {
+  if (!buffer || buffer.length < 4) return false;
+  return buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+}
+
 export class TelegramChannel implements Channel {
   name = 'telegram';
 
@@ -391,7 +400,14 @@ export class TelegramChannel implements Channel {
 
       switch (type) {
         case 'image':
-          await this.bot.api.sendPhoto(numericId, input, { caption });
+          if (isPng(source.buffer)) {
+            const docInput = source.buffer
+              ? new InputFile(source.buffer, options?.fileName || 'canvas.png')
+              : input;
+            await this.bot.api.sendDocument(numericId, docInput, { caption });
+          } else {
+            await this.bot.api.sendPhoto(numericId, input, { caption });
+          }
           break;
         case 'document':
           await this.bot.api.sendDocument(numericId, input, { caption });
@@ -529,7 +545,14 @@ export async function sendPoolMessage(
 
       switch (media.type) {
         case 'image':
-          await api.sendPhoto(numericId, input, { caption });
+          if (isPng(media.source.buffer)) {
+            const docInput = media.source.buffer
+              ? new InputFile(media.source.buffer, media.options?.fileName || 'canvas.png')
+              : input;
+            await api.sendDocument(numericId, docInput, { caption });
+          } else {
+            await api.sendPhoto(numericId, input, { caption });
+          }
           break;
         case 'document':
           await api.sendDocument(numericId, input, { caption });
