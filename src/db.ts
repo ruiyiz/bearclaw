@@ -353,9 +353,19 @@ export function markEventProcessed(id: number): void {
 
 export function cleanupProcessedEvents(): void {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  db.prepare(
-    `DELETE FROM events WHERE processed = 1 AND emitted_at < ?`,
-  ).run(cutoff);
+  // handler_logs.event_id is a FK into events.id; delete dependent rows first
+  // so the events DELETE doesn't trip a FOREIGN KEY constraint failure.
+  db.transaction(() => {
+    db.prepare(
+      `DELETE FROM handler_logs
+       WHERE event_id IN (
+         SELECT id FROM events WHERE processed = 1 AND emitted_at < ?
+       )`,
+    ).run(cutoff);
+    db.prepare(
+      `DELETE FROM events WHERE processed = 1 AND emitted_at < ?`,
+    ).run(cutoff);
+  })();
 }
 
 // ─── Handler matching ──────────────────────────────────────────────────────
