@@ -24,43 +24,43 @@ A personal Claude assistant accessible via chat platforms (WhatsApp, Telegram, i
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                          HOST (macOS)                                 │
-│                     (Single Node.js Process)                          │
+│                          HOST (macOS)                                │
+│                     (Single Node.js Process)                         │
 ├──────────────────────────────────────────────────────────────────────┤
-│                                                                       │
+│                                                                      │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐   ┌─────────────┐          │
 │  │ WhatsApp │  │ Telegram │  │ iMessage │   │ Gmail (poll)│          │
 │  │ baileys  │  │ grammY   │  │ imsg cli │   │ gog cli     │          │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘   └─────┬───────┘          │
-│       │             │             │               │                   │
-│       └─────────────┴─────────────┘               │                   │
-│                     │                             ▼                   │
-│              ┌──────▼──────┐                ┌─────────────┐           │
-│              │   Router    │                │  Event Bus  │           │
-│              │ (per-agent  │                │ (handlers)  │           │
-│              │   queue)    │                └──────┬──────┘           │
-│              └──────┬──────┘                       │                  │
-│                     │                              │                  │
-│                     ▼                              ▼                  │
-│              ┌──────────────────────────────────────────────┐         │
-│              │           Agent Runner (in-process)          │         │
-│              │   query() ─→ Claude Agent SDK                │         │
-│              │   cwd: ~/.nanoclaw/agents/{folder}/          │         │
-│              │   tools: Bash, Read/Write/Edit, Web*, MCP    │         │
-│              │   mcpServers: { nanoclaw: ipcMcp, ... }      │         │
-│              └──────────────────────────────────────────────┘         │
-│                                                                       │
-│              ┌──────────────────────────────────────────────┐         │
-│              │              IPC Watcher (file-based)        │         │
-│              │   reads ~/.nanoclaw/data/ipc/{folder}/       │         │
-│              │   dispatches outbound messages, handler ops  │         │
-│              └──────────────────────────────────────────────┘         │
-│                                                                       │
-│              ┌──────────────────────────────────────────────┐         │
-│              │         SQLite (~/.nanoclaw/store/)          │         │
-│              │   chats, messages, events, handlers,         │         │
-│              │   handler_logs, memory_fts                   │         │
-│              └──────────────────────────────────────────────┘         │
+│       │             │             │               │                  │
+│       └─────────────┴─────────────┘               │                  │
+│                     │                             ▼                  │
+│              ┌──────▼──────┐                ┌─────────────┐          │
+│              │   Router    │                │  Event Bus  │          │
+│              │ (per-agent  │                │ (handlers)  │          │
+│              │   queue)    │                └──────┬──────┘          │
+│              └──────┬──────┘                       │                 │
+│                     │                              │                 │
+│                     ▼                              ▼                 │
+│              ┌──────────────────────────────────────────────┐        │
+│              │           Agent Runner (in-process)          │        │
+│              │   query() ─→ Claude Agent SDK                │        │
+│              │   cwd: ~/.nanoclaw/agents/{folder}/          │        │
+│              │   tools: Bash, Read/Write/Edit, Web*, MCP    │        │
+│              │   mcpServers: { nanoclaw: ipcMcp, ... }      │        │
+│              └──────────────────────────────────────────────┘        │
+│                                                                      │
+│              ┌──────────────────────────────────────────────┐        │
+│              │              IPC Watcher (file-based)        │        │
+│              │   reads ~/.nanoclaw/data/ipc/{folder}/       │        │
+│              │   dispatches outbound messages, handler ops  │        │
+│              └──────────────────────────────────────────────┘        │
+│                                                                      │
+│              ┌──────────────────────────────────────────────┐        │
+│              │         SQLite (~/.nanoclaw/store/)          │        │
+│              │   chats, messages, events, handlers,         │        │
+│              │   handler_logs, memory_fts                   │        │
+│              └──────────────────────────────────────────────┘        │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
