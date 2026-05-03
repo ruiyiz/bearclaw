@@ -25,15 +25,29 @@ export function registerHeartbeatHandlers(
       .map((h) => [h.id, h]),
   );
 
+  // Reduce agents to per-folder desired heartbeat config. Multiple agents may
+  // share a folder (e.g. iMessage + WhatsApp both routed to "coco"); the
+  // handler is per-folder, so any agent in that folder having heartbeat
+  // config wins (first one encountered).
+  const folderHeartbeat = new Map<string, NonNullable<RegisteredAgent['heartbeat']>>();
+  const allFolders = new Set<string>();
+  for (const agent of Object.values(agents)) {
+    allFolders.add(agent.folder);
+    if (agent.heartbeat && !folderHeartbeat.has(agent.folder)) {
+      folderHeartbeat.set(agent.folder, agent.heartbeat);
+    }
+  }
+
   const seenHandlerIds = new Set<string>();
 
-  for (const agent of Object.values(agents)) {
-    const handlerId = `${HEARTBEAT_HANDLER_PREFIX}${agent.folder}`;
+  for (const folder of allFolders) {
+    const handlerId = `${HEARTBEAT_HANDLER_PREFIX}${folder}`;
     seenHandlerIds.add(handlerId);
 
     const existing = heartbeatHandlers.get(handlerId);
+    const heartbeat = folderHeartbeat.get(folder);
 
-    if (!agent.heartbeat) {
+    if (!heartbeat) {
       if (existing && existing.status === 'active') {
         updateHandler(handlerId, { status: 'paused' });
         logger.info({ handlerId }, 'Heartbeat handler paused (config removed)');
@@ -41,7 +55,7 @@ export function registerHeartbeatHandlers(
       continue;
     }
 
-    const cron = intervalToCron(agent.heartbeat.interval);
+    const cron = intervalToCron(heartbeat.interval);
 
     if (existing) {
       if (existing.cron !== cron) {
@@ -67,7 +81,7 @@ export function registerHeartbeatHandlers(
 
     createHandler({
       id: handlerId,
-      group_folder: agent.folder,
+      group_folder: folder,
       prompt: HEARTBEAT_PROMPT,
       context_mode: 'isolated',
       event_type: 'cron_trigger',
@@ -81,7 +95,7 @@ export function registerHeartbeatHandlers(
     });
 
     logger.info(
-      { handlerId, folder: agent.folder, cron, nextRun },
+      { handlerId, folder, cron, nextRun },
       'Heartbeat handler created',
     );
   }

@@ -208,16 +208,26 @@ export function registerEmailHandlers(agents: Record<string, RegisteredAgent>): 
       .map((h) => [h.id, h]),
   );
 
+  // Reduce agents to per-folder desired email state. Multiple agents may share
+  // a folder (e.g. iMessage + WhatsApp both routed to "coco"); the handler is
+  // per-folder, so any agent in that folder having email config is enough.
+  const folderHasEmail = new Set<string>();
+  const allFolders = new Set<string>();
+  for (const agent of Object.values(agents)) {
+    allFolders.add(agent.folder);
+    if (agent.email) folderHasEmail.add(agent.folder);
+  }
+
   const seenHandlerIds = new Set<string>();
 
-  for (const agent of Object.values(agents)) {
-    const handlerId = `${EMAIL_HANDLER_PREFIX}${agent.folder}`;
+  for (const folder of allFolders) {
+    const handlerId = `${EMAIL_HANDLER_PREFIX}${folder}`;
     seenHandlerIds.add(handlerId);
 
     const existing = emailHandlers.get(handlerId);
 
-    if (!agent.email) {
-      // No email config — pause existing handler if any
+    if (!folderHasEmail.has(folder)) {
+      // No email config for this folder — pause existing handler if any
       if (existing && existing.status === 'active') {
         updateHandler(handlerId, { status: 'paused' });
         logger.info({ handlerId }, 'Email handler paused (config removed)');
@@ -225,7 +235,7 @@ export function registerEmailHandlers(agents: Record<string, RegisteredAgent>): 
       continue;
     }
 
-    const filter = JSON.stringify({ group_folder: agent.folder });
+    const filter = JSON.stringify({ group_folder: folder });
     const prompt = `Process this email. The event payload contains the full email (from, subject, body, thread_id, message_id).
 If a response is needed, use the reply_email tool. If no response is needed, do nothing.`;
 
@@ -245,7 +255,7 @@ If a response is needed, use the reply_email tool. If no response is needed, do 
     // Create new handler
     createHandler({
       id: handlerId,
-      group_folder: agent.folder,
+      group_folder: folder,
       prompt,
       context_mode: 'agent',
       event_type: 'email_received',
@@ -258,10 +268,10 @@ If a response is needed, use the reply_email tool. If no response is needed, do 
       created_at: new Date().toISOString(),
     });
 
-    logger.info({ handlerId, folder: agent.folder }, 'Email handler created');
+    logger.info({ handlerId, folder }, 'Email handler created');
   }
 
-  // Pause any email handlers for agents that no longer exist
+  // Pause any email handlers for folders that no longer exist
   for (const [handlerId, handler] of emailHandlers) {
     if (!seenHandlerIds.has(handlerId) && handler.status === 'active') {
       updateHandler(handlerId, { status: 'paused' });
