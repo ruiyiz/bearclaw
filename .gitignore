@@ -22,3 +22,6 @@ agents-sdk-docs
 
 # Worktrees
 .worktrees/
+
+# Claude Code runtime state
+.claude/*.lock
