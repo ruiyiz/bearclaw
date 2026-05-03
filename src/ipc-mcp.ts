@@ -25,6 +25,7 @@ export interface IpcMcpContext {
   agentFolder: string;
   isMain: boolean;
   ipcDir: string;
+  onSendMessage?: (info: { hasMedia: boolean }) => void;
 }
 
 function writeIpcFile(dir: string, data: object): string {
@@ -84,7 +85,7 @@ function injectSettingsHooks(workdir: string, hooks: Record<string, string>, ses
 }
 
 export function createIpcMcp(ctx: IpcMcpContext) {
-  const { chatJid, agentFolder, isMain, ipcDir } = ctx;
+  const { chatJid, agentFolder, isMain, ipcDir, onSendMessage } = ctx;
   const messagesDir = path.join(ipcDir, 'messages');
   const tasksDir = path.join(ipcDir, 'tasks');
 
@@ -150,6 +151,7 @@ The text parameter becomes the caption for media messages. For documents, also p
           }
 
           const filename = writeIpcFile(messagesDir, data);
+          onSendMessage?.({ hasMedia: !!args.media_type });
 
           return {
             content: [{

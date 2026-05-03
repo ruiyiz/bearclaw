@@ -318,13 +318,22 @@ async function processMessage(msg: NewMessage): Promise<void> {
   }
 
   if (!streamingMsgId && channel) await channel.setTyping?.(msg.chat_jid, true);
-  const response = await runAgent(agent, prompt, msg.chat_jid, onText);
+  const { text: response, sentMediaViaIpc } = await runAgent(agent, prompt, msg.chat_jid, onText);
   if (typingInterval) { clearInterval(typingInterval); typingInterval = undefined; }
   if (!streamingMsgId && channel) await channel.setTyping?.(msg.chat_jid, false);
 
   if (channel) {
     const cleaned = response ? stripInternalTags(response) : null;
-    if (cleaned && !isNonResponse(cleaned)) {
+    // When the agent sent media via IPC (e.g. canvas PNG), the caption is the
+    // reply. Suppress the streaming placeholder regardless of what the agent
+    // returned, so the user sees only the image+caption — not a duplicate
+    // text message edited into the placeholder.
+    if (sentMediaViaIpc) {
+      lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
+      if (streamingMsgId && channel.deleteMessage) {
+        await channel.deleteMessage(msg.chat_jid, streamingMsgId).catch(() => {});
+      }
+    } else if (cleaned && !isNonResponse(cleaned)) {
       lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
       if (streamingMsgId && channel.editMessage) {
         await channel.editMessage(msg.chat_jid, streamingMsgId, cleaned);
@@ -364,7 +373,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onText?: (text: string) => void,
-): Promise<string | null> {
+): Promise<{ text: string | null; sentMediaViaIpc: boolean }> {
   const isMain = agent.folder === MAIN_AGENT_FOLDER;
   const sessionId = sessions[agent.folder];
 
@@ -402,15 +411,15 @@ async function runAgent(
         'Container agent error',
       );
       if (output.timedOut) {
-        return "Sorry, I ran out of time on that one. Try again?";
+        return { text: "Sorry, I ran out of time on that one. Try again?", sentMediaViaIpc: false };
       }
-      return null;
+      return { text: null, sentMediaViaIpc: !!output.sentMediaViaIpc };
     }
 
-    return output.result;
+    return { text: output.result, sentMediaViaIpc: !!output.sentMediaViaIpc };
   } catch (err) {
     logger.error({ agent: agent.name, err }, 'Agent error');
-    return null;
+    return { text: null, sentMediaViaIpc: false };
   }
 }
 

@@ -39,6 +39,7 @@ export interface ContainerOutput {
   newSessionId?: string;
   error?: string;
   timedOut?: boolean;
+  sentMediaViaIpc?: boolean;
 }
 
 interface SessionEntry {
@@ -224,11 +225,15 @@ export async function runContainerAgent(
     'Running agent',
   );
 
+  let sentMediaViaIpc = false;
   const ipcMcp = createIpcMcp({
     chatJid: input.chatJid,
     agentFolder: input.agentFolder,
     isMain: input.isMain,
     ipcDir: agentIpcDir,
+    onSendMessage: ({ hasMedia }) => {
+      if (hasMedia) sentMediaViaIpc = true;
+    },
   });
 
   // Load user-configured MCP servers from ~/.nanoclaw/mcp.json
@@ -368,6 +373,7 @@ export async function runContainerAgent(
       status: 'success',
       result,
       newSessionId,
+      sentMediaViaIpc,
     };
 
   } catch (err) {
@@ -409,6 +415,7 @@ export async function runContainerAgent(
       newSessionId,
       error: errorMessage,
       timedOut,
+      sentMediaViaIpc,
     };
   }
 }
