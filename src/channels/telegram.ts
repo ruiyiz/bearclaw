@@ -9,7 +9,7 @@ import { logger } from '../logger.js';
 import { transcribeAudio } from '../transcribe.js';
 import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredAgent } from '../types.js';
 
-export interface TelegramChannelOpts {
+interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredAgents: () => Record<string, RegisteredAgent>;
@@ -509,7 +509,7 @@ export async function initBotPool(tokens: string[]): Promise<void> {
   }
 }
 
-export async function sendPoolMessage(
+async function sendPoolMessage(
   chatId: string,
   text: string,
   sender: string,
@@ -583,6 +583,3 @@ export async function sendPoolMessage(
   }
 }
 
-export function hasPoolBots(): boolean {
-  return poolApis.length > 0;
-}

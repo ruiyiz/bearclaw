@@ -20,7 +20,7 @@ import {
   listSubprocesses,
 } from './subprocess-manager.js';
 
-export interface IpcMcpContext {
+interface IpcMcpContext {
   chatJid: string;
   agentFolder: string;
   isMain: boolean;

@@ -121,7 +121,7 @@ export async function sendEmailReply(
   );
 }
 
-export function parseEmailAddress(from: string): string {
+function parseEmailAddress(from: string): string {
   const match = from.match(/<([^>]+)>/);
   return match ? match[1] : from;
 }

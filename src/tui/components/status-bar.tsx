@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text, useStdout } from 'ink';
 
-export interface KeyHint {
+interface KeyHint {
   key: string;
   label: string;
 }

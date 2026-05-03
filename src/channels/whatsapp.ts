@@ -19,7 +19,7 @@ import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetada
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-export interface WhatsAppChannelOpts {
+interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredAgents: () => Record<string, RegisteredAgent>;

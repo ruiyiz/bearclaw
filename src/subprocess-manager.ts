@@ -10,7 +10,7 @@ const SUBPROCESSES_DIR = path.join(DATA_DIR, 'subprocesses');
 const BIN_DIR = path.join(NANOCLAW_HOME, 'bin');
 const NOTIFY_SCRIPT_PATH = path.join(BIN_DIR, 'nanoclaw-notify');
 
-export interface SessionState {
+interface SessionState {
   sessionId: string;
   name?: string;
   description?: string;

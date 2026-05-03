@@ -235,7 +235,7 @@ export function updateChatName(chatJid: string, name: string): void {
   ).run(chatJid, name, new Date().toISOString());
 }
 
-export interface ChatInfo {
+interface ChatInfo {
   jid: string;
   name: string;
   last_message_time: string;
@@ -481,14 +481,6 @@ export function getAllHandlers(): Handler[] {
     .all() as Handler[];
 }
 
-export function getHandlersForAgent(agentFolder: string): Handler[] {
-  return db
-    .prepare(
-      'SELECT * FROM handlers WHERE group_folder = ? ORDER BY created_at DESC',
-    )
-    .all(agentFolder) as Handler[];
-}
-
 export function updateHandler(
   id: string,
   updates: Partial<Pick<Handler, 'prompt' | 'filter' | 'cooldown_ms' | 'max_triggers' | 'status'>>,
@@ -630,7 +622,7 @@ export function indexMemoryFiles(agentFolder: string, agentDir: string): void {
   upsert();
 }
 
-export interface MemorySearchResult {
+interface MemorySearchResult {
   path: string;
   snippet: string;
   rank: number;

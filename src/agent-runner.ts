@@ -22,7 +22,7 @@ import { logger } from './logger.js';
 import { Handler, RegisteredAgent } from './types.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 
-export interface ContainerInput {
+interface ContainerInput {
   prompt: string;
   sessionId?: string;
   agentFolder: string;
@@ -33,7 +33,7 @@ export interface ContainerInput {
   onText?: (text: string) => void;
 }
 
-export interface ContainerOutput {
+interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
@@ -118,7 +118,7 @@ export function generateFallbackName(): string {
   return `conversation-${time.getHours().toString().padStart(2, '0')}${time.getMinutes().toString().padStart(2, '0')}`;
 }
 
-export interface ParsedMessage {
+interface ParsedMessage {
   role: 'user' | 'assistant';
   content: string;
 }

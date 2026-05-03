@@ -12,9 +12,9 @@ const execFileAsync = promisify(execFile);
 
 // Path to the file that `imsg watch --json --attachments` is piped into.
 // The user runs: imsg watch --json --attachments >> ~/.nanoclaw/data/imsg-watch.jsonl
-export const IMSG_WATCH_FILE = path.join(DATA_DIR, 'imsg-watch.jsonl');
+const IMSG_WATCH_FILE = path.join(DATA_DIR, 'imsg-watch.jsonl');
 
-export interface IMessageChannelOpts {
+interface IMessageChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredAgents: () => Record<string, RegisteredAgent>;

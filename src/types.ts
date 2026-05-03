@@ -32,7 +32,7 @@ export interface Channel {
   syncMetadata?(force?: boolean): Promise<void>;
 }
 
-export interface ContainerConfig {
+interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }
 
@@ -42,12 +42,12 @@ export interface HeartbeatConfig {
   quiet?: { start: string; end: string }; // e.g. { start: "23:00", end: "07:00" }
 }
 
-export interface EmailConfig {
+interface EmailConfig {
   address: string;       // Gmail trigger address, e.g. "ruiyizhang+coco@gmail.com"
   interval?: string;     // Poll interval: "30m", "1h", etc. Default: "1h"
 }
 
-export interface ActiveHoursConfig {
+interface ActiveHoursConfig {
   cron: string | string[];  // one or more cron expressions (OR logic); e.g. ["* 18-22 * * 1-5", "* * * * 0,6"]
   autoReply?: string;       // custom off-hours message
 }

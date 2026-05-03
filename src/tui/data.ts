@@ -86,22 +86,6 @@ export function deleteHandler(id: string): void {
 
 // ─── Handler Logs ───────────────────────────────────────────────────────────
 
-export function getHandlerLogs(
-  handlerId: string,
-  limit = 50,
-): HandlerRunLog[] {
-  const db = openDb();
-  try {
-    return db
-      .prepare(
-        'SELECT * FROM handler_logs WHERE handler_id = ? ORDER BY run_at DESC LIMIT ?',
-      )
-      .all(handlerId, limit) as HandlerRunLog[];
-  } finally {
-    db.close();
-  }
-}
-
 export function getRecentHandlerLogs(limit = 100): HandlerRunLog[] {
   const db = openDb();
   try {
@@ -288,7 +272,7 @@ export interface SkillSource {
 const SKILLS_DIR = path.join(NANOCLAW_HOME, 'skills');
 const SKILL_SOURCES_PATH = path.join(DATA_DIR, 'skill_sources.json');
 const SKILL_INSTALL_META_PATH = path.join(DATA_DIR, 'skill_install_meta.json');
-export const CLAUDE_SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
+const CLAUDE_SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 
 function parseSkillDescription(content: string): string {
   const lines = content.split('\n');
@@ -342,7 +326,7 @@ function setSkillInstallMeta(meta: SkillInstallMeta): void {
   fs.writeFileSync(SKILL_INSTALL_META_PATH, JSON.stringify(meta, null, 2));
 }
 
-export function getSkillSources(): string[] {
+function getSkillSources(): string[] {
   return loadJson<string[]>(SKILL_SOURCES_PATH, []);
 }
 
@@ -444,40 +428,6 @@ export function addSkillSource(dir: string): void {
     fs.mkdirSync(path.dirname(SKILL_SOURCES_PATH), { recursive: true });
     fs.writeFileSync(SKILL_SOURCES_PATH, JSON.stringify(sources, null, 2));
   }
-}
-
-export function getAvailableSkills(): SkillInfo[] {
-  const sources = getSkillSources();
-  const installed = new Set(getInstalledSkills().map((s) => s.name));
-  const skills: SkillInfo[] = [];
-
-  for (const sourceDir of sources) {
-    if (!fs.existsSync(sourceDir)) continue;
-    const sourceLabel =
-      path.basename(path.dirname(sourceDir)) + '/' + path.basename(sourceDir);
-    try {
-      const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
-      const sorted = entries
-        .filter((e) => e.isDirectory())
-        .sort((a, b) => a.name.localeCompare(b.name));
-      for (const entry of sorted) {
-        const skillMd = path.join(sourceDir, entry.name, 'SKILL.md');
-        if (!fs.existsSync(skillMd)) continue;
-        if (installed.has(entry.name)) continue;
-        const content = fs.readFileSync(skillMd, 'utf-8');
-        skills.push({
-          name: entry.name,
-          description: parseSkillDescription(content),
-          path: skillMd,
-          installed: false,
-          source: sourceLabel,
-        });
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return skills;
 }
 
 export function installSkill(sourcePath: string, name: string): void {

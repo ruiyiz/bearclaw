@@ -25,7 +25,7 @@ import { logger } from './logger.js';
 import { isInQuietPeriod } from './time-utils.js';
 import { EventRecord, Handler, RegisteredAgent } from './types.js';
 
-export interface EventBusDependencies {
+interface EventBusDependencies {
   registeredAgents: () => Record<string, RegisteredAgent>;
   getSessions: () => Record<string, string>;
   saveSessions: () => void;
