@@ -159,7 +159,9 @@ export class WhatsAppChannel implements Channel {
         logger.error('No media source provided');
         return;
       }
-      const caption = options?.caption;
+      const caption = options?.caption
+        ? `${DISPLAY_NAME}:\n${renderMarkdown(options.caption, WhatsAppRenderer)}`
+        : undefined;
       switch (type) {
         case 'image':
           await this.sock.sendMessage(jid, { image: media, caption });

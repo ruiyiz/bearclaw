@@ -249,7 +249,10 @@ export class IMessageChannel implements Channel {
 
     try {
       const args = ['send', '--chat-id', chatId, '--file', filePath];
-      if (options?.caption) args.push('--text', options.caption);
+      if (options?.caption) {
+        const plain = renderMarkdown(options.caption, PlainTextRenderer);
+        args.push('--text', `${DISPLAY_NAME}: ${plain}`);
+      }
       await execFileAsync('imsg', args);
       logger.info({ jid, type }, 'iMessage media sent');
     } catch (err) {
