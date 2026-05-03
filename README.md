@@ -39,11 +39,11 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 ## What It Supports
 
 - **WhatsApp I/O** - Message Claude from your phone
-- **Isolated group context** - Each group has its own `CLAUDE.md` memory, working directory, and conversation session
-- **Main channel** - Your private channel (self-chat) for admin control; every other group is completely isolated
-- **Scheduled tasks** - Recurring jobs that run Claude and can message you back
+- **Isolated agent context** - Each agent has its own `IDENTITY.md`, working directory, memory, and conversation session
+- **Main channel** - Your private channel (self-chat) for admin control; every other agent is isolated
+- **Scheduled tasks & event handlers** - Recurring jobs and event-driven handlers that run Claude and can message you back
 - **Web access** - Search and fetch content
-- **Optional integrations** - Add Gmail (`/add-gmail`) and more via skills
+- **Optional channels & integrations** - Add Telegram (`/add-telegram`), iMessage (`/add-imessage`), Gmail (`/add-gmail`), and more via skills
 
 ## Usage
 
@@ -55,9 +55,9 @@ Talk to your assistant with the trigger word (default: `@Andy`):
 @Andy every Monday at 8am, compile news on AI developments from Hacker News and TechCrunch and message me a briefing
 ```
 
-From the main channel (your self-chat), you can manage groups and tasks:
+From the main channel (your self-chat), you can manage agents and tasks:
 ```
-@Andy list all scheduled tasks across groups
+@Andy list all scheduled tasks across agents
 @Andy pause the Monday briefing task
 @Andy join the Family Chat group
 ```
@@ -127,7 +127,7 @@ Logs:
 ```bash
 tail -f logs/nanoclaw.log        # Main log
 tail -f logs/nanoclaw.error.log  # Errors
-cat ~/.nanoclaw/groups/main/logs/agent-*.log | tail -50  # Agent logs
+cat ~/.nanoclaw/agents/main/logs/agent-*.log | tail -50  # Agent logs
 ```
 
 Re-authenticate WhatsApp (if disconnected):
@@ -142,15 +142,17 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 WhatsApp (baileys) --> SQLite --> Polling loop --> Claude Agent SDK (in-process) --> Response
 ```
 
-Single Node.js process. Agents execute via the Claude Agent SDK directly in the host process with per-group working directories. IPC via filesystem. No daemons, no queues, no complexity.
+Single Node.js process. Agents execute via the Claude Agent SDK directly in the host process with per-agent working directories. IPC via filesystem. No daemons, no queues, no complexity.
 
 Key files:
-- `src/index.ts` - Main app: WhatsApp connection, routing, IPC
-- `src/agent-runner.ts` - Runs Claude Agent SDK in-process
-- `src/ipc-mcp.ts` - MCP tools for agent communication
-- `src/task-scheduler.ts` - Runs scheduled tasks
+- `src/index.ts` - Main app: channel connections, routing, IPC
+- `src/agent/runner.ts` - Runs the Claude Agent SDK in-process
+- `src/agent/ipc-mcp.ts` - MCP tools for agent ↔ host communication
+- `src/events/scheduler.ts` - Runs scheduled handlers
+- `src/events/bus.ts` - Dispatches events to handlers
 - `src/db.ts` - SQLite operations
-- `~/.nanoclaw/groups/*/CLAUDE.md` - Per-group memory
+- `~/.nanoclaw/agents/{name}/IDENTITY.md` - Per-agent identity
+- `~/.nanoclaw/context/{AGENTS,SOUL,USER,MEMORY}.md` - Shared context
 
 ## FAQ
 
@@ -160,7 +162,7 @@ Because I use WhatsApp. Fork it and run a skill to change it. That's the whole p
 
 **Is this secure?**
 
-Agents run directly on the host, so they have access to the host filesystem. Each group's agent runs with `cwd` set to its own `~/.nanoclaw/groups/{folder}/` directory, and the `settingSources: ['project']` option means it reads CLAUDE.md from that folder. However, there is no OS-level isolation between groups — a determined prompt injection could access files outside the group folder. For stronger isolation, you could run NanoClaw in a container itself. See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
+Agents run directly on the host, so they have access to the host filesystem. Each agent runs with `cwd` set to its own `~/.nanoclaw/agents/{folder}/` directory, and the `settingSources: ['project']` option means it reads project settings from that folder. However, there is no OS-level isolation between agents — a determined prompt injection could access files outside the agent folder. For stronger isolation, you could run NanoClaw in a container itself. See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
 
 **Why no configuration files?**
 

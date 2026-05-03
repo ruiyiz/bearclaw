@@ -168,7 +168,7 @@ export async function sendPoolMessage(
 
 ### Step 3: Add sender Parameter to MCP Tool
 
-Read `container/agent-runner/src/ipc-mcp-stdio.ts` and update the `send_message` tool to accept an optional `sender` parameter:
+Read `src/agent/ipc-mcp.ts` and update the `send_message` tool to accept an optional `sender` parameter:
 
 Change the tool's schema from:
 ```typescript
@@ -233,11 +233,11 @@ if (TELEGRAM_BOT_POOL.length > 0) {
 }
 ```
 
-### Step 5: Update CLAUDE.md Files
+### Step 5: Update Context & Identity Files
 
 #### 5a. Add global message formatting rules
 
-Read `groups/global/CLAUDE.md` and add a Message Formatting section:
+Read `~/.nanoclaw/context/AGENTS.md` and add a Message Formatting section:
 
 ```markdown
 ## Message Formatting
@@ -251,9 +251,9 @@ NEVER use markdown. Only use WhatsApp/Telegram formatting:
 No ## headings. No [links](url). No **double stars**.
 ```
 
-#### 5b. Update existing group CLAUDE.md headings
+#### 5b. Update existing IDENTITY.md headings
 
-In any group CLAUDE.md that has a "WhatsApp Formatting" section (e.g. `groups/main/CLAUDE.md`), rename the heading to reflect multi-channel support:
+In any agent's `~/.nanoclaw/agents/{folder}/IDENTITY.md` that has a "WhatsApp Formatting" section, rename the heading to reflect multi-channel support:
 
 ```
 ## WhatsApp Formatting (and other messaging apps)
@@ -261,7 +261,7 @@ In any group CLAUDE.md that has a "WhatsApp Formatting" section (e.g. `groups/ma
 
 #### 5c. Add Agent Teams instructions to Telegram groups
 
-For each Telegram group that will use agent teams, create or update its `groups/{folder}/CLAUDE.md` with these instructions. Read the existing CLAUDE.md first (or `groups/global/CLAUDE.md` as a base) and add the Agent Teams section:
+For each Telegram chat that will use agent teams, create or update its `~/.nanoclaw/agents/{folder}/IDENTITY.md` with these instructions. Read the existing identity file first (or `~/.nanoclaw/context/AGENTS.md` as a base) and add the Agent Teams section:
 
 ```markdown
 ## Agent Teams
@@ -375,7 +375,7 @@ To remove Agent Swarm support while keeping basic Telegram:
 2. Remove pool code from `src/telegram.ts` (`poolApis`, `senderBotMap`, `initBotPool`, `sendPoolMessage`)
 3. Remove pool routing from IPC handler in `src/index.ts` (revert to plain `sendMessage`)
 4. Remove `initBotPool` call from `main()`
-5. Remove `sender` param from MCP tool in `container/agent-runner/src/ipc-mcp-stdio.ts`
+5. Remove `sender` param from MCP tool in `src/agent/ipc-mcp.ts`
 6. Remove Agent Teams section from group CLAUDE.md files
 7. Remove `TELEGRAM_BOT_POOL` from `.env`, `data/env/env`, and launchd plist
 8. Rebuild: `npm run build && ./container/build.sh && launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist && launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist`

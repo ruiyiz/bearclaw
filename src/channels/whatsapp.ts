@@ -11,10 +11,10 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 
 import { DISPLAY_NAME, AGENTS_DIR, STORE_DIR } from '../config.js';
-import { renderMarkdown, WhatsAppRenderer } from '../format.js';
+import { renderMarkdown, WhatsAppRenderer } from '../media/format.js';
 import { getLastGroupSync, setLastGroupSync, storeChatMetadata, updateChatName } from '../db.js';
 import { logger } from '../logger.js';
-import { transcribeAudio } from '../transcribe.js';
+import { transcribeAudio } from '../media/transcribe.js';
 import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredAgent } from '../types.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours

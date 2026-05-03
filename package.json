@@ -11,7 +11,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "auth": "tsx src/whatsapp-auth.ts",
+    "auth": "tsx src/scripts/whatsapp-auth.ts",
     "tui": "bun src/tui/cli.tsx tui",
     "tui:dev": "bun --watch src/tui/cli.tsx tui",
     "typecheck": "tsc --noEmit",

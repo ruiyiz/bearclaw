@@ -19,13 +19,14 @@ This skill helps users add capabilities or modify behavior. Use AskUserQuestion 
 | File | Purpose |
 |------|---------|
 | `src/config.ts` | Assistant name, trigger pattern, directories |
-| `src/index.ts` | Message routing, WhatsApp connection, agent invocation |
-| `src/agent-runner.ts` | Agent SDK execution, MCP server config |
+| `src/index.ts` | Message routing, channel wiring, agent invocation |
+| `src/agent/runner.ts` | Agent SDK execution, MCP server config |
+| `src/agent/ipc-mcp.ts` | MCP tools the agent uses to call back to the host |
 | `src/db.ts` | Database initialization and queries |
 | `src/types.ts` | TypeScript interfaces |
-| `src/whatsapp-auth.ts` | Standalone WhatsApp authentication script |
+| `src/scripts/whatsapp-auth.ts` | Standalone WhatsApp authentication script |
 | `.mcp.json` | MCP server configuration (reference) |
-| `~/.nanoclaw/groups/CLAUDE.md` | Global memory/persona |
+| `~/.nanoclaw/context/MEMORY.md` | Shared memory across all agents |
 
 ## Common Customization Patterns
 
@@ -51,9 +52,9 @@ Questions to ask:
 - Which groups should have access?
 
 Implementation:
-1. Add MCP server to the `mcpServers` config in `src/agent-runner.ts`
+1. Add MCP server to the `mcpServers` config in `src/agent/runner.ts`
 2. Add tools to `allowedTools` array
-3. Document in `~/.nanoclaw/groups/CLAUDE.md`
+3. Document in `~/.nanoclaw/context/MEMORY.md`
 
 ### Changing Assistant Behavior
 
@@ -62,7 +63,7 @@ Questions to ask:
 - Apply to all groups or specific ones?
 
 Simple changes -> edit `src/config.ts`
-Persona changes -> edit `~/.nanoclaw/groups/CLAUDE.md`
+Persona changes -> edit `~/.nanoclaw/context/SOUL.md` or `~/.nanoclaw/agents/{folder}/IDENTITY.md`
 Per-group behavior -> edit specific group's `CLAUDE.md`
 
 ### Adding New Commands

@@ -1,7 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 
-import { TIMEZONE } from './config.js';
-import { HeartbeatConfig } from './types.js';
+import { TIMEZONE } from '../config.js';
+import { HeartbeatConfig } from '../types.js';
 
 /**
  * Convert a human-friendly interval like "30m", "1h", "6h", "1d"

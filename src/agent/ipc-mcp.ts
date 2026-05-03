@@ -9,8 +9,8 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { CronExpressionParser } from 'cron-parser';
-import { indexMemoryFiles, searchMemory } from './db.js';
-import { AGENTS_DIR, CONTEXT_DIR, localDate, localTime } from './config.js';
+import { indexMemoryFiles, searchMemory } from '../db.js';
+import { AGENTS_DIR, CONTEXT_DIR, localDate, localTime } from '../config.js';
 import {
   startSubprocess,
   readSubprocessOutput,

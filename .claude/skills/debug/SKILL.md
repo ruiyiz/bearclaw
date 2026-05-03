@@ -5,29 +5,30 @@ description: Debug agent issues. Use when things aren't working, agent fails, au
 
 # NanoClaw Agent Debugging
 
-This guide covers debugging the in-process agent execution system. Agents run directly via the Claude Agent SDK `query()` function within the NanoClaw Node.js process -- there are no containers, VMs, or Docker involved.
+This guide covers debugging the in-process agent execution system. Agents run directly via the Claude Agent SDK `query()` function within the NanoClaw Node.js process — there are no containers, VMs, or Docker involved.
 
 ## Architecture Overview
 
 ```
-Host (macOS) - Single Node.js Process
+Host (macOS) — Single Node.js Process
 ───────────────────────────────────────────────────
-src/index.ts                    src/agent-runner.ts
+src/index.ts                     src/agent/runner.ts
     │                                │
-    │ routes WhatsApp messages       │ calls query() from
-    │ to agent-runner                │ @anthropic-ai/claude-agent-sdk
-    │                                │
-    │                                ├── cwd: ~/.nanoclaw/groups/{folder}/
-    │                                ├── resume: sessionId (per-group)
+    │ routes inbound messages         │ calls query() from
+    │ (WhatsApp/Telegram/iMessage)    │ @anthropic-ai/claude-agent-sdk
+    │ to agent runner                 │
+    │                                ├── cwd: ~/.nanoclaw/agents/{folder}/
+    │                                ├── resume: sessionId (per-agent)
     │                                ├── permissionMode: 'bypassPermissions'
     │                                ├── settingSources: ['project']
     │                                ├── mcpServers: { nanoclaw: ipcMcp }
     │                                └── allowedTools: [Bash, Read, Write, ...]
     │
-    ├── ~/.nanoclaw/groups/{folder}/          Agent working directory (cwd)
-    ├── ~/.nanoclaw/data/ipc/{folder}/        IPC files (messages, tasks)
-    ├── ~/.nanoclaw/data/sessions/{folder}/   Session data (per-group isolation)
-    └── .env                      Auth tokens (process.env)
+    ├── ~/.nanoclaw/agents/{folder}/         Agent working directory (cwd)
+    ├── ~/.nanoclaw/data/ipc/{folder}/       IPC files (messages, tasks)
+    ├── ~/.nanoclaw/context/                 Shared context (AGENTS, SOUL, USER, MEMORY)
+    ├── ~/.claude/projects/{encodedCwd}/     Claude Agent SDK transcript files
+    └── .env                                 Auth tokens (process.env)
 ```
 
 **Key point:** The agent runs in the same Node.js process as the host. Environment variables from `.env` are available directly via `process.env`. No volume mounts, no container runtimes, no user mapping.
@@ -36,10 +37,11 @@ src/index.ts                    src/agent-runner.ts
 
 | Log | Location | Content |
 |-----|----------|---------|
-| **Main app logs** | `logs/nanoclaw.log` | WhatsApp connection, routing, agent spawning |
+| **Main app logs** | `logs/nanoclaw.log` | Channel connections, routing, agent spawning |
 | **Main app errors** | `logs/nanoclaw.error.log` | Application errors |
-| **Agent run logs** | `~/.nanoclaw/groups/{folder}/logs/agent-*.log` | Per-run: group, duration, status, errors |
-| **Claude sessions** | `~/.nanoclaw/data/sessions/{group}/.claude/projects/` | Claude Agent SDK session history |
+| **Agent run logs** | `~/.nanoclaw/agents/{folder}/logs/agent-*.log` | Per-run: agent, duration, status, errors |
+| **Agent transcripts** | `~/.claude/projects/{encodedCwd}/{sessionId}.jsonl` | Claude Agent SDK conversation history |
+| **Daily memory** | `~/.nanoclaw/agents/{folder}/memory/YYYY-MM-DD.md` | Agent's running daily log |
 
 ## Enabling Debug Logging
 
@@ -63,9 +65,7 @@ Debug level shows:
 
 ### 1. Agent Errors or Unexpected Exits
 
-**Check the agent log file** in `~/.nanoclaw/groups/{folder}/logs/agent-*.log`
-
-Common causes:
+**Check the agent log file** in `~/.nanoclaw/agents/{folder}/logs/agent-*.log`
 
 #### Missing Authentication
 ```
@@ -84,12 +84,12 @@ Cannot find module '@anthropic-ai/claude-agent-sdk'
 ```
 **Fix:** Reinstall dependencies:
 ```bash
-npm install
+bun install
 ```
 
 ### 2. Agent Timeout
 
-The agent has a configurable timeout (default 300 seconds / 5 minutes). If a query takes too long, it will be aborted.
+Default 300 seconds (5 min); configurable per-agent via `containerConfig.timeout`, or globally via `AGENT_TIMEOUT`.
 
 **Check logs for:**
 ```
@@ -113,43 +113,37 @@ If sessions are not being resumed (new session ID every time):
 **Check the logs for session IDs:**
 ```bash
 grep "Session initialized" logs/nanoclaw.log | tail -5
-# Should show the SAME session ID for consecutive messages in the same group
+# Should show the SAME session ID for consecutive messages in the same agent
 ```
 
 **Root cause possibilities:**
-- Session data directory missing or corrupted at `~/.nanoclaw/data/sessions/{group}/.claude/`
-- The `resume` parameter in `query()` not receiving the stored session ID
+- Daily session reset hour (`SESSION_RESET_HOUR`, default 4am) just fired
+- Idle reset (`SESSION_IDLE_MINUTES`) elapsed since last activity
+- The transcript at `~/.claude/projects/{encodedCwd}/{sessionId}.jsonl` was deleted
 
-**Fix:** Clear sessions and let them be recreated:
+**Fix:** Clear NanoClaw's session tracking and let the agent recreate one:
 ```bash
-# Clear sessions for a specific group
-rm -rf ~/.nanoclaw/data/sessions/{groupFolder}/.claude/
-
-# Clear the session ID from NanoClaw's tracking
 echo '{}' > ~/.nanoclaw/data/sessions.json
 ```
 
 ### 4. MCP Server Failures
 
-The agent uses a file-based IPC MCP server (`nanoclaw`) for sending messages and managing tasks. If the MCP server fails to initialize, the agent may error.
+The agent uses a file-based IPC MCP server (`nanoclaw`) for sending messages and managing handlers. If the MCP server fails to initialize, the agent may error.
 
 **Check:** Ensure the IPC directory is writable:
 ```bash
-ls -la ~/.nanoclaw/data/ipc/{groupFolder}/
+ls -la ~/.nanoclaw/data/ipc/{folder}/
 # Should have messages/ and tasks/ subdirectories
 ```
 
-### 5. Permission Errors on Group Directories
+### 5. Permission Errors on Agent Directories
 
-The agent runs with `cwd` set to `~/.nanoclaw/groups/{folder}/`. If this directory is not writable, tools like Bash, Write, and Edit will fail.
+The agent runs with `cwd` set to `~/.nanoclaw/agents/{folder}/`. If this directory is not writable, tools like Bash, Write, and Edit will fail.
 
 **Fix:**
 ```bash
-# Check permissions
-ls -la ~/.nanoclaw/groups/
-
-# Fix ownership if needed
-chmod -R u+rw ~/.nanoclaw/groups/{folder}/
+ls -la ~/.nanoclaw/agents/
+chmod -R u+rw ~/.nanoclaw/agents/{folder}/
 ```
 
 ### 6. Claude CLI Not Found
@@ -171,20 +165,19 @@ npm install -g @anthropic-ai/claude-code
 
 ### Test with development server:
 ```bash
-# Run with hot reload - send a WhatsApp message to trigger the agent
+# Run with hot reload — send a message on any registered channel to trigger the agent
 npm run dev
 ```
 
 ### Test agent SDK directly:
 ```bash
-# Quick test using Node.js
 node -e "
 const { query } = require('@anthropic-ai/claude-agent-sdk');
 (async () => {
   for await (const msg of query({
     prompt: 'Say hello',
     options: {
-      cwd: '$HOME/.nanoclaw/groups/test',
+      cwd: '$HOME/.nanoclaw/agents/main',
       allowedTools: [],
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
@@ -199,66 +192,39 @@ const { query } = require('@anthropic-ai/claude-agent-sdk');
 
 ## SDK Options Reference
 
-The agent-runner uses these Claude Agent SDK options:
+`src/agent/runner.ts` invokes the SDK with roughly these options:
 
 ```typescript
 query({
-  prompt: input.prompt,
+  prompt,
   options: {
     abortController,
-    cwd: groupDir,                          // ~/.nanoclaw/groups/{folder}/
-    resume: input.sessionId,                // Per-group session resumption
+    cwd: agentDir,                          // ~/.nanoclaw/agents/{folder}/
+    resume: input.sessionId,                // Per-agent session resumption
+    model: 'claude-opus-4-7',
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: ... },
     allowedTools: [
       'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
       'WebSearch', 'WebFetch',
-      'mcp__nanoclaw__*'
+      'Skill',
+      'mcp__*'
     ],
     permissionMode: 'bypassPermissions',
-    allowDangerouslySkipPermissions: true,  // Required with bypassPermissions
+    allowDangerouslySkipPermissions: true,
     settingSources: ['project'],
-    mcpServers: {
-      nanoclaw: ipcMcp                      // File-based IPC MCP server
-    },
-    hooks: {
-      PreCompact: [...]                     // Archives conversations before compaction
-    }
+    mcpServers: { nanoclaw: ipcMcp, ...userMcpServers },
+    hooks: { SessionStart: [...] }          // Injects recent daily memory
   }
 })
 ```
 
-**Important:** `allowDangerouslySkipPermissions: true` is required when using `permissionMode: 'bypassPermissions'`. Without it, the agent will error.
+**Important:** `allowDangerouslySkipPermissions: true` is required when using `permissionMode: 'bypassPermissions'`.
 
 ## Rebuilding After Changes
 
 ```bash
-# Rebuild main app
-npm run build
-
-# Run in development mode with hot reload
-npm run dev
-```
-
-## Session Persistence
-
-Claude sessions are stored per-group in `~/.nanoclaw/data/sessions/{group}/.claude/` for security isolation. Each group has its own session directory, preventing cross-group access to conversation history.
-
-To clear sessions:
-
-```bash
-# Clear all sessions for all groups
-rm -rf ~/.nanoclaw/data/sessions/
-
-# Clear sessions for a specific group
-rm -rf ~/.nanoclaw/data/sessions/{groupFolder}/.claude/
-
-# Also clear the session ID from NanoClaw's tracking
-echo '{}' > ~/.nanoclaw/data/sessions.json
-```
-
-To verify session resumption is working, check the logs for the same session ID across messages:
-```bash
-grep "Session initialized" logs/nanoclaw.log | tail -5
-# Should show the SAME session ID for consecutive messages in the same group
+npm run build  # tsc compile
+npm run dev    # tsx with hot reload
 ```
 
 ## IPC Debugging
@@ -266,31 +232,30 @@ grep "Session initialized" logs/nanoclaw.log | tail -5
 The agent communicates back to the host via files in `~/.nanoclaw/data/ipc/{folder}/`:
 
 ```bash
-# Check pending messages
+# Pending outbound messages
 ls -la ~/.nanoclaw/data/ipc/{folder}/messages/
 
-# Check pending task operations
+# Pending task/handler operations
 ls -la ~/.nanoclaw/data/ipc/{folder}/tasks/
 
 # Read a specific IPC file
 cat ~/.nanoclaw/data/ipc/{folder}/messages/*.json
 
-# Check available groups (main channel only)
+# Available channel chats (main agent only)
 cat ~/.nanoclaw/data/ipc/main/available_groups.json
 
-# Check current tasks snapshot
-cat ~/.nanoclaw/data/ipc/{folder}/current_tasks.json
+# Current handlers snapshot
+cat ~/.nanoclaw/data/ipc/{folder}/current_handlers.json
 ```
 
 **IPC file types:**
-- `messages/*.json` - Agent writes: outgoing WhatsApp messages
-- `tasks/*.json` - Agent writes: task operations (schedule, pause, resume, cancel, refresh_groups)
-- `current_tasks.json` - Host writes: read-only snapshot of scheduled tasks
-- `available_groups.json` - Host writes: read-only list of WhatsApp groups (main only)
+- `messages/*.json` — Agent writes: outgoing channel messages (text or media)
+- `tasks/*.json` — Agent writes: handler operations (`schedule_task`, `register_handler`, `pause_handler`, `cancel_handler`, `emit_event`, `register_agent`, `refresh_agents`, `reply_email`)
+- `current_handlers.json` — Host writes: read-only snapshot of registered handlers
+- `available_groups.json` — Host writes: read-only list of channel chats (main agent only)
+- `email_results/{requestId}.json` — Host writes: result of an email reply request
 
 ## Quick Diagnostic Script
-
-Run this to check common issues:
 
 ```bash
 echo "=== Checking NanoClaw Setup ==="
@@ -302,19 +267,19 @@ echo -e "\n2. Claude CLI available?"
 which claude &>/dev/null && echo "OK - $(claude --version 2>&1 | head -1)" || echo "MISSING - install with: npm install -g @anthropic-ai/claude-code"
 
 echo -e "\n3. Claude Agent SDK installed?"
-node -e "require('@anthropic-ai/claude-agent-sdk')" 2>/dev/null && echo "OK" || echo "MISSING - run: npm install"
+node -e "require('@anthropic-ai/claude-agent-sdk')" 2>/dev/null && echo "OK" || echo "MISSING - run: bun install"
 
 echo -e "\n4. Node.js version?"
 node --version
 
-echo -e "\n5. Groups directory?"
-ls -la ~/.nanoclaw/groups/ 2>/dev/null || echo "MISSING - run setup"
+echo -e "\n5. Agents directory?"
+ls -la ~/.nanoclaw/agents/ 2>/dev/null || echo "MISSING - run setup"
 
 echo -e "\n6. IPC directories?"
 ls -d ~/.nanoclaw/data/ipc/*/ 2>/dev/null && echo "OK" || echo "No IPC directories yet (created on first run)"
 
 echo -e "\n7. Recent agent logs?"
-ls -t ~/.nanoclaw/groups/*/logs/agent-*.log 2>/dev/null | head -3 || echo "No agent logs yet"
+ls -t ~/.nanoclaw/agents/*/logs/agent-*.log 2>/dev/null | head -3 || echo "No agent logs yet"
 
 echo -e "\n8. Session continuity working?"
 SESSIONS=$(grep "Session initialized" logs/nanoclaw.log 2>/dev/null | tail -5 | awk '{print $NF}' | sort -u | wc -l)

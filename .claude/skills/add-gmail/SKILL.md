@@ -161,7 +161,7 @@ For Tool Mode, integrate Gmail MCP into the agent runner. Execute these changes 
 
 ### Step 1: Add Gmail MCP to Agent Runner
 
-Read `src/agent-runner.ts` and find the `mcpServers` config in the `query()` call.
+Read `src/agent/runner.ts` and find the `mcpServers` config in the `query()` call.
 
 Add `gmail` to the `mcpServers` object:
 
@@ -193,7 +193,7 @@ allowedTools: [
 
 ### Step 2: Update Group Memory
 
-Append to `~/.nanoclaw/groups/CLAUDE.md` (the global memory file):
+Append to `~/.nanoclaw/context/MEMORY.md` (the global memory file):
 
 ```markdown
 
@@ -209,7 +209,7 @@ You have access to Gmail via MCP tools:
 Example: "Check my unread emails from today" or "Send an email to john@example.com about the meeting"
 ```
 
-Also append the same section to `~/.nanoclaw/groups/main/CLAUDE.md`.
+Also append the same section to `~/.nanoclaw/agents/main/IDENTITY.md`.
 
 ### Step 3: Rebuild and Restart
 
@@ -364,7 +364,7 @@ Also find the `initDatabase()` function in `src/db.ts` and add a call to `initEm
 
 ### Step 4: Create Email Channel Module
 
-Create a new file `src/email-channel.ts` with this content:
+Create a new file `src/integrations/email.ts` with this content:
 
 ```typescript
 import { EMAIL_CHANNEL } from './config.js';
@@ -559,7 +559,7 @@ async function runEmailAgent(
 
 ### Step 7: Add IPC for Email Responses (Optional)
 
-If you want the agent to be able to send emails proactively from within a session, read `src/ipc-mcp.ts` and add this tool:
+If you want the agent to be able to send emails proactively from within a session, read `src/agent/ipc-mcp.ts` and add this tool:
 
 ```typescript
 // Add to the MCP tools
@@ -578,15 +578,15 @@ If you want the agent to be able to send emails proactively from within a sessio
 
 Then add handling in `src/index.ts` in the `processTaskIpc` function or create a new IPC handler for email actions.
 
-### Step 8: Create Email Group Memory
+### Step 8: Create Email Agent Identity
 
-Create the email group directory and memory file:
+Create the email agent directory and identity file:
 
 ```bash
-mkdir -p ~/.nanoclaw/groups/email
+mkdir -p ~/.nanoclaw/agents/email
 ```
 
-Write `~/.nanoclaw/groups/email/CLAUDE.md`:
+Write `~/.nanoclaw/agents/email/IDENTITY.md`:
 
 ```markdown
 # Email Channel
@@ -672,7 +672,7 @@ npx -y @gongrzhe/server-gmail-autoauth-mcp
 
 To remove Gmail entirely:
 
-1. Remove from `src/agent-runner.ts`:
+1. Remove from `src/agent/runner.ts`:
    - Delete `gmail` from `mcpServers`
    - Remove `mcp__gmail__*` from `allowedTools`
 
@@ -680,9 +680,9 @@ To remove Gmail entirely:
    - Delete `startEmailLoop()` call
    - Delete email-related imports
 
-3. Delete `src/email-channel.ts` (if created)
+3. Delete `src/integrations/email.ts` (if created)
 
-4. Remove Gmail sections from `~/.nanoclaw/groups/*/CLAUDE.md`
+4. Remove Gmail sections from `~/.nanoclaw/context/MEMORY.md` and any agent's `~/.nanoclaw/agents/*/IDENTITY.md`
 
 5. Rebuild:
    ```bash

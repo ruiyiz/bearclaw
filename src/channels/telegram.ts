@@ -4,9 +4,9 @@ import path from 'path';
 import { Api, Bot, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, AGENTS_DIR, TRIGGER_PATTERN } from '../config.js';
-import { renderMarkdown, TelegramHtmlRenderer } from '../format.js';
+import { renderMarkdown, TelegramHtmlRenderer } from '../media/format.js';
 import { logger } from '../logger.js';
-import { transcribeAudio } from '../transcribe.js';
+import { transcribeAudio } from '../media/transcribe.js';
 import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredAgent } from '../types.js';
 
 interface TelegramChannelOpts {

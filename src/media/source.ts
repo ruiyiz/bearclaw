@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 
-import { AGENTS_DIR } from './config.js';
-import { logger } from './logger.js';
-import { MediaSource } from './types.js';
+import { AGENTS_DIR } from '../config.js';
+import { logger } from '../logger.js';
+import { MediaSource } from '../types.js';
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',

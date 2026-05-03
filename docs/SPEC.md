@@ -1,6 +1,6 @@
 # NanoClaw Specification
 
-A personal Claude assistant accessible via WhatsApp, with persistent memory per conversation, scheduled tasks, and email integration.
+A personal Claude assistant accessible via chat platforms (WhatsApp, Telegram, iMessage) and Gmail, with persistent memory per agent, scheduled handlers, event-driven handlers, and shared context.
 
 ---
 
@@ -12,51 +12,55 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 4. [Memory System](#memory-system)
 5. [Session Management](#session-management)
 6. [Message Flow](#message-flow)
-7. [Commands](#commands)
-8. [Scheduled Tasks](#scheduled-tasks)
-9. [MCP Servers](#mcp-servers)
-10. [Deployment](#deployment)
-11. [Security Considerations](#security-considerations)
+7. [Handlers](#handlers-scheduled--event-driven)
+8. [MCP Servers](#mcp-servers)
+9. [Deployment](#deployment)
+10. [Security Considerations](#security-considerations)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        HOST (macOS)                                  │
-│                   (Main Node.js Process)                             │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  ┌──────────────┐                     ┌────────────────────┐        │
-│  │  WhatsApp    │────────────────────▶│   SQLite Database  │        │
-│  │  (baileys)   │◀────────────────────│   (messages.db)    │        │
-│  └──────────────┘                      └─────────┬──────────┘        │
-│                                                  │                   │
-│         ┌────────────────────────────────────────┘                   │
-│         │                                                            │
-│         ▼                                                            │
-│  ┌──────────────────┐    ┌──────────────────┐    ┌───────────────┐  │
-│  │  Message Loop    │    │  Scheduler Loop  │    │  IPC Watcher  │  │
-│  │  (polls SQLite)  │    │  (checks tasks)  │    │  (file-based) │  │
-│  └────────┬─────────┘    └────────┬─────────┘    └───────────────┘  │
-│           │                       │                                  │
-│           └───────────┬───────────┘                                  │
-│                       │ calls query()                                │
-│                       ▼                                              │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    AGENT (IN-PROCESS)                         │   │
-│  │                                                                │   │
-│  │  Working directory: ~/.nanoclaw/groups/{name}/ (on host)        │   │
-│  │                                                                │   │
-│  │  Tools (all groups):                                           │   │
-│  │    • Bash (runs on host)                                       │   │
-│  │    • Read, Write, Edit, Glob, Grep (file operations)           │   │
-│  │    • WebSearch, WebFetch (internet access)                     │   │
-│  │    • mcp__nanoclaw__* (scheduler tools via IPC)                │   │
-│  │                                                                │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
+┌──────────────────────────────────────────────────────────────────────┐
+│                          HOST (macOS)                                 │
+│                     (Single Node.js Process)                          │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐   ┌─────────────┐          │
+│  │ WhatsApp │  │ Telegram │  │ iMessage │   │ Gmail (poll)│          │
+│  │ baileys  │  │ grammY   │  │ imsg cli │   │ gog cli     │          │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘   └─────┬───────┘          │
+│       │             │             │               │                   │
+│       └─────────────┴─────────────┘               │                   │
+│                     │                             ▼                   │
+│              ┌──────▼──────┐                ┌─────────────┐           │
+│              │   Router    │                │  Event Bus  │           │
+│              │ (per-agent  │                │ (handlers)  │           │
+│              │   queue)    │                └──────┬──────┘           │
+│              └──────┬──────┘                       │                  │
+│                     │                              │                  │
+│                     ▼                              ▼                  │
+│              ┌──────────────────────────────────────────────┐         │
+│              │           Agent Runner (in-process)          │         │
+│              │   query() ─→ Claude Agent SDK                │         │
+│              │   cwd: ~/.nanoclaw/agents/{folder}/          │         │
+│              │   tools: Bash, Read/Write/Edit, Web*, MCP    │         │
+│              │   mcpServers: { nanoclaw: ipcMcp, ... }      │         │
+│              └──────────────────────────────────────────────┘         │
+│                                                                       │
+│              ┌──────────────────────────────────────────────┐         │
+│              │              IPC Watcher (file-based)        │         │
+│              │   reads ~/.nanoclaw/data/ipc/{folder}/       │         │
+│              │   dispatches outbound messages, handler ops  │         │
+│              └──────────────────────────────────────────────┘         │
+│                                                                       │
+│              ┌──────────────────────────────────────────────┐         │
+│              │         SQLite (~/.nanoclaw/store/)          │         │
+│              │   chats, messages, events, handlers,         │         │
+│              │   handler_logs, memory_fts                   │         │
+│              └──────────────────────────────────────────────┘         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -64,374 +68,318 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| WhatsApp Connection | Node.js (@whiskeysockets/baileys) | Connect to WhatsApp, send/receive messages |
-| Message Storage | SQLite (better-sqlite3) | Store messages for polling |
-| Agent | @anthropic-ai/claude-agent-sdk (0.2.29) | Run Claude with tools and MCP servers |
-| Runtime | Node.js 20+ | Host process for routing, scheduling, and agent execution |
+| WhatsApp | `@whiskeysockets/baileys` | WhatsApp Web protocol |
+| Telegram | `grammy` | Bot API + agent-swarm bot pool |
+| iMessage | `imsg` CLI + file tail | macOS Messages |
+| Email | `gog` CLI | Gmail polling and sending |
+| Storage | `better-sqlite3` | Messages, handlers, event bus, FTS |
+| Agent | `@anthropic-ai/claude-agent-sdk` | In-process Claude execution |
+| TUI | `ink` + `react` | Status terminal UI |
+| Runtime | Node.js 20+ | Single host process |
 
 ---
 
 ## Folder Structure
 
 ```
-nanoclaw/                            # Source code (git repo)
-├── CLAUDE.md                      # Project context for Claude Code
+nanoclaw/                            # Source repo
+├── CLAUDE.md
+├── README.md
+├── package.json
+├── tsconfig.json
+│
 ├── docs/
-│   ├── SPEC.md                    # This specification document
-│   ├── REQUIREMENTS.md            # Architecture decisions
-│   └── SECURITY.md                # Security model
-├── README.md                      # User documentation
-├── package.json                   # Node.js dependencies
-├── tsconfig.json                  # TypeScript configuration
-├── .mcp.json                      # MCP server configuration (reference)
-├── .gitignore
+│   ├── SPEC.md, REQUIREMENTS.md, SECURITY.md
+│   └── plans/                       # Historical design plans
 │
 ├── src/
-│   ├── index.ts                   # Main application (WhatsApp + routing)
-│   ├── config.ts                  # Configuration constants
-│   ├── types.ts                   # TypeScript interfaces
-│   ├── utils.ts                   # Generic utility functions
-│   ├── db.ts                      # Database initialization and queries
-│   ├── whatsapp-auth.ts           # Standalone WhatsApp authentication
-│   ├── task-scheduler.ts          # Runs scheduled tasks when due
-│   ├── agent-runner.ts            # Runs Claude Agent SDK in-process
-│   └── ipc-mcp.ts                 # MCP server for host communication
+│   ├── index.ts                     # Entry: channel wiring, router, IPC watcher
+│   ├── config.ts                    # Env vars, paths, intervals
+│   ├── types.ts                     # Shared TS types
+│   ├── logger.ts, db.ts             # Trunk modules
+│   ├── agent/                       # Claude Agent SDK runtime
+│   │   ├── runner.ts                # query() invocation
+│   │   ├── ipc-mcp.ts               # MCP tools the agent calls
+│   │   ├── subprocess-manager.ts    # PTY subprocesses
+│   │   ├── memory-flusher.ts        # Transcript → daily memory
+│   │   └── system-prompt.ts
+│   ├── channels/                    # User-facing surfaces
+│   │   ├── whatsapp.ts, telegram.ts, imessage.ts
+│   │   └── router.ts                # findChannel(channels, jid)
+│   ├── events/
+│   │   ├── bus.ts                   # Event dispatch + handler runner
+│   │   ├── scheduler.ts             # Cron handler firing
+│   │   └── heartbeat.ts             # Heartbeat handler config
+│   ├── integrations/
+│   │   └── email.ts                 # Gmail poll + reply
+│   ├── media/
+│   │   ├── format.ts                # Markdown renderers per channel
+│   │   ├── source.ts                # Mime-type / media source resolution
+│   │   ├── transcribe.ts, tts.ts    # Voice IO
+│   ├── utils/
+│   │   ├── json.ts, time.ts
+│   ├── scripts/
+│   │   └── whatsapp-auth.ts         # Standalone QR auth CLI
+│   └── tui/                         # Status TUI
 │
-├── dist/                          # Compiled JavaScript (gitignored)
-│
-├── .claude/
-│   └── skills/
-│       ├── setup/
-│       │   └── SKILL.md           # /setup skill
-│       ├── customize/
-│       │   └── SKILL.md           # /customize skill
-│       └── debug/
-│           └── SKILL.md           # /debug skill
-│
-└── logs/                          # Runtime logs (gitignored)
-    ├── nanoclaw.log               # Host stdout
-    └── nanoclaw.error.log         # Host stderr
+├── dist/                            # Compiled JS (gitignored)
+├── .claude/skills/                  # Customization skills (SKILL.md per skill)
+└── logs/                            # Runtime logs (gitignored)
 
-~/.nanoclaw/                         # Runtime data (outside git repo)
-├── groups/
-│   ├── CLAUDE.md                  # Global memory (all groups read this)
-│   ├── main/                      # Self-chat (main control channel)
-│   │   ├── CLAUDE.md              # Main channel memory
-│   │   └── logs/                  # Task execution logs
-│   └── {Group Name}/              # Per-group folders (created on registration)
-│       ├── CLAUDE.md              # Group-specific memory
-│       ├── logs/                  # Task logs for this group
-│       └── *.md                   # Files created by the agent
-│
+~/.nanoclaw/                         # Runtime state (outside the repo)
+├── .env                             # Auth tokens, channel tokens, integrations
+├── context/
+│   ├── AGENTS.md, SOUL.md, USER.md, MEMORY.md   # Shared across all agents
+├── agents/
+│   ├── main/
+│   │   ├── IDENTITY.md              # Per-agent identity / role
+│   │   ├── memory/YYYY-MM-DD.md     # Daily memory log
+│   │   ├── conversations/           # Archived sessions
+│   │   ├── logs/                    # agent-*.log per run
+│   │   └── ...                      # Files the agent creates
+│   └── {folder}/                    # One per registered agent
+├── skills/                          # User-installed skills
 ├── store/
-│   ├── auth/                      # WhatsApp authentication state
-│   └── messages.db                # SQLite database (messages, scheduled_tasks, task_run_logs)
-│
-└── data/
-    ├── sessions.json              # Active session IDs per group
-    ├── registered_groups.json     # Group JID → folder mapping
-    ├── router_state.json          # Last processed timestamp + last agent timestamps
-    └── ipc/                       # Agent IPC (messages/, tasks/)
+│   ├── auth/                        # WhatsApp Baileys auth
+│   └── messages.db                  # SQLite (chats, messages, events, handlers, memory_fts)
+├── data/
+│   ├── sessions.json                # Active session IDs per agent folder
+│   ├── registered_agents.json       # JID → agent mapping
+│   ├── router_state.json            # Last processed timestamp + per-agent timestamps
+│   ├── ipc/{folder}/                # Per-agent IPC: messages/, tasks/, current_handlers.json, ...
+│   └── subprocesses/                # PTY subprocess state + output
+└── bin/nanoclaw-notify              # Notify shim written by the subprocess manager
 ```
 
 ---
 
 ## Configuration
 
-Configuration constants are in `src/config.ts`:
+`src/config.ts` is the single source of truth for env vars, paths, and intervals. `dotenv` loads `~/.nanoclaw/.env` at startup.
+
+Selected exports:
 
 ```typescript
-import os from 'os';
-import path from 'path';
-
-export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Andy';
-export const POLL_INTERVAL = 2000;
-export const SCHEDULER_POLL_INTERVAL = 60000;
-
-export const NANOCLAW_HOME = path.resolve(os.homedir(), '.nanoclaw');
-export const STORE_DIR = path.resolve(NANOCLAW_HOME, 'store');
-export const GROUPS_DIR = path.resolve(NANOCLAW_HOME, 'groups');
-export const DATA_DIR = path.resolve(NANOCLAW_HOME, 'data');
-
-export const AGENT_TIMEOUT = parseInt(process.env.AGENT_TIMEOUT || '300000', 10);
-export const IPC_POLL_INTERVAL = 1000;
-
-export const TRIGGER_PATTERN = new RegExp(`^@${ASSISTANT_NAME}\\b`, 'i');
+ASSISTANT_NAME       // trigger word, default "Andy"
+DISPLAY_NAME         // outbound prefix, defaults to ASSISTANT_NAME
+TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_POOL, TELEGRAM_ONLY
+IMESSAGE_ENABLED
+NANOCLAW_HOME, STORE_DIR, CONTEXT_DIR, AGENTS_DIR, DATA_DIR
+MAIN_AGENT_FOLDER = 'main'
+AGENT_TIMEOUT             // default 300_000 ms
+SESSION_RESET_HOUR        // default 4 (4 AM local)
+SESSION_IDLE_MINUTES      // default -1 (disabled)
+TIMEZONE                  // process.env.TZ or system default
+TRIGGER_PATTERN           // RegExp ^@<ASSISTANT_NAME>\b
+HEARTBEAT_HANDLER_PREFIX, HEARTBEAT_PROMPT
+EMAIL_HANDLER_PREFIX, EMAIL_DEFAULT_INTERVAL
 ```
 
-### Claude Authentication
+### Authentication
 
-Configure authentication in a `.env` file in the project root. Two options:
+`~/.nanoclaw/.env` should contain one of:
 
-**Option 1: Claude Subscription (OAuth token)**
 ```bash
-CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...   # Subscription
+ANTHROPIC_API_KEY=sk-ant-api03-...         # Pay-per-use
 ```
 
-**Option 2: Pay-per-use API Key**
-```bash
-ANTHROPIC_API_KEY=sk-ant-api03-...
-```
-
-On bare metal, these are available directly via `process.env`.
+Channel tokens (optional): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_POOL`, `IMESSAGE_ENABLED=true`.
 
 ### Changing the Assistant Name
 
-Set the `ASSISTANT_NAME` environment variable:
-
-```bash
-ASSISTANT_NAME=Bot npm start
-```
-
-Or edit the default in `src/config.ts`. This changes:
-- The trigger pattern (messages must start with `@YourName`)
-- The response prefix (`YourName:` added automatically)
-
-### Placeholder Values in launchd
-
-Files with `{{PLACEHOLDER}}` values need to be configured:
-- `{{PROJECT_ROOT}}` - Absolute path to your nanoclaw installation
-- `{{NODE_PATH}}` - Path to node binary (detected via `which node`)
-- `{{HOME}}` - User's home directory
+Set `ASSISTANT_NAME=Bot` in `~/.nanoclaw/.env`. This shifts both the trigger pattern (`@Bot ...`) and the outbound prefix (`Bot:`).
 
 ---
 
 ## Memory System
 
-NanoClaw uses a hierarchical memory system based on CLAUDE.md files.
+NanoClaw separates **shared context** from **per-agent identity** and **rolling memory**.
 
-### Memory Hierarchy
+| Layer | Location | Read by | Written by | Purpose |
+|------|----------|---------|------------|---------|
+| **Shared context** | `~/.nanoclaw/context/{AGENTS,SOUL,USER,MEMORY}.md` | All agents | Main only (MEMORY) | Stable durable facts, persona, user info |
+| **Identity** | `~/.nanoclaw/agents/{folder}/IDENTITY.md` | That agent | Hand-edited | Per-agent role/personality |
+| **Daily log** | `~/.nanoclaw/agents/{folder}/memory/YYYY-MM-DD.md` | That agent (via `memory_search`) | `memory_write` MCP tool | Running notes, decisions, context |
+| **Conversations** | `~/.nanoclaw/agents/{folder}/conversations/` | That agent | `memory-flusher.ts` on session end | Full archived transcripts |
+| **Working files** | `~/.nanoclaw/agents/{folder}/...` | That agent | The agent (Bash/Write/Edit) | Notes, research, scratch |
 
-| Level | Location | Read By | Written By | Purpose |
-|-------|----------|---------|------------|---------|
-| **Global** | `~/.nanoclaw/groups/CLAUDE.md` | All groups | Main only | Preferences, facts, context shared across all conversations |
-| **Group** | `~/.nanoclaw/groups/{name}/CLAUDE.md` | That group | That group | Group-specific context, conversation memory |
-| **Files** | `~/.nanoclaw/groups/{name}/*.md` | That group | That group | Notes, research, documents created during conversation |
+**Context loading.** The agent runner concatenates the shared context files plus the agent's `IDENTITY.md` and appends them to the system prompt before invoking `query()`. The `SessionStart` hook also injects the last two days of `memory/*.md` so the agent boots with recent state.
 
-### How Memory Works
+**Memory search.** `memory_write` appends to today's daily log and indexes it into a SQLite FTS5 table. `memory_search` returns ranked snippets across `memory/` and `conversations/`.
 
-1. **Agent Context Loading**
-   - Agent runs with `cwd` set to `~/.nanoclaw/groups/{group-name}/`
-   - Claude Agent SDK with `settingSources: ['project']` automatically loads:
-     - `../CLAUDE.md` (parent directory = global memory)
-     - `./CLAUDE.md` (current directory = group memory)
-
-2. **Writing Memory**
-   - When user says "remember this", agent writes to `./CLAUDE.md`
-   - When user says "remember this globally" (main channel only), agent writes to `../CLAUDE.md`
-   - Agent can create files like `notes.md`, `research.md` in the group folder
-
-3. **Main Channel Privileges**
-   - Only the "main" group (self-chat) can write to global memory
-   - Main can manage registered groups and schedule tasks for any group
-   - All groups have Bash access (runs on host)
+**Main-agent privileges.** Only `main` writes to shared `context/MEMORY.md`. Other agents can only write to their own agent folder.
 
 ---
 
 ## Session Management
 
-Sessions enable conversation continuity - Claude remembers what you talked about.
+Each agent maintains a Claude Agent SDK session for conversation continuity.
 
-### How Sessions Work
-
-1. Each group has a session ID stored in `~/.nanoclaw/data/sessions.json`
-2. Session ID is passed to Claude Agent SDK's `resume` option
-3. Claude continues the conversation with full context
-
-**~/.nanoclaw/data/sessions.json:**
+`~/.nanoclaw/data/sessions.json`:
 ```json
 {
   "main": "session-abc123",
-  "Family Chat": "session-def456"
+  "family": "session-def456"
 }
 ```
+
+The session ID is passed to `query()` via the `resume` option. The corresponding transcript lives at `~/.claude/projects/{encodedCwd}/{sessionId}.jsonl`.
+
+**Resets.** Sessions are cleared automatically:
+- Daily, at `SESSION_RESET_HOUR` local time (default 4 AM, set to `-1` to disable)
+- After `SESSION_IDLE_MINUTES` of inactivity (default `-1`, disabled)
+- On `/new` from the user
+
+Before a reset, `memory-flusher.ts` archives the transcript into `conversations/` and appends a session summary to today's `memory/YYYY-MM-DD.md`.
 
 ---
 
 ## Message Flow
 
-### Incoming Message Flow
-
 ```
-1. User sends WhatsApp message
+1. User sends a message on a channel (WhatsApp / Telegram / iMessage)
    │
    ▼
-2. Baileys receives message via WhatsApp Web protocol
+2. Channel adapter normalizes it into a NewMessage and stores it in SQLite
    │
    ▼
-3. Message stored in SQLite (~/.nanoclaw/store/messages.db)
+3. Adapter's onMessage callback fires; index.ts dispatches via per-agent queue
    │
    ▼
-4. Message loop polls SQLite (every 2 seconds)
+4. processMessage(msg):
+   ├── If chat is unregistered → drop
+   ├── If non-main and trigger pattern doesn't match → drop
+   ├── If activeHours configured and we're outside it → send off-hours auto-reply, drop
+   ├── If content starts with /new → flush + clear session, then continue
    │
    ▼
-5. Router checks:
-   ├── Is chat_jid in registered_groups.json? → No: ignore
-   └── Does message start with @Assistant? → No: ignore
+5. Build a <messages> XML prompt from all messages since lastAgentTimestamp
    │
    ▼
-6. Router catches up conversation:
-   ├── Fetch all messages since last agent interaction
-   ├── Format with timestamp and sender name
-   └── Build prompt with full conversation context
+6. agent/runner.ts → query():
+   ├── cwd: ~/.nanoclaw/agents/{folder}/
+   ├── resume: sessionId
+   ├── systemPrompt: claude_code preset + shared context + IDENTITY.md + SYSTEM_PROMPT
+   ├── allowedTools: Bash, Read/Write/Edit/Glob/Grep, Web*, Skill, mcp__*
+   └── mcpServers: nanoclaw (IPC) + user MCP servers from ~/.nanoclaw/mcp.json
    │
    ▼
-7. Router invokes Claude Agent SDK via query():
-   ├── cwd: ~/.nanoclaw/groups/{group-name}/
-   ├── prompt: conversation history + current message
-   ├── resume: session_id (for continuity)
-   └── mcpServers: nanoclaw (scheduler)
+7. Agent streams output. If the channel supports edits (Telegram), live-edit a
+   placeholder until the run completes.
    │
    ▼
-8. Claude processes message:
-   ├── Reads CLAUDE.md files for context
-   └── Uses tools as needed (search, email, etc.)
+8. The agent may call MCP tools (send_message, schedule_task, …) — these
+   write JSON to ~/.nanoclaw/data/ipc/{folder}/. The IPC watcher picks them up.
    │
    ▼
-9. Router prefixes response with assistant name and sends via WhatsApp
+9. Final assistant text is sent to the channel (with DISPLAY_NAME prefix
+   where applicable). Voice messages are echoed as a transcript first and
+   replied to with a TTS audio note when ELEVENLABS_API_KEY is set.
    │
    ▼
-10. Router updates last agent timestamp and saves session ID
-```
-
-### Trigger Word Matching
-
-Messages must start with the trigger pattern (default: `@Andy`):
-- `@Andy what's the weather?` → Triggers Claude
-- `@andy help me` → Triggers (case insensitive)
-- `Hey @Andy` → Ignored (trigger not at start)
-- `What's up?` → Ignored (no trigger)
-
-### Conversation Catch-Up
-
-When a triggered message arrives, the agent receives all messages since its last interaction in that chat. Each message is formatted with timestamp and sender name:
-
-```
-[Jan 31 2:32 PM] John: hey everyone, should we do pizza tonight?
-[Jan 31 2:33 PM] Sarah: sounds good to me
-[Jan 31 2:35 PM] John: @Andy what toppings do you recommend?
+10. lastAgentTimestamp is updated and persisted in router_state.json.
 ```
 
-This allows the agent to understand the conversation context even if it wasn't mentioned in every message.
+A separate **recovery sweep** runs every `POLL_INTERVAL` (30 s) over SQLite to catch messages missed during channel disconnects.
 
 ---
 
-## Commands
+## Handlers (Scheduled + Event-Driven)
 
-### Commands Available in Any Group
+A unified `handlers` table stores both cron-scheduled and event-driven runs.
 
-| Command | Example | Effect |
-|---------|---------|--------|
-| `@Assistant [message]` | `@Andy what's the weather?` | Talk to Claude |
+### Schedule shapes
 
-### Commands Available in Main Channel Only
+| Shape | Storage | Triggered by |
+|-------|---------|--------------|
+| Cron | `cron` field set | `events/scheduler.ts` emits `cron_trigger` when `next_run <= now` |
+| One-shot | `next_run` set, `cron` null, `max_triggers=1` | Same as cron |
+| Event-driven | `event_type != 'cron_trigger'`, `filter` JSON | `events/bus.ts` matches event type + filter |
 
-| Command | Example | Effect |
-|---------|---------|--------|
-| `@Assistant add group "Name"` | `@Andy add group "Family Chat"` | Register a new group |
-| `@Assistant remove group "Name"` | `@Andy remove group "Work Team"` | Unregister a group |
-| `@Assistant list groups` | `@Andy list groups` | Show registered groups |
-| `@Assistant remember [fact]` | `@Andy remember I prefer dark mode` | Add to global memory |
+### Lifecycle
 
----
+1. **Register** — `register_handler` (event-driven), `schedule_task` (cron / one-shot), or built-in (heartbeat, email_received).
+2. **Fire** — `events/bus.ts` runs the handler in a fresh agent invocation. Context mode is either `agent` (shared session, can use payload's `session_key`) or `isolated` (fresh session every time).
+3. **Log** — duration, status, result/error written to `handler_logs`.
+4. **Chain** — every handler completion emits `handler_complete`; agent runs emit `agent_complete`. These can drive subsequent handlers.
 
-## Scheduled Tasks
+### Built-in event types
 
-NanoClaw has a built-in scheduler that runs tasks as full agents in their group's context.
+| Event | Source | Payload |
+|-------|--------|---------|
+| `cron_trigger` | `events/scheduler.ts` | `{ handler_id }` |
+| `email_received` | `integrations/email.ts` | `{ group_folder, message_id, thread_id, from, subject, body, ... }` |
+| `subprocess_exit` / `subprocess_notification` | `agent/subprocess-manager.ts` | `{ sessionId, exitCode, ... }` |
+| `agent_complete` | `agent/runner.ts` | `{ group_folder, trigger_type, status, duration_ms }` |
+| `handler_complete` | `events/bus.ts` | `{ handler_id, group_folder, status, result_summary }` |
 
-### How Scheduling Works
+Custom events can be emitted by agents via `mcp__nanoclaw__emit_event`.
 
-1. **Group Context**: Tasks created in a group run with that group's working directory and memory
-2. **Full Agent Capabilities**: Scheduled tasks have access to all tools (WebSearch, file operations, etc.)
-3. **Optional Messaging**: Tasks can send messages to their group using the `send_message` tool, or complete silently
-4. **Main Channel Privileges**: The main channel can schedule tasks for any group and view all tasks
+### Heartbeat
 
-### Schedule Types
+When an agent has `heartbeat: { interval, model?, quiet? }` set in `registered_agents.json`, NanoClaw maintains a recurring `heartbeat-{folder}` handler that wakes the agent on the configured interval (skipped during the optional `quiet` window).
 
-| Type | Value Format | Example |
-|------|--------------|---------|
-| `cron` | Cron expression | `0 9 * * 1` (Mondays at 9am) |
-| `interval` | Milliseconds | `3600000` (every hour) |
-| `once` | ISO timestamp | `2024-12-25T09:00:00Z` |
+### Email
 
-### Creating a Task
-
-```
-User: @Andy remind me every Monday at 9am to review the weekly metrics
-
-Claude: [calls mcp__nanoclaw__schedule_task]
-        {
-          "prompt": "Send a reminder to review weekly metrics. Be encouraging!",
-          "schedule_type": "cron",
-          "schedule_value": "0 9 * * 1"
-        }
-
-Claude: Done! I'll remind you every Monday at 9am.
-```
-
-### Managing Tasks
-
-From any group:
-- `@Andy list my scheduled tasks` - View tasks for this group
-- `@Andy pause task [id]` - Pause a task
-- `@Andy resume task [id]` - Resume a paused task
-- `@Andy cancel task [id]` - Delete a task
-
-From main channel:
-- `@Andy list all tasks` - View tasks from all groups
-- `@Andy schedule task for "Family Chat": [prompt]` - Schedule for another group
+When an agent has `email: { address, interval? }`, a poll loop fetches unread Gmail to that address, emits `email_received`, and the matching handler runs the agent. The agent can call `reply_email` to thread a response.
 
 ---
 
 ## MCP Servers
 
-### NanoClaw MCP (built-in)
+### `nanoclaw` MCP (built-in, see `src/agent/ipc-mcp.ts`)
 
-The `nanoclaw` MCP server is created dynamically per agent call with the current group's context.
+Created per-agent-call with the agent's identity. Tools:
 
-**Available Tools:**
 | Tool | Purpose |
 |------|---------|
-| `schedule_task` | Schedule a recurring or one-time task |
-| `list_tasks` | Show tasks (group's tasks, or all if main) |
-| `pause_task` | Pause a task |
-| `resume_task` | Resume a paused task |
-| `cancel_task` | Delete a task |
-| `send_message` | Send a WhatsApp message to the group |
-| `register_group` | Register a new WhatsApp group (main only) |
+| `send_message` | Outbound channel message (text and/or media) |
+| `schedule_task` | Cron or one-shot handler |
+| `register_handler` | Event-driven handler |
+| `list_handlers`, `pause_handler`, `resume_handler`, `cancel_handler` | Handler management |
+| `emit_event` | Custom event emission |
+| `register_agent` | Register a new chat as an agent (main only) |
+| `reply_email` | Thread a Gmail reply |
+| `memory_write`, `memory_search` | Daily log + FTS lookup |
+| `subprocess_start/read/write/poll/kill/list` | PTY subprocess driver |
+
+### User MCP servers
+
+`~/.nanoclaw/mcp.json` is merged into every agent's `mcpServers` config so users can add Notion, GitHub, etc. without editing source.
 
 ---
 
 ## Deployment
 
-NanoClaw runs as a single macOS launchd service.
+NanoClaw runs as a single macOS launchd service (`~/Library/LaunchAgents/com.nanoclaw.plist`).
 
-### Startup Sequence
+### Startup sequence
 
-When NanoClaw starts, it:
-1. Initializes the SQLite database
-2. Loads state (registered groups, sessions, router state)
-3. Connects to WhatsApp
-4. Starts the message polling loop
-5. Starts the scheduler loop
-6. Starts the IPC watcher for agent messages
+1. Initialize SQLite (creating tables and running migrations: `groups → agents`, `event_handlers + scheduled_tasks → handlers`, `context_mode 'group' → 'agent'`).
+2. Run the `groups/ → agents/` filesystem migration (one-shot, idempotent).
+3. Load `router_state.json`, `sessions.json`, `registered_agents.json`.
+4. Seed memory-flush cursors and start the memory flusher.
+5. Initialize the subprocess manager and write the notify shim.
+6. Register heartbeat and email handlers from `registered_agents.json`.
+7. Connect channels (`WhatsApp` if not `TELEGRAM_ONLY`, `Telegram` if `TELEGRAM_BOT_TOKEN`, `iMessage` if `IMESSAGE_ENABLED=true`).
+8. Start: session reset loop, scheduler, event bus, IPC watcher, message recovery loop, email loops.
 
-### Managing the Service
+### Service management
 
 ```bash
-# Install service
+# Install
 cp launchd/com.nanoclaw.plist ~/Library/LaunchAgents/
 
-# Start service
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
-
-# Stop service
+# Start / Stop / Restart
+launchctl load   ~/Library/LaunchAgents/com.nanoclaw.plist
 launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 
-# Check status
+# Status
 launchctl list | grep nanoclaw
 
-# View logs
+# Logs
 tail -f logs/nanoclaw.log
 ```
 
@@ -439,69 +387,39 @@ tail -f logs/nanoclaw.log
 
 ## Security Considerations
 
-### Agent Execution
+See [SECURITY.md](SECURITY.md) for the full threat model. Highlights:
 
-Agents run via the Claude Agent SDK directly in the host process:
-- **No OS-level filesystem isolation**: Agents can access the host filesystem
-- **Working directory isolation**: Each group's agent runs with `cwd` set to its group folder
-- **Session isolation**: Each group has its own conversation session
-- **IPC authorization**: Non-main groups can only message their own chat
+- **No OS-level isolation.** Agents have host filesystem and network access.
+- **Per-agent `cwd`.** Each agent's working directory is its own `~/.nanoclaw/agents/{folder}/`.
+- **IPC authorization.** The IPC watcher in `src/index.ts` rejects cross-agent operations from non-main agents (sending to other chats, registering handlers for other agents, calling `register_agent` / `refresh_agents`).
+- **Trigger gate.** Non-main agents only fire on messages matching their configured trigger.
+- **Credentials.** Loaded from `~/.nanoclaw/.env` into `process.env`. Agents can read them via Bash; this is a known limitation of the in-process model.
 
-### Prompt Injection Risk
+### File permissions
 
-WhatsApp messages could contain malicious instructions attempting to manipulate Claude's behavior.
-
-**Mitigations:**
-- Only registered groups are processed
-- Trigger word required (reduces accidental processing)
-- IPC authorization limits cross-group actions
-- Claude's built-in safety training
-
-**Recommendations:**
-- Only register trusted groups
-- Review scheduled tasks periodically
-- Monitor logs for unusual activity
-- For stronger isolation, run NanoClaw inside a container or VM
-
-### Credential Storage
-
-| Credential | Storage Location | Notes |
-|------------|------------------|-------|
-| Claude Auth | `.env` file | Available via process.env |
-| WhatsApp Session | `~/.nanoclaw/store/auth/` | Auto-created, persists ~20 days |
-
-### File Permissions
-
-The `~/.nanoclaw/groups/` folder contains personal memory and should be protected:
 ```bash
-chmod 700 ~/.nanoclaw/groups/
+chmod 700 ~/.nanoclaw/agents/
+chmod 600 ~/.nanoclaw/.env
 ```
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
+See [`/debug`](../.claude/skills/debug/SKILL.md) for the in-depth guide. Common issues:
 
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| No response to messages | Service not running | Check `launchctl list | grep nanoclaw` |
-| Agent error | Missing credentials | Check `.env` has valid token/key |
-| Session not continuing | Session ID not saved | Check `~/.nanoclaw/data/sessions.json` |
-| "QR code expired" | WhatsApp session expired | Delete `~/.nanoclaw/store/auth/` and restart |
-| "No groups registered" | Haven't added groups | Use `@Andy add group "Name"` in main |
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| No response to messages | Service not running | `launchctl list \| grep nanoclaw` |
+| Agent error: invalid API key | Missing/wrong `.env` | Check `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
+| Session not continuing | Daily/idle reset, or transcript deleted | Inspect `~/.nanoclaw/data/sessions.json` and `~/.claude/projects/` |
+| WhatsApp QR expired | Auth state stale | `bun run auth` (or delete `~/.nanoclaw/store/auth/` and re-run setup) |
+| iMessage messages not arriving | `imsg watch` not appending to `~/.nanoclaw/data/imsg-watch.jsonl` | Verify Full Disk Access; rerun `scripts/setup-imessage.sh` |
+| Telegram silent | Bot token missing or bot not added to chat | Check `TELEGRAM_BOT_TOKEN`; `/chatid` in the chat to grab the JID |
 
-### Log Location
+### Log locations
 
-- `logs/nanoclaw.log` - stdout
-- `logs/nanoclaw.error.log` - stderr
-- `~/.nanoclaw/groups/{folder}/logs/agent-*.log` - per-agent run logs
-
-### Debug Mode
-
-Run manually for verbose output:
-```bash
-npm run dev
-# or
-node dist/index.js
-```
+- `logs/nanoclaw.log` — host stdout
+- `logs/nanoclaw.error.log` — host stderr
+- `~/.nanoclaw/agents/{folder}/logs/agent-*.log` — per-run logs
+- `~/.claude/projects/{encodedCwd}/{sessionId}.jsonl` — Claude Agent SDK transcripts

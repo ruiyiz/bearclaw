@@ -17,7 +17,7 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 
-import { STORE_DIR } from './config.js';
+import { STORE_DIR } from '../config.js';
 
 const AUTH_DIR = path.join(STORE_DIR, 'auth');
 

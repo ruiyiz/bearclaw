@@ -6,7 +6,7 @@ import {
   AGENTS_DIR,
   MAIN_AGENT_FOLDER,
   HEARTBEAT_HANDLER_PREFIX,
-} from './config.js';
+} from '../config.js';
 import {
   cleanupProcessedEvents,
   emitEvent,
@@ -16,14 +16,14 @@ import {
   logHandlerRun,
   markEventProcessed,
   updateHandlerAfterTrigger,
-} from './db.js';
+} from '../db.js';
 import {
   runContainerAgent,
   writeHandlersSnapshot,
-} from './agent-runner.js';
-import { logger } from './logger.js';
-import { isInQuietPeriod } from './time-utils.js';
-import { EventRecord, Handler, RegisteredAgent } from './types.js';
+} from '../agent/runner.js';
+import { logger } from '../logger.js';
+import { isInQuietPeriod } from '../utils/time.js';
+import { EventRecord, Handler, RegisteredAgent } from '../types.js';
 
 interface EventBusDependencies {
   registeredAgents: () => Record<string, RegisteredAgent>;

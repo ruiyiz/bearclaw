@@ -4,49 +4,50 @@
 
 | Entity | Trust Level | Rationale |
 |--------|-------------|-----------|
-| Main group | Trusted | Private self-chat, admin control |
-| Non-main groups | Untrusted | Other users may be malicious |
+| Main agent | Trusted | Private self-chat, admin control |
+| Non-main agents | Untrusted | Other participants may be malicious |
 | Agent execution | Host process | Runs directly on host, has filesystem access |
-| WhatsApp messages | User input | Potential prompt injection |
+| Inbound messages | User input | Potential prompt injection |
 
 ## Security Boundaries
 
 ### 1. Session Isolation
 
-Each group runs with its own working directory (`~/.nanoclaw/groups/{folder}/`) and conversation session:
-- **Working directory isolation** - Agent's `cwd` is set to the group's folder
-- **Session isolation** - Each group has its own session ID in `~/.nanoclaw/data/sessions.json`
-- **Memory isolation** - Each group has its own `CLAUDE.md`
+Each agent runs with its own working directory (`~/.nanoclaw/agents/{folder}/`) and conversation session:
+- **Working directory isolation** — Agent's `cwd` is set to the agent's folder
+- **Session isolation** — Each agent has its own session ID in `~/.nanoclaw/data/sessions.json`
+- **Identity isolation** — Each agent has its own `IDENTITY.md`; only shared `~/.nanoclaw/context/*.md` is loaded across agents
 
-**Important:** This is application-level isolation, not OS-level. Agents running on the host have full filesystem access. A determined prompt injection could access files outside the group folder.
+**Important:** This is application-level isolation, not OS-level. Agents running on the host have full filesystem access. A determined prompt injection could access files outside the agent folder.
 
 ### 2. IPC Authorization
 
-Messages and task operations are verified against group identity:
+Outbound messages and handler operations are verified against the source agent's identity (in `src/index.ts`'s IPC watcher):
 
-| Operation | Main Group | Non-Main Group |
+| Operation | Main Agent | Non-Main Agent |
 |-----------|------------|----------------|
 | Send message to own chat | Yes | Yes |
 | Send message to other chats | Yes | No |
-| Schedule task for self | Yes | Yes |
-| Schedule task for others | Yes | No |
-| View all tasks | Yes | Own only |
-| Manage other groups | Yes | No |
+| Schedule task / register handler for self | Yes | Yes |
+| Schedule task / register handler for other agents | Yes | No |
+| Pause / resume / cancel any handler | Yes | Own only |
+| `register_agent`, `refresh_agents` | Yes | No |
+| `emit_event`, `reply_email` | Yes | Yes |
 
 ### 3. Credential Handling
 
-**Environment Variables:**
-On bare metal, `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` are available directly via `process.env` from the `.env` file. The agent process inherits the host environment.
+**Environment variables:**
+`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` are loaded from `~/.nanoclaw/.env` (via `dotenv`) into `process.env`. The agent process inherits the host environment.
 
-> **Note:** Since agents run in-process, they can discover credentials via Bash or file operations. This is a trade-off of the bare metal approach.
+> **Note:** Since agents run in-process, they can discover credentials via Bash or file operations. This is a trade-off of the bare-metal approach.
 
 ## Privilege Comparison
 
-| Capability | Main Group | Non-Main Group |
+| Capability | Main Agent | Non-Main Agent |
 |------------|------------|----------------|
-| Project root access | Full (cwd is group folder, but host fs accessible) | Full (host fs accessible) |
-| Group folder | `~/.nanoclaw/groups/{folder}/` (cwd) | `~/.nanoclaw/groups/{folder}/` (cwd) |
-| Global memory | Read/write via parent CLAUDE.md | Read via parent CLAUDE.md |
+| Project root access | Full (cwd is agent folder, host fs accessible) | Full (host fs accessible) |
+| Agent folder | `~/.nanoclaw/agents/{folder}/` (cwd) | `~/.nanoclaw/agents/{folder}/` (cwd) |
+| Shared context | Read/write via `~/.nanoclaw/context/MEMORY.md` | Read via `~/.nanoclaw/context/MEMORY.md` |
 | Network access | Unrestricted | Unrestricted |
 | MCP tools | All | All |
 
@@ -54,31 +55,33 @@ On bare metal, `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` are available dir
 
 ```
 +------------------------------------------------------------------+
-|                        UNTRUSTED ZONE                             |
-|  WhatsApp Messages (potentially malicious)                        |
+|                        UNTRUSTED ZONE                            |
+|  Inbound channel + integration messages                          |
+|  (WhatsApp / Telegram / iMessage / Email — potentially malicious)|
 +--------------------------------+---------------------------------+
                                  |
                                  v  Trigger check, input escaping
 +------------------------------------------------------------------+
-|                     HOST PROCESS (TRUSTED)                        |
-|  * Message routing                                                |
-|  * IPC authorization                                              |
-|  * Credential handling via .env                                   |
-|                                                                   |
+|                     HOST PROCESS (TRUSTED)                       |
+|  * Channel adapters & router                                     |
+|  * Event bus & scheduler                                         |
+|  * IPC watcher with per-agent authorization                      |
+|  * Credential handling via ~/.nanoclaw/.env                      |
+|                                                                  |
 |  +------------------------------------------------------------+  |
-|  |                  AGENT (IN-PROCESS)                          |  |
-|  |  * Claude Agent SDK query()                                  |  |
-|  |  * cwd: ~/.nanoclaw/groups/{folder}/                          |  |
-|  |  * Bash commands (runs on host!)                             |  |
-|  |  * File operations (host filesystem access)                  |  |
-|  |  * Network access (unrestricted)                             |  |
+|  |                  AGENT (IN-PROCESS)                        |  |
+|  |  * Claude Agent SDK query()                                |  |
+|  |  * cwd: ~/.nanoclaw/agents/{folder}/                       |  |
+|  |  * Bash commands (runs on host!)                           |  |
+|  |  * File operations (host filesystem access)                |  |
+|  |  * Network access (unrestricted)                           |  |
 |  +------------------------------------------------------------+  |
 +------------------------------------------------------------------+
 ```
 
 ## Recommendations
 
-- Only register trusted groups
-- Review scheduled tasks periodically
-- Monitor logs for unusual activity
+- Only register trusted chats as agents
+- Review registered handlers periodically (`list_handlers`, or the TUI handlers view)
+- Monitor logs for unusual activity (`logs/nanoclaw.log`, `~/.nanoclaw/agents/*/logs/`)
 - For stronger isolation, consider running NanoClaw itself inside a container or VM

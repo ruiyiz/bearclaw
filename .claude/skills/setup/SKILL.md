@@ -93,12 +93,12 @@ Ask the user:
 >
 > Messages starting with `@TriggerWord` will be sent to Claude.
 
-If they choose something other than `Andy`, update it in these places:
-1. `~/.nanoclaw/groups/CLAUDE.md` - Change "# Andy" and "You are Andy" to the new name
-2. `~/.nanoclaw/groups/main/CLAUDE.md` - Same changes at the top
-3. `~/.nanoclaw/data/registered_groups.json` - Use `@NewName` as the trigger when registering groups
+If they choose something other than `Andy`, set `ASSISTANT_NAME=NewName` in `~/.nanoclaw/.env`. Then update any "Andy" references in:
+1. `~/.nanoclaw/context/SOUL.md` (persona)
+2. `~/.nanoclaw/agents/main/IDENTITY.md` (main agent identity)
+3. `~/.nanoclaw/data/registered_agents.json` — set `"trigger": "@NewName"` when registering agents
 
-Store their choice - you'll use it when creating the registered_groups.json and when telling them how to test.
+Store their choice — you'll use it when creating `registered_agents.json` and when telling them how to test.
 
 ## 5. Understand the Security Model
 
@@ -162,7 +162,7 @@ sqlite3 ~/.nanoclaw/store/messages.db "SELECT DISTINCT chat_jid FROM messages WH
 sqlite3 ~/.nanoclaw/store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@g.us' ORDER BY timestamp DESC LIMIT 5"
 ```
 
-Create/update `~/.nanoclaw/data/registered_groups.json` using the JID from above and the assistant name from step 4:
+Create/update `~/.nanoclaw/data/registered_agents.json` using the JID from above and the assistant name from step 4:
 ```json
 {
   "JID_HERE": {
@@ -174,9 +174,9 @@ Create/update `~/.nanoclaw/data/registered_groups.json` using the JID from above
 }
 ```
 
-Ensure the groups folder exists:
+Ensure the agent folder exists:
 ```bash
-mkdir -p ~/.nanoclaw/groups/main/logs
+mkdir -p ~/.nanoclaw/agents/main/logs
 ```
 
 ## 7. Configure launchd Service
@@ -256,12 +256,12 @@ The user should receive a response in WhatsApp.
 **Service not starting**: Check `logs/nanoclaw.error.log`
 
 **Agent fails**:
-- Check agent logs: `cat ~/.nanoclaw/groups/main/logs/agent-*.log | tail -50`
+- Check agent logs: `cat ~/.nanoclaw/agents/main/logs/agent-*.log | tail -50`
 - Ensure `.env` has valid credentials
 
 **No response to messages**:
 - Verify the trigger pattern matches (e.g., `@AssistantName` at start of message)
-- Check that the chat JID is in `~/.nanoclaw/data/registered_groups.json`
+- Check that the chat JID is in `~/.nanoclaw/data/registered_agents.json`
 - Check `logs/nanoclaw.log` for errors
 
 **WhatsApp disconnected**:

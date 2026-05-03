@@ -70,7 +70,7 @@ Verify `.env` is loaded at startup by checking `src/index.ts` for a `dotenv` or 
 
 ### 4. Configure MCP Servers in Agent Runner
 
-Update `src/agent-runner.ts`:
+Update `src/agent/runner.ts`:
 
 Find the section where `mcpServers` is configured:
 ```typescript
@@ -122,7 +122,7 @@ allowedTools: [
 
 ### 5. Add Usage Instructions to CLAUDE.md
 
-Add Parallel AI usage instructions to `~/.nanoclaw/groups/main/CLAUDE.md`:
+Add Parallel AI usage instructions to `~/.nanoclaw/agents/main/IDENTITY.md`:
 
 Find the "## What You Can Do" section and add after the existing bullet points:
 ```markdown
@@ -262,7 +262,7 @@ Look for: `Parallel AI MCP servers configured`
 To remove Parallel AI integration:
 
 1. Remove from .env: `sed -i.bak '/PARALLEL_API_KEY/d' .env`
-2. Revert changes to `src/agent-runner.ts` (remove Parallel MCP server config and allowedTools entries)
-3. Remove Web Research Tools section from ~/.nanoclaw/groups/main/CLAUDE.md
+2. Revert changes to `src/agent/runner.ts` (remove Parallel MCP server config and allowedTools entries)
+3. Remove Web Research Tools section from ~/.nanoclaw/agents/main/IDENTITY.md
 4. Rebuild: `npm run build`
 5. Restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`

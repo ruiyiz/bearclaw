@@ -4,7 +4,7 @@ import fs from 'fs';
 import { promisify } from 'util';
 
 import { ASSISTANT_NAME, DISPLAY_NAME, AGENTS_DIR, DATA_DIR, TRIGGER_PATTERN } from '../config.js';
-import { renderMarkdown, PlainTextRenderer } from '../format.js';
+import { renderMarkdown, PlainTextRenderer } from '../media/format.js';
 import { logger } from '../logger.js';
 import { Channel, MediaType, MediaSource, MediaOptions, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredAgent } from '../types.js';
 

@@ -26,11 +26,11 @@ import {
   runContainerAgent,
   writeAgentsSnapshot,
   writeHandlersSnapshot,
-} from './agent-runner.js';
+} from './agent/runner.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { initBotPool, TelegramChannel } from './channels/telegram.js';
 import { IMessageChannel } from './channels/imessage.js';
-import { guessMimetype, resolveMediaSource } from './media.js';
+import { guessMimetype, resolveMediaSource } from './media/source.js';
 import {
   createHandler,
   deleteHandler,
@@ -45,18 +45,18 @@ import {
   storeMessage,
   updateHandler,
 } from './db.js';
-import { registerEmailHandlers, sendEmailReply, startEmailLoops } from './email-channel.js';
-import { startEventBusLoop } from './event-bus.js';
-import { registerHeartbeatHandlers } from './heartbeat.js';
-import { isInActiveWindow, getNextActiveTime, formatNextActiveTime } from './time-utils.js';
-import { findChannel } from './router.js';
-import { startSchedulerEmitter } from './task-scheduler.js';
-import { generateSpeech } from './tts.js';
+import { registerEmailHandlers, sendEmailReply, startEmailLoops } from './integrations/email.js';
+import { startEventBusLoop } from './events/bus.js';
+import { registerHeartbeatHandlers } from './events/heartbeat.js';
+import { isInActiveWindow, getNextActiveTime, formatNextActiveTime } from './utils/time.js';
+import { findChannel } from './channels/router.js';
+import { startSchedulerEmitter } from './events/scheduler.js';
+import { generateSpeech } from './media/tts.js';
 import { Channel, MediaType, NewMessage, RegisteredAgent, Session } from './types.js';
-import { loadJson, saveJson } from './utils.js';
-import { startMemoryFlusher, flushBeforeSessionClear, initFlushCursors } from './memory-flusher.js';
+import { loadJson, saveJson } from './utils/json.js';
+import { startMemoryFlusher, flushBeforeSessionClear, initFlushCursors } from './agent/memory-flusher.js';
 import { logger } from './logger.js';
-import { initSubprocessManager } from './subprocess-manager.js';
+import { initSubprocessManager } from './agent/subprocess-manager.js';
 
 let lastTimestamp = '';
 let sessions: Session = {};

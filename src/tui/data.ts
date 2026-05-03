@@ -5,7 +5,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 
 import { STORE_DIR, AGENTS_DIR, DATA_DIR, NANOCLAW_HOME } from '../config.js';
-import { loadJson } from '../utils.js';
+import { loadJson } from '../utils/json.js';
 import type {
   EventRecord,
   Handler,

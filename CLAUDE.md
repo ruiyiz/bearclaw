@@ -4,18 +4,34 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 ## Quick Context
 
-Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running directly on the host. Each agent has its own working directory and memory.
+Single Node.js process that connects to chat platforms (WhatsApp, Telegram, iMessage) and the Gmail integration, routes messages to the Claude Agent SDK running directly on the host. Each agent has its own working directory and memory.
+
+## Source Layout
+
+```
+src/
+├── index.ts, config.ts, types.ts, logger.ts, db.ts   # trunk
+├── agent/         runner, ipc-mcp, subprocess-manager, memory-flusher, system-prompt
+├── channels/      whatsapp, telegram, imessage, router
+├── events/        bus, scheduler, heartbeat
+├── integrations/  email
+├── media/         format, source, transcribe, tts
+├── utils/         json, time
+├── scripts/       whatsapp-auth
+└── tui/           …
+```
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/index.ts` | Main app: WhatsApp connection, message routing, IPC |
-| `src/config.ts` | Trigger pattern, paths, intervals |
-| `src/agent-runner.ts` | Runs Claude Agent SDK in-process |
-| `src/ipc-mcp.ts` | MCP tools for agent ↔ host communication |
-| `src/email-channel.ts` | Gmail email polling and processing |
-| `src/task-scheduler.ts` | Runs scheduled tasks |
+| `src/index.ts` | Main app: channel wiring, message routing, IPC watcher |
+| `src/config.ts` | Env vars, paths, trigger pattern, intervals |
+| `src/agent/runner.ts` | Runs the Claude Agent SDK in-process |
+| `src/agent/ipc-mcp.ts` | MCP tools for agent ↔ host communication |
+| `src/events/bus.ts` | Event dispatch + handler runner |
+| `src/events/scheduler.ts` | Cron handler firing |
+| `src/integrations/email.ts` | Gmail polling and reply primitive |
 | `src/db.ts` | SQLite operations |
 | `~/.nanoclaw/context/` | Shared context: AGENTS.md, SOUL.md, USER.md, MEMORY.md |
 | `~/.nanoclaw/agents/{name}/IDENTITY.md` | Per-agent identity |

@@ -15,11 +15,11 @@ import {
   TIMEZONE,
   localDate,
   localTime,
-} from './config.js';
+} from '../config.js';
 import { createIpcMcp } from './ipc-mcp.js';
-import { emitEvent } from './db.js';
-import { logger } from './logger.js';
-import { Handler, RegisteredAgent } from './types.js';
+import { emitEvent } from '../db.js';
+import { logger } from '../logger.js';
+import { Handler, RegisteredAgent } from '../types.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 
 interface ContainerInput {

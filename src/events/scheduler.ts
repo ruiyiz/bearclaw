@@ -1,13 +1,13 @@
 import { CronExpressionParser } from 'cron-parser';
 
-import { SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { SCHEDULER_POLL_INTERVAL, TIMEZONE } from '../config.js';
 import {
   emitEvent,
   getCronDueHandlers,
   getHandlerById,
   updateHandlerNextRun,
-} from './db.js';
-import { logger } from './logger.js';
+} from '../db.js';
+import { logger } from '../logger.js';
 
 let schedulerRunning = false;
 

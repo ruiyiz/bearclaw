@@ -2,9 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import * as pty from 'node-pty';
-import { DATA_DIR, NANOCLAW_HOME } from './config.js';
-import { createHandler, emitEvent } from './db.js';
-import { logger } from './logger.js';
+import { DATA_DIR, NANOCLAW_HOME } from '../config.js';
+import { createHandler, emitEvent } from '../db.js';
+import { logger } from '../logger.js';
 
 const SUBPROCESSES_DIR = path.join(DATA_DIR, 'subprocesses');
 const BIN_DIR = path.join(NANOCLAW_HOME, 'bin');

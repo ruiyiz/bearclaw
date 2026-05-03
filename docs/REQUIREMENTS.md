@@ -20,7 +20,7 @@ The entire codebase should be something you can read and understand. One Node.js
 
 ### Session Isolation
 
-Each group runs with its own working directory (`~/.nanoclaw/groups/{folder}/`) and conversation session. The agent's `cwd` is set to the group folder, and `settingSources: ['project']` reads CLAUDE.md from there. IPC authorization ensures non-main groups can only message their own chat and manage their own tasks.
+Each agent runs with its own working directory (`~/.nanoclaw/agents/{folder}/`) and conversation session. The agent's `cwd` is set to the agent folder, and `settingSources: ['project']` reads project settings from there. IPC authorization ensures non-main agents can only message their own chats and manage their own handlers.
 
 ### Built for One User
 
@@ -62,86 +62,94 @@ Skills to add or switch to different messaging platforms:
 
 ## Vision
 
-A personal Claude assistant accessible via WhatsApp, with minimal custom code.
+A personal Claude assistant accessible via chat platforms, with minimal custom code.
 
 **Core components:**
 - **Claude Agent SDK** as the core agent, running directly on the host
-- **WhatsApp** as the primary I/O channel
-- **Persistent memory** per conversation and globally
-- **Scheduled tasks** that run Claude and can message back
+- **Channels** (WhatsApp, Telegram, iMessage) as I/O surfaces
+- **Integrations** (Gmail) as event sources
+- **Persistent memory** per agent and shared across all agents
+- **Scheduled tasks & event handlers** that run Claude and can message back
 - **Web access** for search and browsing
 
 **Implementation approach:**
 - Use existing tools (WhatsApp connector, Claude Agent SDK, MCP servers)
 - Minimal glue code
-- File-based systems where possible (CLAUDE.md for memory, `~/.nanoclaw/groups/` for group data)
+- File-based systems where possible (`~/.nanoclaw/context/` for shared memory, `~/.nanoclaw/agents/` for per-agent data)
 
 ---
 
 ## Architecture Decisions
 
 ### Message Routing
-- A router listens to WhatsApp and routes messages based on configuration
-- Only messages from registered groups are processed
+- Channel adapters (WhatsApp, Telegram, iMessage) deliver inbound messages, which the router dispatches based on chat JID
+- Only messages from registered chats trigger an agent
 - Trigger: `@Andy` prefix (case insensitive), configurable via `ASSISTANT_NAME` env var
-- Unregistered groups are ignored completely
+- Unregistered chats are ignored
 
 ### Memory System
-- **Per-group memory**: Each group has a folder under `~/.nanoclaw/groups/` with its own `CLAUDE.md`
-- **Global memory**: Root `CLAUDE.md` is read by all groups, but only writable from "main" (self-chat)
-- **Files**: Groups can create/read files in their `~/.nanoclaw/groups/{folder}/` directory and reference them
-- Agent runs in the group's folder, automatically inherits both CLAUDE.md files
+- **Shared context**: `~/.nanoclaw/context/{AGENTS,SOUL,USER,MEMORY}.md` is loaded into every agent's prompt
+- **Per-agent identity**: `~/.nanoclaw/agents/{name}/IDENTITY.md` defines the agent's role/persona
+- **Daily memory**: `~/.nanoclaw/agents/{name}/memory/YYYY-MM-DD.md` is appended via `memory_write` and indexed for `memory_search`
+- **Conversations**: archived to `~/.nanoclaw/agents/{name}/conversations/` when sessions reset
+- Agent runs with its folder as `cwd`; the SDK reads `.claude/` project settings from there
 
 ### Session Management
-- Each group maintains a conversation session (via Claude Agent SDK)
+- Each agent maintains a conversation session (via Claude Agent SDK)
+- Daily reset hour and idle reset minutes are configurable via `SESSION_RESET_HOUR` and `SESSION_IDLE_MINUTES`
 - Sessions auto-compact when context gets too long, preserving critical information
 
 ### Agent Execution
 - Agents run via the Claude Agent SDK directly in the host process
-- Each agent invocation calls `query()` with the group's directory as `cwd`
-- No OS-level filesystem isolation between groups — agents have host filesystem access
-- Session isolation is per-group (each group has its own `cwd` and session ID)
-- IPC authorization enforces group-level permission boundaries
+- Each agent invocation calls `query()` with the agent's directory as `cwd`
+- No OS-level filesystem isolation between agents — agents have host filesystem access
+- Session isolation is per-agent (each has its own `cwd` and session ID)
+- IPC authorization enforces per-agent permission boundaries
 
-### Scheduled Tasks
-- Users can ask Claude to schedule recurring or one-time tasks from any group
-- Tasks run as full agents in the context of the group that created them
-- Tasks have access to all tools including Bash
-- Tasks can optionally send messages to their group via `send_message` tool, or complete silently
-- Task runs are logged to the database with duration and result
-- Schedule types: cron expressions, intervals (ms), or one-time (ISO timestamp)
-- From main: can schedule tasks for any group, view/manage all tasks
-- From other groups: can only manage that group's tasks
+### Handlers (Scheduled Tasks + Event Handlers)
+- A unified `handlers` table in SQLite stores both cron-scheduled handlers and event-driven handlers
+- The scheduler emits `cron_trigger` events when handlers are due; the event bus runs matching handlers
+- Handlers run as full agents (with all tools) in either `agent` (shared session) or `isolated` (fresh session) context mode
+- Handlers can optionally send messages via the IPC MCP, or complete silently
+- Each run is logged to the database with duration and result
+- Built-in event types: `cron_trigger`, `handler_complete`, `agent_complete`, `email_received`, `subprocess_exit`, `subprocess_notification`
+- From main: can register/manage handlers for any agent
+- From other agents: can only manage their own handlers
 
-### Group Management
-- New groups are added explicitly via the main channel
-- Groups are registered by editing `~/.nanoclaw/data/registered_groups.json`
-- Each group gets a dedicated folder under `~/.nanoclaw/groups/`
-- Groups can have per-group configuration via `containerConfig` (e.g., custom timeout)
+### Agent Management
+- New agents are registered via the `register_agent` MCP tool (main only) or directly via `~/.nanoclaw/data/registered_agents.json`
+- Each agent gets a dedicated folder under `~/.nanoclaw/agents/`
+- Agents can have per-agent configuration: `containerConfig.timeout`, `heartbeat`, `email`, `activeHours`
 
 ### Main Channel Privileges
-- Main channel is the admin/control group (typically self-chat)
-- Can write to global memory (`~/.nanoclaw/groups/CLAUDE.md`)
-- Can schedule tasks for any group
-- Can view and manage tasks from all groups
-- Can configure per-group settings
+- Main channel is the admin/control surface (typically self-chat)
+- Can write to shared `~/.nanoclaw/context/MEMORY.md`
+- Can register handlers and agents for any folder
+- Can view and manage handlers across all agents
+- Can configure per-agent settings
 
 ---
 
 ## Integration Points
 
-### WhatsApp
-- Using baileys library for WhatsApp Web connection
-- Messages stored in SQLite, polled by router
-- QR code authentication during setup
+### Channels
+- **WhatsApp**: baileys library; QR auth during setup
+- **Telegram**: grammY; bot token + optional bot pool for agent swarms
+- **iMessage**: file-tail of `imsg watch --json`; needs Full Disk Access
+- Messages are stored in SQLite; the router dispatches to per-agent processing queues
 
-### Scheduler
-- Built-in scheduler runs in the host process, invokes agents for task execution
-- Custom `nanoclaw` MCP server provides scheduling tools
-- Tools: `schedule_task`, `list_tasks`, `pause_task`, `resume_task`, `cancel_task`, `send_message`
-- Tasks stored in SQLite with run history
-- Scheduler loop checks for due tasks every minute
-- Tasks execute Claude Agent SDK in the group's directory context
+### Integrations
+- **Email** (`src/integrations/email.ts`): polls Gmail via the `gog` CLI, emits `email_received` events; reply primitive available to agents via the `reply_email` MCP tool
+
+### Handlers + MCP Tools
+- Scheduler and event bus run in the host process, invoke agents for handler execution
+- The custom `nanoclaw` MCP server (in `src/agent/ipc-mcp.ts`) exposes:
+  - `send_message`, `schedule_task`, `register_handler`, `pause_handler`, `resume_handler`, `cancel_handler`, `list_handlers`
+  - `emit_event`, `register_agent`, `reply_email`
+  - `memory_write`, `memory_search`
+  - `subprocess_start/read/write/poll/kill/list`
+- Handlers stored in SQLite with run history
+- Scheduler checks for due cron handlers every minute; the event bus drains the queue every 5 seconds
 
 ### Web Access
 - Built-in WebSearch and WebFetch tools

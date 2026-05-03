@@ -87,9 +87,8 @@ NanoClaw uses a **Channel abstraction** (`Channel` interface in `src/types.ts`).
 |------|---------|
 | `src/types.ts` | `Channel` interface definition |
 | `src/channels/whatsapp.ts` | `WhatsAppChannel` class (reference implementation) |
-| `src/router.ts` | `findChannel()` |
-| `src/index.ts` | Orchestrator: creates channels, wires callbacks, starts subsystems |
-| `src/ipc.ts` | IPC watcher (uses `sendMessage` dep for outbound) |
+| `src/channels/router.ts` | `findChannel()` |
+| `src/index.ts` | Orchestrator: creates channels, wires callbacks, starts the IPC watcher |
 
 The Telegram channel follows the same pattern as WhatsApp:
 - Implements `Channel` interface (`connect`, `sendMessage`, `ownsJid`, `disconnect`, `setTyping`)
@@ -605,7 +604,7 @@ Telegram @mentions (e.g., `@andy_ai_bot`) are automatically translated: if the b
 
 Check:
 1. `TELEGRAM_BOT_TOKEN` is set in `.env` AND synced to `data/env/env`
-2. Chat is registered in SQLite (check with: `sqlite3 store/messages.db "SELECT * FROM registered_groups WHERE jid LIKE 'tg:%'"`)
+2. Chat is registered in `~/.nanoclaw/data/registered_agents.json` (check with: `jq 'to_entries | map(select(.key | startswith("tg:")))' ~/.nanoclaw/data/registered_agents.json`)
 3. For non-main chats: message includes trigger pattern
 4. Service is running: `launchctl list | grep nanoclaw`
 
@@ -649,6 +648,6 @@ To remove Telegram integration:
 3. Remove `channels` array and revert to using `whatsapp` directly in `processGroupMessages`, scheduler deps, and IPC deps
 4. Revert `getAvailableGroups()` filter to only include `@g.us` chats
 5. Remove Telegram config (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_ONLY`) from `src/config.ts`
-6. Remove Telegram registrations from SQLite: `sqlite3 store/messages.db "DELETE FROM registered_groups WHERE jid LIKE 'tg:%'"`
+6. Remove Telegram registrations from `~/.nanoclaw/data/registered_agents.json`: `jq 'with_entries(select(.key | startswith("tg:") | not))' ~/.nanoclaw/data/registered_agents.json > /tmp/r.json && mv /tmp/r.json ~/.nanoclaw/data/registered_agents.json`
 7. Uninstall: `npm uninstall grammy`
 8. Rebuild: `npm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw`

@@ -9,8 +9,8 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 
-import { STORE_DIR } from './config.js';
-import { logger } from './logger.js';
+import { STORE_DIR } from '../config.js';
+import { logger } from '../logger.js';
 
 const execFileAsync = promisify(execFile);
 

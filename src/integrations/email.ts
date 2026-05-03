@@ -1,11 +1,11 @@
 import { execFile } from 'child_process';
 import path from 'path';
 
-import { DATA_DIR, EMAIL_DEFAULT_INTERVAL, EMAIL_HANDLER_PREFIX } from './config.js';
-import { createHandler, emitEvent, getAllHandlers, updateHandler } from './db.js';
-import { logger } from './logger.js';
-import { EmailMessage, RegisteredAgent } from './types.js';
-import { loadJson, saveJson } from './utils.js';
+import { DATA_DIR, EMAIL_DEFAULT_INTERVAL, EMAIL_HANDLER_PREFIX } from '../config.js';
+import { createHandler, emitEvent, getAllHandlers, updateHandler } from '../db.js';
+import { logger } from '../logger.js';
+import { EmailMessage, RegisteredAgent } from '../types.js';
+import { loadJson, saveJson } from '../utils/json.js';
 
 const GOG_PATH = '/opt/homebrew/bin/gog';
 const MAX_PROCESSED_IDS = 1000;

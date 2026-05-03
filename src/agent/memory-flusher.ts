@@ -2,15 +2,15 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { AGENTS_DIR, MEMORY_FLUSH_INTERVAL, localDate, localTime } from './config.js';
-import { logger } from './logger.js';
+import { AGENTS_DIR, MEMORY_FLUSH_INTERVAL, localDate, localTime } from '../config.js';
+import { logger } from '../logger.js';
 import {
   formatTranscriptMarkdown,
   generateFallbackName,
   getSessionSummary,
   parseTranscript,
   sanitizeFilename,
-} from './agent-runner.js';
+} from './runner.js';
 
 interface MemoryFlusherDeps {
   getSessions: () => Record<string, string>;
