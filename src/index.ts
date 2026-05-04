@@ -522,10 +522,16 @@ function startIpcWatcher(): void {
                 if (data.chatJid) {
                   targetJids = [data.chatJid];
                 } else {
-                  // No originating channel (e.g. event handler): send to all channels for the agent
-                  targetJids = Object.entries(registeredAgents)
-                    .filter(([, a]) => a.folder === data.agentFolder)
-                    .map(([jid]) => jid);
+                  // No originating channel (e.g. event handler). Prefer the
+                  // folder's primary channel if one is flagged; otherwise fan
+                  // out to every channel registered to the folder.
+                  const folderJids = Object.entries(registeredAgents).filter(
+                    ([, a]) => a.folder === data.agentFolder,
+                  );
+                  const primary = folderJids.find(([, a]) => a.primary);
+                  targetJids = primary
+                    ? [primary[0]]
+                    : folderJids.map(([jid]) => jid);
                 }
 
                 for (const targetJid of targetJids) {

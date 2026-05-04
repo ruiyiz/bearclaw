@@ -93,9 +93,14 @@ function buildPrompt(input: ReportInput): string {
 }
 
 function pickReportChatJid(
-  registeredAgentJids: Record<string, { folder: string }>,
+  registeredAgentJids: Record<string, { folder: string; primary?: boolean }>,
 ): string | null {
   if (DREAM_REPORT_CHANNEL) return DREAM_REPORT_CHANNEL;
+  // Prefer a channel explicitly flagged as primary for the main folder.
+  for (const [jid, agent] of Object.entries(registeredAgentJids)) {
+    if (agent.folder === MAIN_AGENT_FOLDER && agent.primary) return jid;
+  }
+  // Fall back to the first registered channel for the main folder.
   for (const [jid, agent] of Object.entries(registeredAgentJids)) {
     if (agent.folder === MAIN_AGENT_FOLDER) return jid;
   }
@@ -122,7 +127,7 @@ function writeReportIpc(text: string, chatJid: string | null): void {
 export async function runHypnopompicReport(
   agentDir: string,
   input: ReportInput,
-  registeredAgents: Record<string, { folder: string }>,
+  registeredAgents: Record<string, { folder: string; primary?: boolean }>,
 ): Promise<void> {
   const totalPromoted = input.perAgent.reduce((s, a) => s + a.promoted, 0);
   if (totalPromoted === 0 && input.shared.length === 0) {

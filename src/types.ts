@@ -1,5 +1,9 @@
 export type OnInboundMessage = (chatJid: string, msg: NewMessage) => void;
-export type OnChatMetadata = (chatJid: string, timestamp: string, name?: string) => void;
+export type OnChatMetadata = (
+  chatJid: string,
+  timestamp: string,
+  name?: string,
+) => void;
 
 export type MediaType = 'image' | 'document' | 'video' | 'audio';
 
@@ -22,13 +26,30 @@ export interface Channel {
   sendMessageWithId?(jid: string, text: string): Promise<number>;
   editMessage?(jid: string, messageId: number, text: string): Promise<void>;
   deleteMessage?(jid: string, messageId: number): Promise<void>;
-  sendMedia?(jid: string, type: MediaType, source: MediaSource, options?: MediaOptions): Promise<void>;
+  sendMedia?(
+    jid: string,
+    type: MediaType,
+    source: MediaSource,
+    options?: MediaOptions,
+  ): Promise<void>;
   ownsJid(jid: string): boolean;
   isConnected(): boolean;
   disconnect(): Promise<void>;
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
-  sendAsAgent?(jid: string, text: string, agentName: string, agentFolder: string): Promise<void>;
-  sendMediaAsAgent?(jid: string, type: MediaType, source: MediaSource, options: MediaOptions, agentName: string, agentFolder: string): Promise<void>;
+  sendAsAgent?(
+    jid: string,
+    text: string,
+    agentName: string,
+    agentFolder: string,
+  ): Promise<void>;
+  sendMediaAsAgent?(
+    jid: string,
+    type: MediaType,
+    source: MediaSource,
+    options: MediaOptions,
+    agentName: string,
+    agentFolder: string,
+  ): Promise<void>;
   syncMetadata?(force?: boolean): Promise<void>;
 }
 
@@ -43,13 +64,13 @@ export interface HeartbeatConfig {
 }
 
 interface EmailConfig {
-  address: string;       // Gmail trigger address, e.g. "ruiyizhang+coco@gmail.com"
-  interval?: string;     // Poll interval: "30m", "1h", etc. Default: "1h"
+  address: string; // Gmail trigger address, e.g. "ruiyizhang+coco@gmail.com"
+  interval?: string; // Poll interval: "30m", "1h", etc. Default: "1h"
 }
 
 interface ActiveHoursConfig {
-  cron: string | string[];  // one or more cron expressions (OR logic); e.g. ["* 18-22 * * 1-5", "* * * * 0,6"]
-  autoReply?: string;       // custom off-hours message
+  cron: string | string[]; // one or more cron expressions (OR logic); e.g. ["* 18-22 * * 1-5", "* * * * 0,6"]
+  autoReply?: string; // custom off-hours message
 }
 
 export interface RegisteredAgent {
@@ -61,6 +82,9 @@ export interface RegisteredAgent {
   heartbeat?: HeartbeatConfig;
   email?: EmailConfig;
   activeHours?: ActiveHoursConfig;
+  // Marks the channel that should receive folder-wide proactive messages
+  // (e.g. the Hypnopompic Report) when multiple channels share the folder.
+  primary?: boolean;
 }
 
 export interface Session {
