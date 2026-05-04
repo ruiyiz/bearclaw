@@ -45,17 +45,6 @@ export const TRIGGER_PATTERN = new RegExp(
   'i',
 );
 
-// Session reset — clear stale sessions to prevent unbounded context growth
-// Set to -1 to disable
-export const SESSION_RESET_HOUR = parseInt(
-  process.env.SESSION_RESET_HOUR ?? '4',
-  10,
-);
-export const SESSION_IDLE_MINUTES = parseInt(
-  process.env.SESSION_IDLE_MINUTES ?? '-1',
-  10,
-);
-
 export const STT_ECHO_ENABLED = process.env.STT_ECHO_ENABLED !== 'false';
 
 export const EMAIL_DEFAULT_INTERVAL = '1h';
@@ -63,6 +52,48 @@ export const EMAIL_HANDLER_PREFIX = 'email-';
 
 // Heartbeat — proactive agent initiative loop
 export const HEARTBEAT_HANDLER_PREFIX = 'heartbeat-';
+
+// Dream cycle — daily memory consolidation; bundles the daily session reset
+export const DREAM_HANDLER_PREFIX = 'dream-';
+export const DREAM_ENABLED = process.env.DREAM_ENABLED !== 'false';
+export const DREAM_HOUR = parseInt(process.env.DREAM_HOUR ?? '4', 10);
+export const DREAM_LOOKBACK_DAYS = parseInt(
+  process.env.DREAM_LOOKBACK_DAYS ?? '7',
+  10,
+);
+export const DREAM_MIN_NEW_ENTRIES = parseInt(
+  process.env.DREAM_MIN_NEW_ENTRIES ?? '5',
+  10,
+);
+export const DREAM_RECENCY_HALFLIFE = parseInt(
+  process.env.DREAM_RECENCY_HALFLIFE ?? '3',
+  10,
+);
+export const DREAM_MIN_SCORE = parseFloat(
+  process.env.DREAM_MIN_SCORE ?? '0.55',
+);
+export const DREAM_MIN_SUPPORT = parseInt(
+  process.env.DREAM_MIN_SUPPORT ?? '2',
+  10,
+);
+export const DREAM_MIN_DIVERSITY = parseInt(
+  process.env.DREAM_MIN_DIVERSITY ?? '2',
+  10,
+);
+export const DREAM_ENGRAM_LINE_CAP = parseInt(
+  process.env.DREAM_ENGRAM_LINE_CAP ?? '200',
+  10,
+);
+export const DREAM_REPORT_CHANNEL = process.env.DREAM_REPORT_CHANNEL || '';
+
+// Embeddings (vector retrieval)
+export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+export const EMBEDDING_MODEL =
+  process.env.EMBEDDING_MODEL || 'text-embedding-3-small';
+export const EMBEDDING_DIMS = parseInt(
+  process.env.EMBEDDING_DIMS ?? '1536',
+  10,
+);
 
 export const HEARTBEAT_PROMPT = `[HEARTBEAT — Proactive check-in. You are waking up on your own to look around.]
 
@@ -96,6 +127,10 @@ export function localTime(d = new Date()): string {
 
 export function localHour(d = new Date()): number {
   return parseInt(
-    d.toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: TIMEZONE }),
+    d.toLocaleString('en-US', {
+      hour: 'numeric',
+      hour12: false,
+      timeZone: TIMEZONE,
+    }),
   );
 }

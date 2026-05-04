@@ -1,23 +1,42 @@
 import Database from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-import { STORE_DIR } from './config.js';
+import { EMBEDDING_DIMS, STORE_DIR } from './config.js';
 import { logger } from './logger.js';
-import {
-  EventRecord,
-  Handler,
-  HandlerRunLog,
-  NewMessage,
-} from './types.js';
+import { EventRecord, Handler, HandlerRunLog, NewMessage } from './types.js';
 
 let db: Database.Database;
+let vecAvailable = false;
+
+export function getDb(): Database.Database {
+  return db;
+}
+
+export function isVectorAvailable(): boolean {
+  return vecAvailable;
+}
 
 export function initDatabase(): void {
   const dbPath = path.join(STORE_DIR, 'messages.db');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   db = new Database(dbPath);
+
+  try {
+    sqliteVec.load(db);
+    const v = db.prepare('SELECT vec_version() as v').get() as { v: string };
+    vecAvailable = true;
+    logger.info({ vecVersion: v.v }, 'sqlite-vec loaded');
+  } catch (err) {
+    vecAvailable = false;
+    logger.warn(
+      { err },
+      'sqlite-vec failed to load; vector retrieval disabled',
+    );
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS chats (
       jid TEXT PRIMARY KEY,
@@ -92,9 +111,35 @@ export function initDatabase(): void {
   migrateToUnifiedHandlers();
 
   // Rename context_mode 'group' → 'agent'
-  db.exec(`UPDATE handlers SET context_mode = 'agent' WHERE context_mode = 'group'`);
+  db.exec(
+    `UPDATE handlers SET context_mode = 'agent' WHERE context_mode = 'group'`,
+  );
 
   initMemoryFts();
+  initDreamTables();
+  migrateChunkifyOldFiles();
+}
+
+/**
+ * Pre-vector versions of NanoClaw indexed memory at the file level only.
+ * If memory_files has rows but memory_chunks is empty, clear memory_files so
+ * the next indexMemoryFiles call rebuilds chunks (and embeds them).
+ */
+function migrateChunkifyOldFiles(): void {
+  const fileCount = (
+    db.prepare('SELECT COUNT(*) AS c FROM memory_files').get() as { c: number }
+  ).c;
+  const chunkCount = (
+    db.prepare('SELECT COUNT(*) AS c FROM memory_chunks').get() as { c: number }
+  ).c;
+  if (fileCount > 0 && chunkCount === 0) {
+    db.prepare('DELETE FROM memory_files').run();
+    db.prepare('DELETE FROM memory_fts').run();
+    logger.info(
+      { fileCount },
+      'Cleared file-level memory index for chunk-aware rebuild',
+    );
+  }
 }
 
 function intervalToCron(ms: number): string {
@@ -107,33 +152,48 @@ function intervalToCron(ms: number): string {
 }
 
 function migrateToUnifiedHandlers(): void {
-  const hasEventHandlers = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='event_handlers'",
-  ).get();
+  const hasEventHandlers = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='event_handlers'",
+    )
+    .get();
 
-  const hasScheduledTasks = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'",
-  ).get();
+  const hasScheduledTasks = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'",
+    )
+    .get();
 
   if (!hasEventHandlers && !hasScheduledTasks) return;
 
   const migrate = db.transaction(() => {
     // Migrate event_handlers → handlers
     if (hasEventHandlers) {
-      const rows = db.prepare('SELECT * FROM event_handlers').all() as Array<Record<string, unknown>>;
+      const rows = db.prepare('SELECT * FROM event_handlers').all() as Array<
+        Record<string, unknown>
+      >;
       for (const h of rows) {
-        const exists = db.prepare('SELECT id FROM handlers WHERE id = ?').get(h.id);
+        const exists = db
+          .prepare('SELECT id FROM handlers WHERE id = ?')
+          .get(h.id);
         if (exists) continue;
 
         db.prepare(
           `INSERT INTO handlers (id, group_folder, prompt, context_mode, event_type, filter, cron, next_run, cooldown_ms, last_triggered, max_triggers, trigger_count, status, created_at)
            VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
         ).run(
-          h.id, h.group_folder, h.prompt, h.context_mode || 'isolated',
-          h.event_type, h.filter,
-          h.cooldown_ms || 0, h.last_triggered,
-          h.max_triggers ?? null, h.trigger_count || 0,
-          h.status || 'active', h.created_at,
+          h.id,
+          h.group_folder,
+          h.prompt,
+          h.context_mode || 'isolated',
+          h.event_type,
+          h.filter,
+          h.cooldown_ms || 0,
+          h.last_triggered,
+          h.max_triggers ?? null,
+          h.trigger_count || 0,
+          h.status || 'active',
+          h.created_at,
         );
       }
     }
@@ -142,13 +202,21 @@ function migrateToUnifiedHandlers(): void {
     if (hasScheduledTasks) {
       // Ensure context_mode column exists on old table
       try {
-        db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`);
-      } catch { /* column already exists */ }
+        db.exec(
+          `ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`,
+        );
+      } catch {
+        /* column already exists */
+      }
 
-      const rows = db.prepare('SELECT * FROM scheduled_tasks').all() as Array<Record<string, unknown>>;
+      const rows = db.prepare('SELECT * FROM scheduled_tasks').all() as Array<
+        Record<string, unknown>
+      >;
       for (const t of rows) {
         const handlerId = `migrated-${t.id}`;
-        const exists = db.prepare('SELECT id FROM handlers WHERE id = ?').get(handlerId);
+        const exists = db
+          .prepare('SELECT id FROM handlers WHERE id = ?')
+          .get(handlerId);
         if (exists) continue;
 
         let cron: string | null = null;
@@ -169,12 +237,17 @@ function migrateToUnifiedHandlers(): void {
           `INSERT INTO handlers (id, group_folder, prompt, context_mode, event_type, filter, cron, next_run, cooldown_ms, last_triggered, max_triggers, trigger_count, status, created_at)
            VALUES (?, ?, ?, ?, 'cron_trigger', ?, ?, ?, 0, ?, ?, 0, ?, ?)`,
         ).run(
-          handlerId, t.group_folder, t.prompt,
+          handlerId,
+          t.group_folder,
+          t.prompt,
           (t.context_mode as string) || 'isolated',
-          filter, cron, nextRun,
+          filter,
+          cron,
+          nextRun,
           t.last_run as string | null,
           maxTriggers,
-          t.status || 'active', t.created_at,
+          t.status || 'active',
+          t.created_at,
         );
       }
     }
@@ -280,7 +353,15 @@ export function setLastGroupSync(): void {
 export function storeMessage(msg: NewMessage): void {
   db.prepare(
     `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(msg.id, msg.chat_jid, msg.sender, msg.sender_name, msg.content, msg.timestamp, 0);
+  ).run(
+    msg.id,
+    msg.chat_jid,
+    msg.sender,
+    msg.sender_name,
+    msg.content,
+    msg.timestamp,
+    0,
+  );
 }
 
 export function getNewMessages(
@@ -292,7 +373,9 @@ export function getNewMessages(
 
   const placeholders = jids.map(() => '?').join(',');
   // Filter out bot's own messages by checking content prefix (not is_from_me, since user shares the account)
-  const prefixFilters = botPrefixes.map(() => 'content NOT LIKE ?').join(' AND ');
+  const prefixFilters = botPrefixes
+    .map(() => 'content NOT LIKE ?')
+    .join(' AND ');
   const sql = `
     SELECT id, chat_jid, sender, sender_name, content, timestamp
     FROM messages
@@ -302,7 +385,11 @@ export function getNewMessages(
 
   const rows = db
     .prepare(sql)
-    .all(lastTimestamp, ...jids, ...botPrefixes.map(p => `${p}:%`)) as NewMessage[];
+    .all(
+      lastTimestamp,
+      ...jids,
+      ...botPrefixes.map((p) => `${p}:%`),
+    ) as NewMessage[];
 
   let newTimestamp = lastTimestamp;
   for (const row of rows) {
@@ -318,7 +405,9 @@ export function getMessagesSince(
   botPrefixes: string[],
 ): NewMessage[] {
   // Filter out bot's own messages by checking content prefix
-  const prefixFilters = botPrefixes.map(() => 'content NOT LIKE ?').join(' AND ');
+  const prefixFilters = botPrefixes
+    .map(() => 'content NOT LIKE ?')
+    .join(' AND ');
   const sql = `
     SELECT id, chat_jid, sender, sender_name, content, timestamp
     FROM messages
@@ -327,7 +416,11 @@ export function getMessagesSince(
   `;
   return db
     .prepare(sql)
-    .all(chatJid, sinceTimestamp, ...botPrefixes.map(p => `${p}:%`)) as NewMessage[];
+    .all(
+      chatJid,
+      sinceTimestamp,
+      ...botPrefixes.map((p) => `${p}:%`),
+    ) as NewMessage[];
 }
 
 // ─── Event functions ───────────────────────────────────────────────────────
@@ -362,9 +455,9 @@ export function cleanupProcessedEvents(): void {
          SELECT id FROM events WHERE processed = 1 AND emitted_at < ?
        )`,
     ).run(cutoff);
-    db.prepare(
-      `DELETE FROM events WHERE processed = 1 AND emitted_at < ?`,
-    ).run(cutoff);
+    db.prepare(`DELETE FROM events WHERE processed = 1 AND emitted_at < ?`).run(
+      cutoff,
+    );
   })();
 }
 
@@ -422,8 +515,14 @@ export function updateHandlerAfterTrigger(id: string): void {
   // Auto-complete if max_triggers reached
   const handler = db
     .prepare(`SELECT max_triggers, trigger_count FROM handlers WHERE id = ?`)
-    .get(id) as { max_triggers: number | null; trigger_count: number } | undefined;
-  if (handler && handler.max_triggers !== null && handler.trigger_count >= handler.max_triggers) {
+    .get(id) as
+    | { max_triggers: number | null; trigger_count: number }
+    | undefined;
+  if (
+    handler &&
+    handler.max_triggers !== null &&
+    handler.trigger_count >= handler.max_triggers
+  ) {
     db.prepare(`UPDATE handlers SET status = 'completed' WHERE id = ?`).run(id);
   }
 }
@@ -470,9 +569,9 @@ export function createHandler(
 }
 
 export function getHandlerById(id: string): Handler | undefined {
-  return db
-    .prepare('SELECT * FROM handlers WHERE id = ?')
-    .get(id) as Handler | undefined;
+  return db.prepare('SELECT * FROM handlers WHERE id = ?').get(id) as
+    | Handler
+    | undefined;
 }
 
 export function getAllHandlers(): Handler[] {
@@ -483,7 +582,12 @@ export function getAllHandlers(): Handler[] {
 
 export function updateHandler(
   id: string,
-  updates: Partial<Pick<Handler, 'prompt' | 'filter' | 'cooldown_ms' | 'max_triggers' | 'status'>>,
+  updates: Partial<
+    Pick<
+      Handler,
+      'prompt' | 'filter' | 'cooldown_ms' | 'max_triggers' | 'status'
+    >
+  >,
 ): void {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -512,9 +616,9 @@ export function updateHandler(
   if (fields.length === 0) return;
 
   values.push(id);
-  db.prepare(
-    `UPDATE handlers SET ${fields.join(', ')} WHERE id = ?`,
-  ).run(...values);
+  db.prepare(`UPDATE handlers SET ${fields.join(', ')} WHERE id = ?`).run(
+    ...values,
+  );
 }
 
 export function deleteHandler(id: string): void {
@@ -537,12 +641,14 @@ export function logHandlerRun(log: HandlerRunLog): void {
   );
 }
 
-// ─── Memory FTS ──────────────────────────────────────────────────────────
+// ─── Memory FTS + Vector ─────────────────────────────────────────────────
 
 function initMemoryFts(): void {
-  const hasFts = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_fts'",
-  ).get();
+  const hasFts = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_fts'",
+    )
+    .get();
 
   if (!hasFts) {
     db.exec(`
@@ -561,7 +667,120 @@ function initMemoryFts(): void {
       mtime INTEGER NOT NULL,
       PRIMARY KEY (path, group_folder)
     );
+
+    CREATE TABLE IF NOT EXISTS memory_chunks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_folder TEXT NOT NULL,
+      path TEXT NOT NULL,
+      chunk_idx INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      UNIQUE (agent_folder, path, chunk_idx)
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_chunks_lookup
+      ON memory_chunks(agent_folder, path);
+    CREATE INDEX IF NOT EXISTS idx_memory_chunks_hash
+      ON memory_chunks(content_hash);
   `);
+
+  if (vecAvailable) {
+    const hasVec = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_vec'",
+      )
+      .get();
+    if (!hasVec) {
+      db.exec(`
+        CREATE VIRTUAL TABLE memory_vec USING vec0(
+          embedding float[${EMBEDDING_DIMS}]
+        );
+      `);
+    }
+  }
+}
+
+export interface MemoryChunk {
+  agent_folder: string;
+  path: string;
+  chunk_idx: number;
+  content: string;
+}
+
+/**
+ * Split markdown into chunks. Strategy: split on `## ` headers; if a section
+ * is too long, paragraph-split. Section is preserved with its header so the
+ * chunk reads coherently.
+ */
+export function chunkMarkdown(
+  content: string,
+  maxChars = 1200,
+): Array<{ content: string }> {
+  const trimmed = content.trim();
+  if (!trimmed) return [];
+
+  // Split on h2 headers; keep header with its body
+  const sections = trimmed
+    .split(/(?=^## )/m)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const chunks: string[] = [];
+  for (const section of sections.length ? sections : [trimmed]) {
+    if (section.length <= maxChars) {
+      chunks.push(section);
+      continue;
+    }
+    // Paragraph-split a long section
+    const paras = section.split(/\n\n+/);
+    let current = '';
+    for (const p of paras) {
+      if ((current + '\n\n' + p).length > maxChars && current) {
+        chunks.push(current);
+        current = p;
+      } else {
+        current = current ? `${current}\n\n${p}` : p;
+      }
+    }
+    if (current) chunks.push(current);
+  }
+
+  return chunks.filter((c) => c.trim()).map((content) => ({ content }));
+}
+
+function hashContent(s: string): string {
+  return crypto.createHash('sha256').update(s).digest('hex').slice(0, 16);
+}
+
+/** Get chunks that exist in memory_chunks but lack embeddings in memory_vec. */
+export function getChunksMissingEmbeddings(
+  limit = 200,
+): Array<{ id: number; content: string }> {
+  if (!vecAvailable) return [];
+  return db
+    .prepare(
+      `
+    SELECT id, content
+    FROM memory_chunks mc
+    WHERE NOT EXISTS (SELECT 1 FROM memory_vec WHERE rowid = mc.id)
+    LIMIT ?
+  `,
+    )
+    .all(limit) as Array<{ id: number; content: string }>;
+}
+
+/** Insert a precomputed embedding for a chunk. */
+export function setChunkEmbedding(
+  chunkId: number,
+  embedding: Float32Array,
+): void {
+  if (!vecAvailable) return;
+  const buf = Buffer.from(embedding.buffer);
+  // Replace existing if any
+  db.prepare('DELETE FROM memory_vec WHERE rowid = ?').run(chunkId);
+  db.prepare('INSERT INTO memory_vec(rowid, embedding) VALUES (?, ?)').run(
+    chunkId,
+    buf,
+  );
 }
 
 export function indexMemoryFiles(agentFolder: string, agentDir: string): void {
@@ -583,61 +802,108 @@ export function indexMemoryFiles(agentFolder: string, agentDir: string): void {
     }
   }
 
-  // Get already-indexed files for this agent
-  const indexed = db.prepare(
-    'SELECT path, mtime FROM memory_files WHERE group_folder = ?',
-  ).all(agentFolder) as Array<{ path: string; mtime: number }>;
+  const indexed = db
+    .prepare('SELECT path, mtime FROM memory_files WHERE group_folder = ?')
+    .all(agentFolder) as Array<{ path: string; mtime: number }>;
 
   const indexedMap = new Map(indexed.map((r) => [r.path, r.mtime]));
 
   const upsert = db.transaction(() => {
-    // Remove deleted files
     for (const [iPath] of indexedMap) {
       if (!currentFiles.has(iPath)) {
-        db.prepare('DELETE FROM memory_fts WHERE path = ? AND group_folder = ?').run(iPath, agentFolder);
-        db.prepare('DELETE FROM memory_files WHERE path = ? AND group_folder = ?').run(iPath, agentFolder);
+        deleteMemoryPath(agentFolder, iPath);
       }
     }
 
-    // Index new/changed files
     for (const [relPath, mtime] of currentFiles) {
       const existingMtime = indexedMap.get(relPath);
-      if (existingMtime !== undefined && Math.abs(existingMtime - mtime) < 1000) continue;
+      if (existingMtime !== undefined && Math.abs(existingMtime - mtime) < 1000)
+        continue;
 
-      const prefix = relPath.split('/')[0];
       const fullPath = path.join(agentDir, relPath);
       const content = fs.readFileSync(fullPath, 'utf-8');
       if (!content.trim()) continue;
 
-      // Remove old entry
-      db.prepare('DELETE FROM memory_fts WHERE path = ? AND group_folder = ?').run(relPath, agentFolder);
-      db.prepare('DELETE FROM memory_files WHERE path = ? AND group_folder = ?').run(relPath, agentFolder);
+      // Wipe prior FTS and chunks for this path
+      deleteMemoryPath(agentFolder, relPath);
 
-      // Insert new
-      db.prepare('INSERT INTO memory_fts (content, path, group_folder) VALUES (?, ?, ?)').run(content, relPath, agentFolder);
-      db.prepare('INSERT INTO memory_files (path, group_folder, mtime) VALUES (?, ?, ?)').run(relPath, agentFolder, mtime);
+      // FTS: file-level
+      db.prepare(
+        'INSERT INTO memory_fts (content, path, group_folder) VALUES (?, ?, ?)',
+      ).run(content, relPath, agentFolder);
+      db.prepare(
+        'INSERT INTO memory_files (path, group_folder, mtime) VALUES (?, ?, ?)',
+      ).run(relPath, agentFolder, mtime);
+
+      // Chunk-level
+      const chunks = chunkMarkdown(content);
+      const insertChunk = db.prepare(
+        'INSERT INTO memory_chunks (agent_folder, path, chunk_idx, content, content_hash) VALUES (?, ?, ?, ?, ?)',
+      );
+      chunks.forEach((c, i) => {
+        insertChunk.run(
+          agentFolder,
+          relPath,
+          i,
+          c.content,
+          hashContent(c.content),
+        );
+      });
     }
   });
 
   upsert();
 }
 
+function deleteMemoryPath(agentFolder: string, relPath: string): void {
+  db.prepare('DELETE FROM memory_fts WHERE path = ? AND group_folder = ?').run(
+    relPath,
+    agentFolder,
+  );
+  db.prepare(
+    'DELETE FROM memory_files WHERE path = ? AND group_folder = ?',
+  ).run(relPath, agentFolder);
+
+  if (vecAvailable) {
+    const oldChunks = db
+      .prepare(
+        'SELECT id FROM memory_chunks WHERE agent_folder = ? AND path = ?',
+      )
+      .all(agentFolder, relPath) as Array<{ id: number }>;
+    const delVec = db.prepare('DELETE FROM memory_vec WHERE rowid = ?');
+    for (const { id } of oldChunks) delVec.run(id);
+  }
+
+  db.prepare(
+    'DELETE FROM memory_chunks WHERE agent_folder = ? AND path = ?',
+  ).run(agentFolder, relPath);
+}
+
 interface MemorySearchResult {
   path: string;
   snippet: string;
   rank: number;
+  score: number;
 }
 
+/**
+ * Hybrid retrieval: BM25 over file-level FTS5 + vector cosine over chunks,
+ * blended with Reciprocal-Rank Fusion (k=60). When `queryEmbedding` is null
+ * (no embedding available), falls back to FTS5-only ranked by rank.
+ */
 export function searchMemory(
   agentFolder: string,
   query: string,
+  queryEmbedding: Float32Array | null,
   limit = 10,
 ): MemorySearchResult[] {
-  // Escape FTS5 special characters for safe querying
   const safeQuery = query.replace(/["*(){}[\]:^~!]/g, ' ').trim();
-  if (!safeQuery) return [];
 
-  return db.prepare(`
+  // FTS hits (file-level)
+  const ftsRows = safeQuery
+    ? (db
+        .prepare(
+          `
     SELECT
       path,
       snippet(memory_fts, 0, '>>>', '<<<', '...', 40) as snippet,
@@ -646,5 +912,378 @@ export function searchMemory(
     WHERE memory_fts MATCH ? AND group_folder = ?
     ORDER BY rank
     LIMIT ?
-  `).all(safeQuery, agentFolder, limit) as MemorySearchResult[];
+  `,
+        )
+        .all(safeQuery, agentFolder, limit * 2) as Array<{
+        path: string;
+        snippet: string;
+        rank: number;
+      }>)
+    : [];
+
+  // Vector hits (chunk-level → mapped to file)
+  let vecRows: Array<{ path: string; snippet: string; distance: number }> = [];
+  if (vecAvailable && queryEmbedding) {
+    try {
+      const buf = Buffer.from(queryEmbedding.buffer);
+      vecRows = db
+        .prepare(
+          `
+        SELECT mc.path AS path, mc.content AS snippet, mv.distance AS distance
+        FROM memory_vec mv
+        JOIN memory_chunks mc ON mc.id = mv.rowid
+        WHERE mv.embedding MATCH ?
+          AND mc.agent_folder = ?
+          AND k = ?
+      `,
+        )
+        .all(buf, agentFolder, limit * 2) as Array<{
+        path: string;
+        snippet: string;
+        distance: number;
+      }>;
+    } catch (err) {
+      logger.debug({ err }, 'Vector search failed; using FTS only');
+    }
+  }
+
+  // RRF blend over paths
+  const k = 60;
+  const scores = new Map<
+    string,
+    { score: number; snippet: string; rank: number }
+  >();
+  ftsRows.forEach((r, i) => {
+    const cur = scores.get(r.path) || {
+      score: 0,
+      snippet: r.snippet,
+      rank: r.rank,
+    };
+    cur.score += 1 / (k + i + 1);
+    cur.snippet = r.snippet;
+    scores.set(r.path, cur);
+  });
+  // For vec hits, take the best (lowest-distance) chunk per path
+  const bestPerPath = new Map<
+    string,
+    (typeof vecRows)[number] & { rank: number }
+  >();
+  vecRows.forEach((r, i) => {
+    const existing = bestPerPath.get(r.path);
+    if (!existing || r.distance < existing.distance) {
+      bestPerPath.set(r.path, { ...r, rank: i });
+    }
+  });
+  for (const [pth, r] of bestPerPath) {
+    const cur = scores.get(pth) || {
+      score: 0,
+      snippet: truncate(r.snippet, 240),
+      rank: 0,
+    };
+    cur.score += 1 / (k + r.rank + 1);
+    if (!cur.snippet) cur.snippet = truncate(r.snippet, 240);
+    scores.set(pth, cur);
+  }
+
+  return Array.from(scores.entries())
+    .map(([pth, v]) => ({
+      path: pth,
+      snippet: v.snippet,
+      rank: v.rank,
+      score: v.score,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+/** Get raw chunks for an agent in a path glob (e.g. 'memory/2026-05-%'). */
+export function getChunksByPathLike(
+  agentFolder: string,
+  pathLike: string,
+): MemoryChunk[] {
+  return db
+    .prepare(
+      'SELECT agent_folder, path, chunk_idx, content FROM memory_chunks WHERE agent_folder = ? AND path LIKE ? ORDER BY path, chunk_idx',
+    )
+    .all(agentFolder, pathLike) as MemoryChunk[];
+}
+
+/** Vector similarity from a query embedding to all chunks for an agent under a path filter. Returns chunk_id → distance. */
+export function vectorSimilarityForChunks(
+  agentFolder: string,
+  pathLike: string,
+  queryEmbedding: Float32Array,
+): Map<number, number> {
+  const result = new Map<number, number>();
+  if (!vecAvailable) return result;
+  try {
+    const buf = Buffer.from(queryEmbedding.buffer);
+    const rows = db
+      .prepare(
+        `
+      SELECT mc.id AS id, mv.distance AS distance
+      FROM memory_vec mv
+      JOIN memory_chunks mc ON mc.id = mv.rowid
+      WHERE mv.embedding MATCH ?
+        AND mc.agent_folder = ?
+        AND mc.path LIKE ?
+        AND k = 200
+    `,
+      )
+      .all(buf, agentFolder, pathLike) as Array<{
+      id: number;
+      distance: number;
+    }>;
+    for (const r of rows) result.set(r.id, r.distance);
+  } catch (err) {
+    logger.debug({ err }, 'vectorSimilarityForChunks failed');
+  }
+  return result;
+}
+
+// ─── Dream cycle ─────────────────────────────────────────────────────────
+
+function initDreamTables(): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dream_candidates (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_folder    TEXT    NOT NULL,
+      snippet         TEXT    NOT NULL,
+      snippet_hash    TEXT    NOT NULL,
+      source_paths    TEXT    NOT NULL,
+      first_seen      INTEGER NOT NULL,
+      last_seen       INTEGER NOT NULL,
+      support_count   INTEGER NOT NULL DEFAULT 1,
+      distinct_days   INTEGER NOT NULL DEFAULT 1,
+      retrieval_hits  INTEGER NOT NULL DEFAULT 0,
+      retrieval_score REAL    NOT NULL DEFAULT 0,
+      query_chats     TEXT    NOT NULL DEFAULT '[]',
+      theme_tags      TEXT    NOT NULL DEFAULT '[]',
+      contradicts_id  INTEGER,
+      reinforces_id   INTEGER,
+      score           REAL,
+      promoted_at     INTEGER,
+      promoted_to     TEXT,
+      UNIQUE (agent_folder, snippet_hash)
+    );
+    CREATE INDEX IF NOT EXISTS dream_candidates_agent_score
+      ON dream_candidates(agent_folder, score DESC);
+    CREATE INDEX IF NOT EXISTS dream_candidates_last_seen
+      ON dream_candidates(last_seen);
+
+    CREATE TABLE IF NOT EXISTS dream_runs (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_folder    TEXT    NOT NULL,
+      started_at      INTEGER NOT NULL,
+      finished_at     INTEGER,
+      status          TEXT    NOT NULL DEFAULT 'running',
+      light_count     INTEGER NOT NULL DEFAULT 0,
+      rem_count       INTEGER NOT NULL DEFAULT 0,
+      deep_promoted   INTEGER NOT NULL DEFAULT 0,
+      shared_promoted INTEGER,
+      error           TEXT
+    );
+    CREATE INDEX IF NOT EXISTS dream_runs_agent
+      ON dream_runs(agent_folder, started_at DESC);
+  `);
+}
+
+export interface DreamCandidate {
+  id: number;
+  agent_folder: string;
+  snippet: string;
+  snippet_hash: string;
+  source_paths: string;
+  first_seen: number;
+  last_seen: number;
+  support_count: number;
+  distinct_days: number;
+  retrieval_hits: number;
+  retrieval_score: number;
+  query_chats: string;
+  theme_tags: string;
+  contradicts_id: number | null;
+  reinforces_id: number | null;
+  score: number | null;
+  promoted_at: number | null;
+  promoted_to: string | null;
+}
+
+export function upsertDreamCandidate(
+  agentFolder: string,
+  snippet: string,
+  snippetHash: string,
+  sourcePath: string,
+  observedAt: number,
+): number {
+  const sourcePaths = JSON.stringify([sourcePath]);
+  const existing = db
+    .prepare(
+      'SELECT id, source_paths, support_count, distinct_days, last_seen FROM dream_candidates WHERE agent_folder = ? AND snippet_hash = ?',
+    )
+    .get(agentFolder, snippetHash) as
+    | {
+        id: number;
+        source_paths: string;
+        support_count: number;
+        distinct_days: number;
+        last_seen: number;
+      }
+    | undefined;
+
+  if (!existing) {
+    const r = db
+      .prepare(
+        `
+      INSERT INTO dream_candidates
+        (agent_folder, snippet, snippet_hash, source_paths, first_seen, last_seen, support_count, distinct_days)
+      VALUES (?, ?, ?, ?, ?, ?, 1, 1)
+    `,
+      )
+      .run(
+        agentFolder,
+        snippet,
+        snippetHash,
+        sourcePaths,
+        observedAt,
+        observedAt,
+      );
+    return r.lastInsertRowid as number;
+  }
+
+  const paths = new Set<string>(JSON.parse(existing.source_paths));
+  const wasNewPath = !paths.has(sourcePath);
+  paths.add(sourcePath);
+  // distinct_days approximated from distinct YYYY-MM-DD in source paths
+  const distinctDays = new Set<string>();
+  for (const p of paths) {
+    const m = p.match(/(\d{4}-\d{2}-\d{2})/);
+    if (m) distinctDays.add(m[1]);
+  }
+
+  db.prepare(
+    `
+    UPDATE dream_candidates
+    SET source_paths = ?,
+        support_count = support_count + ?,
+        distinct_days = ?,
+        last_seen = MAX(last_seen, ?)
+    WHERE id = ?
+  `,
+  ).run(
+    JSON.stringify([...paths]),
+    wasNewPath ? 1 : 0,
+    Math.max(distinctDays.size, existing.distinct_days),
+    observedAt,
+    existing.id,
+  );
+  return existing.id;
+}
+
+export function getDreamCandidatesForAgent(
+  agentFolder: string,
+): DreamCandidate[] {
+  return db
+    .prepare(
+      'SELECT * FROM dream_candidates WHERE agent_folder = ? AND promoted_at IS NULL',
+    )
+    .all(agentFolder) as DreamCandidate[];
+}
+
+export function setDreamCandidateThemes(
+  id: number,
+  themeTags: string[],
+  contradictsId: number | null,
+  reinforcesId: number | null,
+): void {
+  db.prepare(
+    'UPDATE dream_candidates SET theme_tags = ?, contradicts_id = ?, reinforces_id = ? WHERE id = ?',
+  ).run(JSON.stringify(themeTags), contradictsId, reinforcesId, id);
+}
+
+export function setDreamCandidateScore(id: number, score: number): void {
+  db.prepare('UPDATE dream_candidates SET score = ? WHERE id = ?').run(
+    score,
+    id,
+  );
+}
+
+export function markDreamCandidatePromoted(
+  id: number,
+  promotedTo: 'ENGRAM' | 'MEMORY',
+  at: number,
+): void {
+  db.prepare(
+    'UPDATE dream_candidates SET promoted_at = ?, promoted_to = ? WHERE id = ?',
+  ).run(at, promotedTo, id);
+}
+
+export function pruneOldDreamCandidates(olderThanSec: number): number {
+  const cutoff = Math.floor(Date.now() / 1000) - olderThanSec;
+  const r = db
+    .prepare(
+      'DELETE FROM dream_candidates WHERE last_seen < ? AND promoted_at IS NULL',
+    )
+    .run(cutoff);
+  return r.changes;
+}
+
+export function startDreamRun(agentFolder: string): number {
+  const r = db
+    .prepare(
+      'INSERT INTO dream_runs (agent_folder, started_at, status) VALUES (?, ?, ?)',
+    )
+    .run(agentFolder, Math.floor(Date.now() / 1000), 'running');
+  return r.lastInsertRowid as number;
+}
+
+export function finishDreamRun(
+  id: number,
+  status: 'success' | 'error' | 'skipped',
+  counts: {
+    lightCount?: number;
+    remCount?: number;
+    deepPromoted?: number;
+    sharedPromoted?: number;
+    error?: string;
+  } = {},
+): void {
+  db.prepare(
+    `
+    UPDATE dream_runs
+    SET finished_at = ?, status = ?,
+        light_count = COALESCE(?, light_count),
+        rem_count = COALESCE(?, rem_count),
+        deep_promoted = COALESCE(?, deep_promoted),
+        shared_promoted = COALESCE(?, shared_promoted),
+        error = COALESCE(?, error)
+    WHERE id = ?
+  `,
+  ).run(
+    Math.floor(Date.now() / 1000),
+    status,
+    counts.lightCount ?? null,
+    counts.remCount ?? null,
+    counts.deepPromoted ?? null,
+    counts.sharedPromoted ?? null,
+    counts.error ?? null,
+    id,
+  );
+}
+
+export function getLastSuccessfulDreamRun(
+  agentFolder: string,
+): { started_at: number; finished_at: number | null } | null {
+  return db
+    .prepare(
+      "SELECT started_at, finished_at FROM dream_runs WHERE agent_folder = ? AND status = 'success' ORDER BY started_at DESC LIMIT 1",
+    )
+    .get(agentFolder) as {
+    started_at: number;
+    finished_at: number | null;
+  } | null;
 }

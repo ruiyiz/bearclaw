@@ -11,8 +11,9 @@ Single Node.js process that connects to chat platforms (WhatsApp, Telegram, iMes
 ```
 src/
 ├── index.ts, config.ts, types.ts, logger.ts, db.ts   # trunk
-├── agent/         runner, ipc-mcp, subprocess-manager, memory-flusher, system-prompt
+├── agent/         runner, ipc-mcp, subprocess-manager, memory-flusher, embedder, memory-embed, system-prompt
 ├── channels/      whatsapp, telegram, imessage, router
+├── dream/         orchestrator, light, rem, deep, narrate, shared, report, handler, subagent
 ├── events/        bus, scheduler, heartbeat
 ├── integrations/  email
 ├── media/         format, source, transcribe, tts
@@ -23,27 +24,33 @@ src/
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | Main app: channel wiring, message routing, IPC watcher |
-| `src/config.ts` | Env vars, paths, trigger pattern, intervals |
-| `src/agent/runner.ts` | Runs the Claude Agent SDK in-process |
-| `src/agent/ipc-mcp.ts` | MCP tools for agent ↔ host communication |
-| `src/events/bus.ts` | Event dispatch + handler runner |
-| `src/events/scheduler.ts` | Cron handler firing |
-| `src/integrations/email.ts` | Gmail polling and reply primitive |
-| `src/db.ts` | SQLite operations |
-| `~/.nanoclaw/context/` | Shared context: AGENTS.md, SOUL.md, USER.md, MEMORY.md |
-| `~/.nanoclaw/agents/{name}/IDENTITY.md` | Per-agent identity |
-| `~/.nanoclaw/skills/` | Skill definitions (SKILL.md per skill) |
+| File                                    | Purpose                                                           |
+| --------------------------------------- | ----------------------------------------------------------------- |
+| `src/index.ts`                          | Main app: channel wiring, message routing, IPC watcher            |
+| `src/config.ts`                         | Env vars, paths, trigger pattern, intervals, dream cycle settings |
+| `src/agent/runner.ts`                   | Runs the Claude Agent SDK in-process                              |
+| `src/agent/ipc-mcp.ts`                  | MCP tools for agent ↔ host communication                          |
+| `src/agent/embedder.ts`                 | OpenAI embedding HTTP client                                      |
+| `src/agent/memory-embed.ts`             | Embeds chunks into `memory_vec`                                   |
+| `src/dream/orchestrator.ts`             | Bundles session reset + Light/REM/Deep/Narrate/Shared/Report      |
+| `src/dream/handler.ts`                  | Registers `dream-{folder}` cron handlers                          |
+| `src/events/bus.ts`                     | Event dispatch + handler runner (intercepts `dream-` handlers)    |
+| `src/events/scheduler.ts`               | Cron handler firing                                               |
+| `src/integrations/email.ts`             | Gmail polling and reply primitive                                 |
+| `src/db.ts`                             | SQLite operations + sqlite-vec + dream tables                     |
+| `~/.nanoclaw/context/`                  | Shared context: AGENTS.md, SOUL.md, USER.md, MEMORY.md            |
+| `~/.nanoclaw/agents/{name}/IDENTITY.md` | Per-agent identity                                                |
+| `~/.nanoclaw/agents/{name}/ENGRAM.md`   | Per-agent curated long-term memory (dream output)                 |
+| `~/.nanoclaw/agents/{name}/dreams/`     | Per-agent reflective diary entries (`YYYY-MM-DD.md`)              |
+| `~/.nanoclaw/skills/`                   | Skill definitions (SKILL.md per skill)                            |
 
 ## Skills
 
-| Skill | When to Use |
-|-------|-------------|
-| `/setup` | First-time installation, authentication, service configuration |
-| `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Agent issues, logs, troubleshooting |
+| Skill        | When to Use                                                    |
+| ------------ | -------------------------------------------------------------- |
+| `/setup`     | First-time installation, authentication, service configuration |
+| `/customize` | Adding channels, integrations, changing behavior               |
+| `/debug`     | Agent issues, logs, troubleshooting                            |
 
 ## Development
 
@@ -55,6 +62,7 @@ npm run build        # Compile TypeScript
 ```
 
 Service management:
+
 ```bash
 launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist

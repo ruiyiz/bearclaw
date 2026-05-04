@@ -1,0 +1,133 @@
+/**
+ * Dream Cycle — Light phase (deterministic).
+ *
+ * Reads the lookback-window daily memory logs and conversation summaries,
+ * splits into snippet candidates on `## ` headings, dedupes via Jaccard
+ * similarity against existing candidates, and upserts into dream_candidates.
+ * Never writes ENGRAM.md or MEMORY.md.
+ */
+
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+
+import { DREAM_LOOKBACK_DAYS } from '../config.js';
+import { upsertDreamCandidate } from '../db.js';
+import { logger } from '../logger.js';
+
+const JACCARD_THRESHOLD = 0.85;
+
+function hash(s: string): string {
+  return crypto.createHash('sha256').update(s).digest('hex').slice(0, 24);
+}
+
+function tokenize(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 3),
+  );
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let intersect = 0;
+  for (const t of a) if (b.has(t)) intersect++;
+  const union = a.size + b.size - intersect;
+  return union ? intersect / union : 0;
+}
+
+function normalize(s: string): string {
+  return s
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Split markdown on H2 boundaries; drop empty sections; strip the H2 line. */
+function extractSnippets(content: string): string[] {
+  const sections = content
+    .split(/(?=^## )/m)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const stripHeading = (s: string) => s.replace(/^##\s+[^\n]*\n+/, '').trim();
+  if (sections.length === 0 && content.trim()) return [normalize(content)];
+  return sections
+    .map(stripHeading)
+    .map(normalize)
+    .filter((s) => s.length >= 30 && s.length <= 1500);
+}
+
+function extractDateFromFilename(filename: string): string | null {
+  const m = filename.match(/(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
+function isWithinLookback(filename: string, cutoffDate: string): boolean {
+  const d = extractDateFromFilename(filename);
+  if (!d) return true; // conversations without dates: include conservatively
+  return d >= cutoffDate;
+}
+
+function cutoffDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - DREAM_LOOKBACK_DAYS);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Run the Light phase for one agent.
+ * Returns the number of distinct candidates seen this run.
+ */
+export function runLightPhase(agentFolder: string, agentDir: string): number {
+  const cutoff = cutoffDate();
+  const now = Math.floor(Date.now() / 1000);
+
+  const sources: Array<{ relPath: string; content: string }> = [];
+
+  for (const sub of ['memory', 'conversations']) {
+    const dir = path.join(agentDir, sub);
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir).sort()) {
+      if (!f.endsWith('.md')) continue;
+      if (!isWithinLookback(f, cutoff)) continue;
+      try {
+        const fullPath = path.join(dir, f);
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        sources.push({ relPath: `${sub}/${f}`, content });
+      } catch (err) {
+        logger.warn({ err, file: f }, 'Light phase: failed to read source');
+      }
+    }
+  }
+
+  // In-batch dedupe: token sets keyed by snippet hash
+  const seen: Array<{ tokens: Set<string>; hash: string }> = [];
+  let count = 0;
+
+  for (const { relPath, content } of sources) {
+    for (const snippet of extractSnippets(content)) {
+      const tokens = tokenize(snippet);
+      let collapsedHash: string | null = null;
+      for (const s of seen) {
+        if (jaccard(tokens, s.tokens) >= JACCARD_THRESHOLD) {
+          collapsedHash = s.hash;
+          break;
+        }
+      }
+      const finalHash = collapsedHash ?? hash(snippet);
+      if (!collapsedHash) seen.push({ tokens, hash: finalHash });
+
+      upsertDreamCandidate(agentFolder, snippet, finalHash, relPath, now);
+      count++;
+    }
+  }
+
+  logger.info(
+    { agentFolder, count, sources: sources.length },
+    'Dream Light phase complete',
+  );
+  return count;
+}

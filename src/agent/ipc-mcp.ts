@@ -10,6 +10,8 @@ import path from 'path';
 import os from 'os';
 import { CronExpressionParser } from 'cron-parser';
 import { indexMemoryFiles, searchMemory } from '../db.js';
+import { embed } from './embedder.js';
+import { embedPendingChunks } from './memory-embed.js';
 import { AGENTS_DIR, CONTEXT_DIR, localDate, localTime } from '../config.js';
 import {
   startSubprocess,
@@ -42,7 +44,11 @@ function writeIpcFile(dir: string, data: object): string {
   return filename;
 }
 
-async function waitForResult(resultsDir: string, requestId: string, maxWait = 60000): Promise<{ success: boolean; message: string }> {
+async function waitForResult(
+  resultsDir: string,
+  requestId: string,
+  maxWait = 60000,
+): Promise<{ success: boolean; message: string }> {
   const resultFile = path.join(resultsDir, `${requestId}.json`);
   const pollInterval = 1000;
   let elapsed = 0;
@@ -57,22 +63,31 @@ async function waitForResult(resultsDir: string, requestId: string, maxWait = 60
         return { success: false, message: `Failed to read result: ${err}` };
       }
     }
-    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
     elapsed += pollInterval;
   }
 
   return { success: false, message: 'Request timed out' };
 }
 
-function injectSettingsHooks(workdir: string, hooks: Record<string, string>, sessionId: string): void {
+function injectSettingsHooks(
+  workdir: string,
+  hooks: Record<string, string>,
+  sessionId: string,
+): void {
   const claudeDir = path.join(workdir, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
 
   const settingsFile = path.join(claudeDir, 'settings.local.json');
   let settings: Record<string, unknown> = {};
   try {
-    settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')) as Record<string, unknown>;
-  } catch { /* no existing settings */ }
+    settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')) as Record<
+      string,
+      unknown
+    >;
+  } catch {
+    /* no existing settings */
+  }
 
   const existing = (settings.hooks as Record<string, unknown[]>) || {};
   for (const [hookName, cmdTemplate] of Object.entries(hooks)) {
@@ -107,28 +122,70 @@ IMPORTANT: Your final text output is automatically sent to the user. Do NOT use 
 MEDIA: Attach media by providing file_path (local file) or media_url (remote URL) along with media_type (image, document, video, audio).
 The text parameter becomes the caption for media messages. For documents, also provide file_name.`,
         {
-          text: z.string().optional().describe('The message text to send (becomes caption for media messages)'),
-          sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
-          media_type: z.enum(['image', 'document', 'video', 'audio']).optional().describe('Type of media to attach'),
-          file_path: z.string().optional().describe('Local file path for the media (absolute or relative to agent folder)'),
-          media_url: z.string().optional().describe('URL of the media to send (alternative to file_path)'),
-          file_name: z.string().optional().describe('Display file name for documents (e.g., "report.pdf")'),
-          mimetype: z.string().optional().describe('MIME type for documents (e.g., "application/pdf"). Auto-detected if omitted.'),
-          ptt: z.boolean().optional().describe('Send audio as a voice note (push-to-talk bubble)')
+          text: z
+            .string()
+            .optional()
+            .describe(
+              'The message text to send (becomes caption for media messages)',
+            ),
+          sender: z
+            .string()
+            .optional()
+            .describe(
+              'Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.',
+            ),
+          media_type: z
+            .enum(['image', 'document', 'video', 'audio'])
+            .optional()
+            .describe('Type of media to attach'),
+          file_path: z
+            .string()
+            .optional()
+            .describe(
+              'Local file path for the media (absolute or relative to agent folder)',
+            ),
+          media_url: z
+            .string()
+            .optional()
+            .describe('URL of the media to send (alternative to file_path)'),
+          file_name: z
+            .string()
+            .optional()
+            .describe('Display file name for documents (e.g., "report.pdf")'),
+          mimetype: z
+            .string()
+            .optional()
+            .describe(
+              'MIME type for documents (e.g., "application/pdf"). Auto-detected if omitted.',
+            ),
+          ptt: z
+            .boolean()
+            .optional()
+            .describe('Send audio as a voice note (push-to-talk bubble)'),
         },
         async (args) => {
           // Validation: must have text or media
           if (!args.text && !args.media_type) {
             return {
-              content: [{ type: 'text', text: 'Must provide either text or media_type (or both).' }],
-              isError: true
+              content: [
+                {
+                  type: 'text',
+                  text: 'Must provide either text or media_type (or both).',
+                },
+              ],
+              isError: true,
             };
           }
           // Validation: media requires a source
           if (args.media_type && !args.file_path && !args.media_url) {
             return {
-              content: [{ type: 'text', text: 'media_type requires either file_path or media_url.' }],
-              isError: true
+              content: [
+                {
+                  type: 'text',
+                  text: 'media_type requires either file_path or media_url.',
+                },
+              ],
+              isError: true,
             };
           }
 
@@ -138,7 +195,7 @@ The text parameter becomes the caption for media messages. For documents, also p
             text: args.text || null,
             sender: args.sender || undefined,
             agentFolder,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           };
 
           if (args.media_type) {
@@ -154,12 +211,14 @@ The text parameter becomes the caption for media messages. For documents, also p
           onSendMessage?.({ hasMedia: !!args.media_type });
 
           return {
-            content: [{
-              type: 'text',
-              text: `Message queued for delivery (${filename})`
-            }]
+            content: [
+              {
+                type: 'text',
+                text: `Message queued for delivery (${filename})`,
+              },
+            ],
           };
-        }
+        },
       ),
 
       tool(
@@ -179,17 +238,42 @@ CRON FORMAT (5-field, all times LOCAL timezone):
 • "0 9 * * 1-5" = weekdays at 9am
 • "0 */2 * * *" = every 2 hours`,
         {
-          prompt: z.string().describe('What the agent should do when the task runs'),
-          cron: z.string().optional().describe('Cron expression for recurring tasks (e.g., "0 9 * * *")'),
-          run_at: z.string().optional().describe('Local timestamp for one-time tasks (e.g., "2026-02-01T15:30:00", no Z suffix)'),
-          context_mode: z.enum(['agent', 'isolated']).default('agent').describe('agent=shared session, isolated=fresh session'),
-          target_agent: z.string().optional().describe('Target agent folder (main only, defaults to current agent)')
+          prompt: z
+            .string()
+            .describe('What the agent should do when the task runs'),
+          cron: z
+            .string()
+            .optional()
+            .describe(
+              'Cron expression for recurring tasks (e.g., "0 9 * * *")',
+            ),
+          run_at: z
+            .string()
+            .optional()
+            .describe(
+              'Local timestamp for one-time tasks (e.g., "2026-02-01T15:30:00", no Z suffix)',
+            ),
+          context_mode: z
+            .enum(['agent', 'isolated'])
+            .default('agent')
+            .describe('agent=shared session, isolated=fresh session'),
+          target_agent: z
+            .string()
+            .optional()
+            .describe(
+              'Target agent folder (main only, defaults to current agent)',
+            ),
         },
         async (args) => {
           if (!args.cron && !args.run_at) {
             return {
-              content: [{ type: 'text', text: 'Must provide either "cron" (recurring) or "run_at" (one-time).' }],
-              isError: true
+              content: [
+                {
+                  type: 'text',
+                  text: 'Must provide either "cron" (recurring) or "run_at" (one-time).',
+                },
+              ],
+              isError: true,
             };
           }
 
@@ -199,8 +283,13 @@ CRON FORMAT (5-field, all times LOCAL timezone):
               CronExpressionParser.parse(args.cron);
             } catch {
               return {
-                content: [{ type: 'text', text: `Invalid cron: "${args.cron}". Use format like "0 9 * * *" (daily 9am) or "*/5 * * * *" (every 5 min).` }],
-                isError: true
+                content: [
+                  {
+                    type: 'text',
+                    text: `Invalid cron: "${args.cron}". Use format like "0 9 * * *" (daily 9am) or "*/5 * * * *" (every 5 min).`,
+                  },
+                ],
+                isError: true,
               };
             }
           }
@@ -210,14 +299,20 @@ CRON FORMAT (5-field, all times LOCAL timezone):
             const date = new Date(args.run_at);
             if (isNaN(date.getTime())) {
               return {
-                content: [{ type: 'text', text: `Invalid timestamp: "${args.run_at}". Use format like "2026-02-01T15:30:00".` }],
-                isError: true
+                content: [
+                  {
+                    type: 'text',
+                    text: `Invalid timestamp: "${args.run_at}". Use format like "2026-02-01T15:30:00".`,
+                  },
+                ],
+                isError: true,
               };
             }
           }
 
           // Non-main agents can only schedule for themselves
-          const targetAgent = isMain && args.target_agent ? args.target_agent : agentFolder;
+          const targetAgent =
+            isMain && args.target_agent ? args.target_agent : agentFolder;
 
           const data = {
             type: 'schedule_task',
@@ -227,19 +322,23 @@ CRON FORMAT (5-field, all times LOCAL timezone):
             context_mode: args.context_mode || 'agent',
             agentFolder: targetAgent,
             createdBy: agentFolder,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           };
 
           const filename = writeIpcFile(tasksDir, data);
 
-          const scheduleDesc = args.cron ? `cron: ${args.cron}` : `run_at: ${args.run_at}`;
+          const scheduleDesc = args.cron
+            ? `cron: ${args.cron}`
+            : `run_at: ${args.run_at}`;
           return {
-            content: [{
-              type: 'text',
-              text: `Task scheduled (${filename}): ${scheduleDesc}`
-            }]
+            content: [
+              {
+                type: 'text',
+                text: `Task scheduled (${filename}): ${scheduleDesc}`,
+              },
+            ],
           };
-        }
+        },
       ),
 
       // ─── Email tools ────────────────────────────────────────────────────
@@ -249,9 +348,13 @@ CRON FORMAT (5-field, all times LOCAL timezone):
         `Reply to an email. Use this when processing email_received events and a response is needed.
 Sends the reply via Gmail, threading it under the original message.`,
         {
-          message_id: z.string().describe('The original message ID to reply to'),
+          message_id: z
+            .string()
+            .describe('The original message ID to reply to'),
           to: z.string().describe('Recipient email address'),
-          subject: z.string().describe('Email subject (use "Re: ..." for replies)'),
+          subject: z
+            .string()
+            .describe('Email subject (use "Re: ..." for replies)'),
           body: z.string().describe('The reply body text'),
         },
         async (args) => {
@@ -272,7 +375,7 @@ Sends the reply via Gmail, threading it under the original message.`,
             content: [{ type: 'text', text: result.message }],
             isError: !result.success,
           };
-        }
+        },
       ),
 
       // ─── Event handler tools ─────────────────────────────────────────────
@@ -289,8 +392,13 @@ Built-in event types (emitted automatically):
 
 You can emit any custom event type for pipeline chaining (e.g., "earnings_released", "filings_collected").`,
         {
-          type: z.string().describe('Event type (e.g., "earnings_released", "data_ready")'),
-          payload: z.record(z.string(), z.unknown()).default({}).describe('Event payload as key-value pairs')
+          type: z
+            .string()
+            .describe('Event type (e.g., "earnings_released", "data_ready")'),
+          payload: z
+            .record(z.string(), z.unknown())
+            .default({})
+            .describe('Event payload as key-value pairs'),
         },
         async (args) => {
           const data = {
@@ -298,18 +406,20 @@ You can emit any custom event type for pipeline chaining (e.g., "earnings_releas
             eventType: args.type,
             payload: args.payload || {},
             agentFolder,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           };
 
           writeIpcFile(tasksDir, data);
 
           return {
-            content: [{
-              type: 'text',
-              text: `Event "${args.type}" emitted.`
-            }]
+            content: [
+              {
+                type: 'text',
+                text: `Event "${args.type}" emitted.`,
+              },
+            ],
           };
-        }
+        },
       ),
 
       tool(
@@ -330,17 +440,45 @@ COOLDOWN: Minimum milliseconds between triggers. Prevents rapid re-triggering.
 MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the limit, it auto-completes.
   Set to 1 for one-shot handlers. Omit for unlimited.`,
         {
-          event_type: z.string().describe('Event type to listen for (e.g., "earnings_released", "task_complete")'),
-          prompt: z.string().describe('Instructions for the agent when the event fires. The event payload will be injected automatically.'),
-          filter: z.record(z.string(), z.unknown()).optional().describe('Optional filter: all keys must match event payload to trigger'),
-          context_mode: z.enum(['agent', 'isolated']).default('isolated').describe('agent=shared session, isolated=fresh session (default)'),
-          cooldown_ms: z.number().default(0).describe('Minimum ms between triggers (default: 0)'),
-          max_triggers: z.number().optional().describe('Max times this handler can fire. Omit for unlimited.'),
-          target_agent: z.string().optional().describe('Target agent folder (main only, defaults to current agent)')
+          event_type: z
+            .string()
+            .describe(
+              'Event type to listen for (e.g., "earnings_released", "task_complete")',
+            ),
+          prompt: z
+            .string()
+            .describe(
+              'Instructions for the agent when the event fires. The event payload will be injected automatically.',
+            ),
+          filter: z
+            .record(z.string(), z.unknown())
+            .optional()
+            .describe(
+              'Optional filter: all keys must match event payload to trigger',
+            ),
+          context_mode: z
+            .enum(['agent', 'isolated'])
+            .default('isolated')
+            .describe('agent=shared session, isolated=fresh session (default)'),
+          cooldown_ms: z
+            .number()
+            .default(0)
+            .describe('Minimum ms between triggers (default: 0)'),
+          max_triggers: z
+            .number()
+            .optional()
+            .describe('Max times this handler can fire. Omit for unlimited.'),
+          target_agent: z
+            .string()
+            .optional()
+            .describe(
+              'Target agent folder (main only, defaults to current agent)',
+            ),
         },
         async (args) => {
           // Non-main agents can only register handlers for themselves
-          const targetAgent = isMain && args.target_agent ? args.target_agent : agentFolder;
+          const targetAgent =
+            isMain && args.target_agent ? args.target_agent : agentFolder;
 
           const data = {
             type: 'register_handler',
@@ -352,23 +490,25 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
             maxTriggers: args.max_triggers ?? null,
             targetAgent,
             createdBy: agentFolder,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           };
 
           writeIpcFile(tasksDir, data);
 
           return {
-            content: [{
-              type: 'text',
-              text: `Event handler registered for "${args.event_type}" in agent "${targetAgent}".`
-            }]
+            content: [
+              {
+                type: 'text',
+                text: `Event handler registered for "${args.event_type}" in agent "${targetAgent}".`,
+              },
+            ],
           };
-        }
+        },
       ),
 
       tool(
         'list_handlers',
-        'List all registered handlers (both scheduled tasks and event handlers). From main: shows all. From other agents: shows only that agent\'s handlers.',
+        "List all registered handlers (both scheduled tasks and event handlers). From main: shows all. From other agents: shows only that agent's handlers.",
         {},
         async () => {
           const handlersFile = path.join(ipcDir, 'current_handlers.json');
@@ -376,55 +516,83 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
           try {
             if (!fs.existsSync(handlersFile)) {
               return {
-                content: [{
-                  type: 'text',
-                  text: 'No handlers registered.'
-                }]
+                content: [
+                  {
+                    type: 'text',
+                    text: 'No handlers registered.',
+                  },
+                ],
               };
             }
 
-            const allHandlers = JSON.parse(fs.readFileSync(handlersFile, 'utf-8'));
+            const allHandlers = JSON.parse(
+              fs.readFileSync(handlersFile, 'utf-8'),
+            );
 
             const handlers = isMain
               ? allHandlers
-              : allHandlers.filter((h: { group_folder: string }) => h.group_folder === agentFolder);
+              : allHandlers.filter(
+                  (h: { group_folder: string }) =>
+                    h.group_folder === agentFolder,
+                );
 
             if (handlers.length === 0) {
               return {
-                content: [{
-                  type: 'text',
-                  text: 'No handlers registered.'
-                }]
+                content: [
+                  {
+                    type: 'text',
+                    text: 'No handlers registered.',
+                  },
+                ],
               };
             }
 
-            const formatted = handlers.map((h: { id: string; event_type: string; cron: string | null; next_run: string | null; prompt: string; status: string; trigger_count: number; max_triggers: number | null }) => {
-              const schedule = h.cron ? `cron: ${h.cron}, next: ${h.next_run || 'N/A'}` : `on "${h.event_type}"`;
-              return `- [${h.id}] ${schedule}: ${h.prompt.slice(0, 50)}... - ${h.status} (fired ${h.trigger_count}${h.max_triggers !== null ? `/${h.max_triggers}` : ''} times)`;
-            }).join('\n');
+            const formatted = handlers
+              .map(
+                (h: {
+                  id: string;
+                  event_type: string;
+                  cron: string | null;
+                  next_run: string | null;
+                  prompt: string;
+                  status: string;
+                  trigger_count: number;
+                  max_triggers: number | null;
+                }) => {
+                  const schedule = h.cron
+                    ? `cron: ${h.cron}, next: ${h.next_run || 'N/A'}`
+                    : `on "${h.event_type}"`;
+                  return `- [${h.id}] ${schedule}: ${h.prompt.slice(0, 50)}... - ${h.status} (fired ${h.trigger_count}${h.max_triggers !== null ? `/${h.max_triggers}` : ''} times)`;
+                },
+              )
+              .join('\n');
 
             return {
-              content: [{
-                type: 'text',
-                text: `Handlers:\n${formatted}`
-              }]
+              content: [
+                {
+                  type: 'text',
+                  text: `Handlers:\n${formatted}`,
+                },
+              ],
             };
           } catch (err) {
             return {
-              content: [{
-                type: 'text',
-                text: `Error reading handlers: ${err instanceof Error ? err.message : String(err)}`
-              }]
+              content: [
+                {
+                  type: 'text',
+                  text: `Error reading handlers: ${err instanceof Error ? err.message : String(err)}`,
+                },
+              ],
             };
           }
-        }
+        },
       ),
 
       tool(
         'pause_handler',
         'Pause an event handler. It will not trigger until resumed.',
         {
-          handler_id: z.string().describe('The handler ID to pause')
+          handler_id: z.string().describe('The handler ID to pause'),
         },
         async (args) => {
           const data = {
@@ -432,25 +600,27 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
             handlerId: args.handler_id,
             agentFolder,
             isMain,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           };
 
           writeIpcFile(tasksDir, data);
 
           return {
-            content: [{
-              type: 'text',
-              text: `Handler ${args.handler_id} pause requested.`
-            }]
+            content: [
+              {
+                type: 'text',
+                text: `Handler ${args.handler_id} pause requested.`,
+              },
+            ],
           };
-        }
+        },
       ),
 
       tool(
         'resume_handler',
         'Resume a paused event handler.',
         {
-          handler_id: z.string().describe('The handler ID to resume')
+          handler_id: z.string().describe('The handler ID to resume'),
         },
         async (args) => {
           const data = {
@@ -458,25 +628,27 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
             handlerId: args.handler_id,
             agentFolder,
             isMain,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           };
 
           writeIpcFile(tasksDir, data);
 
           return {
-            content: [{
-              type: 'text',
-              text: `Handler ${args.handler_id} resume requested.`
-            }]
+            content: [
+              {
+                type: 'text',
+                text: `Handler ${args.handler_id} resume requested.`,
+              },
+            ],
           };
-        }
+        },
       ),
 
       tool(
         'cancel_handler',
         'Cancel and delete an event handler.',
         {
-          handler_id: z.string().describe('The handler ID to cancel')
+          handler_id: z.string().describe('The handler ID to cancel'),
         },
         async (args) => {
           const data = {
@@ -484,18 +656,20 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
             handlerId: args.handler_id,
             agentFolder,
             isMain,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           };
 
           writeIpcFile(tasksDir, data);
 
           return {
-            content: [{
-              type: 'text',
-              text: `Handler ${args.handler_id} cancellation requested.`
-            }]
+            content: [
+              {
+                type: 'text',
+                text: `Handler ${args.handler_id} cancellation requested.`,
+              },
+            ],
           };
-        }
+        },
       ),
 
       tool(
@@ -504,18 +678,39 @@ MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the 
 
 Use available_groups.json to find the JID for a group. The folder name should be lowercase with hyphens (e.g., "family-chat").`,
         {
-          jid: z.string().describe('The WhatsApp JID (e.g., "120363336345536173@g.us")'),
+          jid: z
+            .string()
+            .describe('The WhatsApp JID (e.g., "120363336345536173@g.us")'),
           name: z.string().describe('Display name for the agent'),
-          folder: z.string().describe('Folder name for agent files (lowercase, hyphens, e.g., "family-chat")'),
+          folder: z
+            .string()
+            .describe(
+              'Folder name for agent files (lowercase, hyphens, e.g., "family-chat")',
+            ),
           trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
-          active_hours_cron: z.union([z.string(), z.array(z.string())]).optional().describe('Cron expression(s) defining when the agent is active. Pass a string or array of strings (OR logic). E.g. ["* 18-22 * * 1-5", "* * * * 0,6"] for weekday evenings + all-day weekends.'),
-          active_hours_reply: z.string().optional().describe('Custom auto-reply message sent when a message arrives outside active hours. Defaults to a message with the next active time.'),
+          active_hours_cron: z
+            .union([z.string(), z.array(z.string())])
+            .optional()
+            .describe(
+              'Cron expression(s) defining when the agent is active. Pass a string or array of strings (OR logic). E.g. ["* 18-22 * * 1-5", "* * * * 0,6"] for weekday evenings + all-day weekends.',
+            ),
+          active_hours_reply: z
+            .string()
+            .optional()
+            .describe(
+              'Custom auto-reply message sent when a message arrives outside active hours. Defaults to a message with the next active time.',
+            ),
         },
         async (args) => {
           if (!isMain) {
             return {
-              content: [{ type: 'text', text: 'Only the main agent can register new agents.' }],
-              isError: true
+              content: [
+                {
+                  type: 'text',
+                  text: 'Only the main agent can register new agents.',
+                },
+              ],
+              isError: true,
             };
           }
 
@@ -526,38 +721,57 @@ Use available_groups.json to find the JID for a group. The folder name should be
             folder: args.folder,
             trigger: args.trigger,
             timestamp: new Date().toISOString(),
-            ...(args.active_hours_cron ? {
-              activeHours: {
-                cron: args.active_hours_cron,
-                ...(args.active_hours_reply ? { autoReply: args.active_hours_reply } : {}),
-              }
-            } : {}),
+            ...(args.active_hours_cron
+              ? {
+                  activeHours: {
+                    cron: args.active_hours_cron,
+                    ...(args.active_hours_reply
+                      ? { autoReply: args.active_hours_reply }
+                      : {}),
+                  },
+                }
+              : {}),
           };
 
           writeIpcFile(tasksDir, data);
 
           return {
-            content: [{
-              type: 'text',
-              text: `Agent "${args.name}" registered. It will start receiving messages immediately.`
-            }]
+            content: [
+              {
+                type: 'text',
+                text: `Agent "${args.name}" registered. It will start receiving messages immediately.`,
+              },
+            ],
           };
-        }
+        },
       ),
 
       tool(
         'memory_search',
-        `Search your memory files and conversation archives using keyword search.
+        `Search your memory files and conversation archives using hybrid retrieval (keyword + semantic).
 Returns ranked snippets from memory/ and conversations/ directories.
 Use this to recall past context, decisions, or conversation details.`,
         {
-          query: z.string().describe('Search query (keywords, phrases, names, topics)'),
-          limit: z.number().default(5).describe('Max results to return (default: 5)'),
+          query: z
+            .string()
+            .describe('Search query (keywords, phrases, names, topics)'),
+          limit: z
+            .number()
+            .default(5)
+            .describe('Max results to return (default: 5)'),
         },
         async (args) => {
           const agentDir = path.join(AGENTS_DIR, agentFolder);
           indexMemoryFiles(agentFolder, agentDir);
-          const results = searchMemory(agentFolder, args.query, args.limit);
+          // Best-effort embed-then-search; if either step fails, search falls back to FTS-only.
+          await embedPendingChunks();
+          const queryVec = await embed(args.query);
+          const results = searchMemory(
+            agentFolder,
+            args.query,
+            queryVec,
+            args.limit,
+          );
 
           if (results.length === 0) {
             return {
@@ -565,14 +779,14 @@ Use this to recall past context, decisions, or conversation details.`,
             };
           }
 
-          const formatted = results.map((r, i) =>
-            `${i + 1}. [${r.path}]\n   ${r.snippet}`
-          ).join('\n\n');
+          const formatted = results
+            .map((r, i) => `${i + 1}. [${r.path}]\n   ${r.snippet}`)
+            .join('\n\n');
 
           return {
             content: [{ type: 'text', text: formatted }],
           };
-        }
+        },
       ),
 
       // ─── Subprocess tools ────────────────────────────────────────────────
@@ -590,16 +804,50 @@ prompt_suffix: appended to the command string before spawn (other CLIs). Use {se
 
 Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
         {
-          name: z.string().optional().describe('Short human-readable name for this session (e.g. "auth-fix", "youtube-skill")'),
-          description: z.string().optional().describe('What this session is doing — shown in subprocess_list so the agent can distinguish sessions'),
+          name: z
+            .string()
+            .optional()
+            .describe(
+              'Short human-readable name for this session (e.g. "auth-fix", "youtube-skill")',
+            ),
+          description: z
+            .string()
+            .optional()
+            .describe(
+              'What this session is doing — shown in subprocess_list so the agent can distinguish sessions',
+            ),
           command: z.string().describe('Shell command to run'),
-          workdir: z.string().optional().describe('Working directory (absolute or ~/relative)'),
-          cols: z.number().default(220).describe('Terminal columns (default: 220)'),
+          workdir: z
+            .string()
+            .optional()
+            .describe('Working directory (absolute or ~/relative)'),
+          cols: z
+            .number()
+            .default(220)
+            .describe('Terminal columns (default: 220)'),
           rows: z.number().default(50).describe('Terminal rows (default: 50)'),
-          on_exit: z.string().optional().describe('Agent prompt to run when subprocess exits (one-shot)'),
-          on_notification: z.string().optional().describe('Agent prompt to run on each subprocess_notification event (repeating)'),
-          settings_hooks: z.record(z.string(), z.string()).optional().describe('Hook name → command template. Written to {workdir}/.claude/settings.local.json before spawn. Use {sessionId} in commands.'),
-          prompt_suffix: z.string().optional().describe('Appended to command before spawn. Use {sessionId} as placeholder.'),
+          on_exit: z
+            .string()
+            .optional()
+            .describe('Agent prompt to run when subprocess exits (one-shot)'),
+          on_notification: z
+            .string()
+            .optional()
+            .describe(
+              'Agent prompt to run on each subprocess_notification event (repeating)',
+            ),
+          settings_hooks: z
+            .record(z.string(), z.string())
+            .optional()
+            .describe(
+              'Hook name → command template. Written to {workdir}/.claude/settings.local.json before spawn. Use {sessionId} in commands.',
+            ),
+          prompt_suffix: z
+            .string()
+            .optional()
+            .describe(
+              'Appended to command before spawn. Use {sessionId} as placeholder.',
+            ),
         },
         async (args) => {
           try {
@@ -608,7 +856,12 @@ Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
               : undefined;
 
             const pre_spawn = args.settings_hooks
-              ? (sessionId: string) => injectSettingsHooks(resolvedWorkdir!, args.settings_hooks!, sessionId)
+              ? (sessionId: string) =>
+                  injectSettingsHooks(
+                    resolvedWorkdir!,
+                    args.settings_hooks!,
+                    sessionId,
+                  )
               : undefined;
 
             const sessionId = startSubprocess({
@@ -626,15 +879,20 @@ Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
               pre_spawn,
             });
             return {
-              content: [{ type: 'text', text: JSON.stringify({ sessionId }) }]
+              content: [{ type: 'text', text: JSON.stringify({ sessionId }) }],
             };
           } catch (err) {
             return {
-              content: [{ type: 'text', text: `Failed to start subprocess: ${err instanceof Error ? err.message : String(err)}` }],
-              isError: true
+              content: [
+                {
+                  type: 'text',
+                  text: `Failed to start subprocess: ${err instanceof Error ? err.message : String(err)}`,
+                },
+              ],
+              isError: true,
             };
           }
-        }
+        },
       ),
 
       tool(
@@ -642,14 +900,17 @@ Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
         'Read buffered output from a subprocess. Use offset from previous call to get only new output.',
         {
           session_id: z.string().describe('Session ID from subprocess_start'),
-          offset: z.number().default(0).describe('Byte offset from previous read (default: 0 = read all)'),
+          offset: z
+            .number()
+            .default(0)
+            .describe('Byte offset from previous read (default: 0 = read all)'),
         },
         async (args) => {
           const result = readSubprocessOutput(args.session_id, args.offset);
           return {
-            content: [{ type: 'text', text: JSON.stringify(result) }]
+            content: [{ type: 'text', text: JSON.stringify(result) }],
           };
-        }
+        },
       ),
 
       tool(
@@ -657,15 +918,22 @@ Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
         'Write input to a running subprocess stdin. Use \\r for Enter.',
         {
           session_id: z.string().describe('Session ID from subprocess_start'),
-          data: z.string().describe('Data to write (use \\r for Enter, \\x03 for Ctrl+C)'),
+          data: z
+            .string()
+            .describe('Data to write (use \\r for Enter, \\x03 for Ctrl+C)'),
         },
         async (args) => {
           const ok = writeSubprocessInput(args.session_id, args.data);
           return {
-            content: [{ type: 'text', text: ok ? 'Written.' : 'Subprocess not found or not running.' }],
-            isError: !ok
+            content: [
+              {
+                type: 'text',
+                text: ok ? 'Written.' : 'Subprocess not found or not running.',
+              },
+            ],
+            isError: !ok,
           };
-        }
+        },
       ),
 
       tool(
@@ -679,13 +947,13 @@ Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
           if (!state) {
             return {
               content: [{ type: 'text', text: 'Session not found.' }],
-              isError: true
+              isError: true,
             };
           }
           return {
-            content: [{ type: 'text', text: JSON.stringify(state) }]
+            content: [{ type: 'text', text: JSON.stringify(state) }],
           };
-        }
+        },
       ),
 
       tool(
@@ -697,10 +965,17 @@ Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
         async (args) => {
           const ok = killSubprocess(args.session_id);
           return {
-            content: [{ type: 'text', text: ok ? 'Process killed.' : 'Subprocess not found or already exited.' }],
-            isError: !ok
+            content: [
+              {
+                type: 'text',
+                text: ok
+                  ? 'Process killed.'
+                  : 'Subprocess not found or already exited.',
+              },
+            ],
+            isError: !ok,
           };
-        }
+        },
       ),
 
       tool(
@@ -710,16 +985,24 @@ Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
         async () => {
           const sessions = listSubprocesses();
           if (sessions.length === 0) {
-            return { content: [{ type: 'text', text: 'No subprocess sessions found.' }] };
+            return {
+              content: [
+                { type: 'text', text: 'No subprocess sessions found.' },
+              ],
+            };
           }
-          const summary = sessions.map(s => {
-            const label = s.name ? `[${s.name}] ${s.sessionId}` : `[${s.sessionId}]`;
-            const desc = s.description ? `\n  ${s.description}` : '';
-            const detail = `${s.status} pid=${s.pid} workdir=${s.workdir || '~'}`;
-            return `${label} ${detail}${desc}`;
-          }).join('\n');
+          const summary = sessions
+            .map((s) => {
+              const label = s.name
+                ? `[${s.name}] ${s.sessionId}`
+                : `[${s.sessionId}]`;
+              const desc = s.description ? `\n  ${s.description}` : '';
+              const detail = `${s.status} pid=${s.pid} workdir=${s.workdir || '~'}`;
+              return `${label} ${detail}${desc}`;
+            })
+            .join('\n');
           return { content: [{ type: 'text', text: summary }] };
-        }
+        },
       ),
 
       tool(
@@ -729,8 +1012,16 @@ Entries are appended to today's log (or shared MEMORY.md) and automatically inde
 Prefer this over Write/Edit for memory — it handles paths and indexing for you.`,
         {
           content: z.string().describe('The note to save'),
-          topic: z.string().optional().describe('Optional topic header (e.g., "Ski Trip Plans", "Work Decision")'),
-          shared: z.boolean().default(false).describe('Write to shared MEMORY.md instead of daily log'),
+          topic: z
+            .string()
+            .optional()
+            .describe(
+              'Optional topic header (e.g., "Ski Trip Plans", "Work Decision")',
+            ),
+          shared: z
+            .boolean()
+            .default(false)
+            .describe('Write to shared MEMORY.md instead of daily log'),
         },
         async (args) => {
           if (args.shared) {
@@ -740,7 +1031,11 @@ Prefer this over Write/Edit for memory — it handles paths and indexing for you
               ? `\n## ${args.topic}\n\n${args.content}\n`
               : `\n${args.content}\n`;
             fs.appendFileSync(memoryFile, entry);
-            return { content: [{ type: 'text', text: 'Saved to shared context/MEMORY.md' }] };
+            return {
+              content: [
+                { type: 'text', text: 'Saved to shared context/MEMORY.md' },
+              ],
+            };
           }
 
           const agentDir = path.join(AGENTS_DIR, agentFolder);
@@ -751,17 +1046,21 @@ Prefer this over Write/Edit for memory — it handles paths and indexing for you
           const memoryFile = path.join(memoryDir, `${date}.md`);
           const time = localTime();
 
-          const header = args.topic ? `## ${args.topic} (${time})` : `## ${time}`;
+          const header = args.topic
+            ? `## ${args.topic} (${time})`
+            : `## ${time}`;
           const entry = `\n${header}\n\n${args.content}\n`;
 
           fs.appendFileSync(memoryFile, entry);
           indexMemoryFiles(agentFolder, agentDir);
+          // Fire-and-forget embedding of new chunks; don't block the agent.
+          void embedPendingChunks();
 
           return {
             content: [{ type: 'text', text: `Saved to memory/${date}.md` }],
           };
-        }
+        },
       ),
-    ]
+    ],
   });
 }

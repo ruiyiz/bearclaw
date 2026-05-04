@@ -11,15 +11,11 @@ import {
   MAIN_AGENT_FOLDER,
   NANOCLAW_HOME,
   POLL_INTERVAL,
-  SESSION_IDLE_MINUTES,
-  SESSION_RESET_HOUR,
   TELEGRAM_BOT_POOL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
   TIMEZONE,
   STT_ECHO_ENABLED,
-  localDate,
-  localHour,
 } from './config.js';
 import {
   AvailableGroup,
@@ -45,16 +41,36 @@ import {
   storeMessage,
   updateHandler,
 } from './db.js';
-import { registerEmailHandlers, sendEmailReply, startEmailLoops } from './integrations/email.js';
+import {
+  registerEmailHandlers,
+  sendEmailReply,
+  startEmailLoops,
+} from './integrations/email.js';
 import { startEventBusLoop } from './events/bus.js';
 import { registerHeartbeatHandlers } from './events/heartbeat.js';
-import { isInActiveWindow, getNextActiveTime, formatNextActiveTime } from './utils/time.js';
+import { registerDreamHandlers } from './dream/handler.js';
+import { embedPendingChunks } from './agent/memory-embed.js';
+import {
+  isInActiveWindow,
+  getNextActiveTime,
+  formatNextActiveTime,
+} from './utils/time.js';
 import { findChannel } from './channels/router.js';
 import { startSchedulerEmitter } from './events/scheduler.js';
 import { generateSpeech } from './media/tts.js';
-import { Channel, MediaType, NewMessage, RegisteredAgent, Session } from './types.js';
+import {
+  Channel,
+  MediaType,
+  NewMessage,
+  RegisteredAgent,
+  Session,
+} from './types.js';
 import { loadJson, saveJson } from './utils/json.js';
-import { startMemoryFlusher, flushBeforeSessionClear, initFlushCursors } from './agent/memory-flusher.js';
+import {
+  startMemoryFlusher,
+  flushBeforeSessionClear,
+  initFlushCursors,
+} from './agent/memory-flusher.js';
 import { logger } from './logger.js';
 import { initSubprocessManager } from './agent/subprocess-manager.js';
 
@@ -62,8 +78,6 @@ let lastTimestamp = '';
 let sessions: Session = {};
 let registeredAgents: Record<string, RegisteredAgent> = {};
 let lastAgentTimestamp: Record<string, string> = {};
-let sessionLastActivity: Record<string, string> = {};
-let lastDailyReset = '';
 let messageLoopRunning = false;
 let ipcWatcherRunning = false;
 const folderQueues = new Map<string, Promise<void>>();
@@ -88,10 +102,14 @@ function migrateToAgents(): void {
     if (!fs.existsSync(targetAgentsMd)) {
       fs.mkdirSync(contextDir, { recursive: true });
       fs.renameSync(globalClaudeMd, targetAgentsMd);
-      logger.info('Moved groups/CLAUDE.md to context/AGENTS.md — split into SOUL.md, USER.md, MEMORY.md manually');
+      logger.info(
+        'Moved groups/CLAUDE.md to context/AGENTS.md — split into SOUL.md, USER.md, MEMORY.md manually',
+      );
     } else {
       fs.unlinkSync(globalClaudeMd);
-      logger.info('Removed groups/CLAUDE.md (context/ already has split files)');
+      logger.info(
+        'Removed groups/CLAUDE.md (context/ already has split files)',
+      );
     }
   }
 
@@ -132,13 +150,9 @@ function loadState(): void {
   const state = loadJson<{
     last_timestamp?: string;
     last_agent_timestamp?: Record<string, string>;
-    session_last_activity?: Record<string, string>;
-    last_daily_reset?: string;
   }>(statePath, {});
   lastTimestamp = state.last_timestamp || '';
   lastAgentTimestamp = state.last_agent_timestamp || {};
-  sessionLastActivity = state.session_last_activity || {};
-  lastDailyReset = state.last_daily_reset || '';
   sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
   registeredAgents = loadJson(
     path.join(DATA_DIR, 'registered_agents.json'),
@@ -154,8 +168,6 @@ function saveState(): void {
   saveJson(path.join(DATA_DIR, 'router_state.json'), {
     last_timestamp: lastTimestamp,
     last_agent_timestamp: lastAgentTimestamp,
-    session_last_activity: sessionLastActivity,
-    last_daily_reset: lastDailyReset,
   });
   saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
 }
@@ -178,7 +190,13 @@ function getAvailableGroups(): AvailableGroup[] {
   const registeredJids = new Set(Object.keys(registeredAgents));
 
   return chats
-    .filter((c) => c.jid !== '__group_sync__' && (c.jid.endsWith('@g.us') || c.jid.startsWith('tg:') || c.jid.startsWith('imsg:')))
+    .filter(
+      (c) =>
+        c.jid !== '__group_sync__' &&
+        (c.jid.endsWith('@g.us') ||
+          c.jid.startsWith('tg:') ||
+          c.jid.startsWith('imsg:')),
+    )
     .map((c) => ({
       jid: c.jid,
       name: c.name,
@@ -189,9 +207,13 @@ function getAvailableGroups(): AvailableGroup[] {
 
 const AUTO_REPLY_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
 
-async function handleOffHoursReply(msg: NewMessage, agent: RegisteredAgent): Promise<void> {
+async function handleOffHoursReply(
+  msg: NewMessage,
+  agent: RegisteredAgent,
+): Promise<void> {
   const last = lastAutoReply[msg.chat_jid];
-  if (last && Date.now() - new Date(last).getTime() < AUTO_REPLY_COOLDOWN_MS) return;
+  if (last && Date.now() - new Date(last).getTime() < AUTO_REPLY_COOLDOWN_MS)
+    return;
 
   const ch = findChannel(channels, msg.chat_jid);
   if (!ch) return;
@@ -210,7 +232,10 @@ async function handleOffHoursReply(msg: NewMessage, agent: RegisteredAgent): Pro
 
   await ch.sendMessage(msg.chat_jid, reply);
   lastAutoReply[msg.chat_jid] = new Date().toISOString();
-  logger.debug({ agent: agent.name, jid: msg.chat_jid }, 'Sent off-hours auto-reply');
+  logger.debug(
+    { agent: agent.name, jid: msg.chat_jid },
+    'Sent off-hours auto-reply',
+  );
 }
 
 async function processMessage(msg: NewMessage): Promise<void> {
@@ -222,7 +247,10 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   if (!isMainAgent) {
     if (agent.trigger) {
-      const triggerPattern = new RegExp(`^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      const triggerPattern = new RegExp(
+        `^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+        'i',
+      );
       if (!triggerPattern.test(content)) return;
     }
   }
@@ -254,9 +282,10 @@ async function processMessage(msg: NewMessage): Promise<void> {
   }
 
   const sinceTimestamp = lastAgentTimestamp[msg.chat_jid] || '';
-  const botPrefixes = DISPLAY_NAME !== ASSISTANT_NAME
-    ? [DISPLAY_NAME, ASSISTANT_NAME]
-    : [ASSISTANT_NAME];
+  const botPrefixes =
+    DISPLAY_NAME !== ASSISTANT_NAME
+      ? [DISPLAY_NAME, ASSISTANT_NAME]
+      : [ASSISTANT_NAME];
   const missedMessages = getMessagesSince(
     msg.chat_jid,
     sinceTimestamp,
@@ -297,7 +326,10 @@ async function processMessage(msg: NewMessage): Promise<void> {
   let typingInterval: ReturnType<typeof setInterval> | undefined;
   if (channel?.sendMessageWithId && channel?.editMessage) {
     try {
-      streamingMsgId = await channel.sendMessageWithId(msg.chat_jid, '💬⏳\u200B');
+      streamingMsgId = await channel.sendMessageWithId(
+        msg.chat_jid,
+        '💬⏳\u200B',
+      );
       // Animated typing indicator in the chat header, refreshed every 4s
       channel.setTyping?.(msg.chat_jid, true).catch(() => {});
       typingInterval = setInterval(() => {
@@ -306,10 +338,15 @@ async function processMessage(msg: NewMessage): Promise<void> {
       let lastEditTime = 0;
       onText = (text: string) => {
         // Stop typing indicator once text starts appearing
-        if (typingInterval) { clearInterval(typingInterval); typingInterval = undefined; }
+        if (typingInterval) {
+          clearInterval(typingInterval);
+          typingInterval = undefined;
+        }
         if (Date.now() - lastEditTime >= 800) {
           lastEditTime = Date.now();
-          channel.editMessage!(msg.chat_jid, streamingMsgId!, text).catch(() => {});
+          channel.editMessage!(msg.chat_jid, streamingMsgId!, text).catch(
+            () => {},
+          );
         }
       };
     } catch (err) {
@@ -318,9 +355,18 @@ async function processMessage(msg: NewMessage): Promise<void> {
   }
 
   if (!streamingMsgId && channel) await channel.setTyping?.(msg.chat_jid, true);
-  const { text: response, sentMediaViaIpc } = await runAgent(agent, prompt, msg.chat_jid, onText);
-  if (typingInterval) { clearInterval(typingInterval); typingInterval = undefined; }
-  if (!streamingMsgId && channel) await channel.setTyping?.(msg.chat_jid, false);
+  const { text: response, sentMediaViaIpc } = await runAgent(
+    agent,
+    prompt,
+    msg.chat_jid,
+    onText,
+  );
+  if (typingInterval) {
+    clearInterval(typingInterval);
+    typingInterval = undefined;
+  }
+  if (!streamingMsgId && channel)
+    await channel.setTyping?.(msg.chat_jid, false);
 
   if (channel) {
     const cleaned = response ? stripInternalTags(response) : null;
@@ -331,7 +377,9 @@ async function processMessage(msg: NewMessage): Promise<void> {
     if (sentMediaViaIpc) {
       lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
       if (streamingMsgId && channel.deleteMessage) {
-        await channel.deleteMessage(msg.chat_jid, streamingMsgId).catch(() => {});
+        await channel
+          .deleteMessage(msg.chat_jid, streamingMsgId)
+          .catch(() => {});
       }
     } else if (cleaned && !isNonResponse(cleaned)) {
       lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
@@ -343,7 +391,12 @@ async function processMessage(msg: NewMessage): Promise<void> {
       if (isVoice && channel.sendMedia) {
         const audio = await generateSpeech(cleaned);
         if (audio) {
-          await channel.sendMedia(msg.chat_jid, 'audio', { buffer: audio }, { ptt: true });
+          await channel.sendMedia(
+            msg.chat_jid,
+            'audio',
+            { buffer: audio },
+            { ptt: true },
+          );
         }
       }
     } else if (streamingMsgId && channel.deleteMessage) {
@@ -356,9 +409,11 @@ function stripInternalTags(text: string): string {
   return text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
 }
 
-
 function isNonResponse(text: string): boolean {
-  const normalized = text.trim().toLowerCase().replace(/[.\s]+$/g, '');
+  const normalized = text
+    .trim()
+    .toLowerCase()
+    .replace(/[.\s]+$/g, '');
   const suppressPatterns = [
     'no response requested',
     'no response needed',
@@ -403,15 +458,16 @@ async function runAgent(
       saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
     }
 
-    sessionLastActivity[agent.folder] = new Date().toISOString();
-
     if (output.status === 'error') {
       logger.error(
         { agent: agent.name, error: output.error },
         'Container agent error',
       );
       if (output.timedOut) {
-        return { text: "Sorry, I ran out of time on that one. Try again?", sentMediaViaIpc: false };
+        return {
+          text: 'Sorry, I ran out of time on that one. Try again?',
+          sentMediaViaIpc: false,
+        };
       }
       return { text: null, sentMediaViaIpc: !!output.sentMediaViaIpc };
     }
@@ -495,26 +551,59 @@ function startIpcWatcher(): void {
                   }
 
                   if (data.mediaType) {
-                    const mediaSource = resolveMediaSource(data.filePath, data.mediaUrl, sourceAgent);
+                    const mediaSource = resolveMediaSource(
+                      data.filePath,
+                      data.mediaUrl,
+                      sourceAgent,
+                    );
                     if (mediaSource && ipcChannel.sendMedia) {
                       const caption = data.text || undefined;
                       const mediaType = data.mediaType as MediaType;
-                      const fileName = data.fileName || (data.filePath ? path.basename(data.filePath) : undefined);
-                      const mimetype = data.mimetype || guessMimetype(data.filePath || data.mediaUrl || '');
+                      const fileName =
+                        data.fileName ||
+                        (data.filePath
+                          ? path.basename(data.filePath)
+                          : undefined);
+                      const mimetype =
+                        data.mimetype ||
+                        guessMimetype(data.filePath || data.mediaUrl || '');
 
                       const ptt = (data as any).ptt || false;
                       if (data.sender && ipcChannel.sendMediaAsAgent) {
-                        await ipcChannel.sendMediaAsAgent(targetJid, mediaType, mediaSource, { caption, fileName, mimetype, ptt }, data.sender, sourceAgent);
+                        await ipcChannel.sendMediaAsAgent(
+                          targetJid,
+                          mediaType,
+                          mediaSource,
+                          { caption, fileName, mimetype, ptt },
+                          data.sender,
+                          sourceAgent,
+                        );
                       } else {
-                        await ipcChannel.sendMedia(targetJid, mediaType, mediaSource, { caption, fileName, mimetype, ptt });
+                        await ipcChannel.sendMedia(
+                          targetJid,
+                          mediaType,
+                          mediaSource,
+                          { caption, fileName, mimetype, ptt },
+                        );
                       }
                     } else if (!mediaSource) {
-                      logger.error({ targetJid, sourceAgent }, 'Could not resolve media source');
+                      logger.error(
+                        { targetJid, sourceAgent },
+                        'Could not resolve media source',
+                      );
                     } else {
-                      logger.warn({ targetJid, channel: ipcChannel.name }, 'Channel does not support media');
+                      logger.warn(
+                        { targetJid, channel: ipcChannel.name },
+                        'Channel does not support media',
+                      );
                     }
                   } else if (data.sender && ipcChannel.sendAsAgent) {
-                    await ipcChannel.sendAsAgent(targetJid, data.text, data.sender, sourceAgent);
+                    await ipcChannel.sendAsAgent(
+                      targetJid,
+                      data.text,
+                      data.sender,
+                      sourceAgent,
+                    );
                   } else {
                     await ipcChannel.sendMessage(targetJid, data.text);
                   }
@@ -751,7 +840,12 @@ async function processTaskIpc(
           created_at: new Date().toISOString(),
         });
         logger.info(
-          { handlerId, eventType: data.eventType, sourceAgent, targetAgent: handlerTarget },
+          {
+            handlerId,
+            eventType: data.eventType,
+            sourceAgent,
+            targetAgent: handlerTarget,
+          },
           'Handler registered via IPC',
         );
       }
@@ -836,19 +930,56 @@ async function processTaskIpc(
       break;
 
     case 'reply_email':
-      if (data.requestId && data.messageId && data.to && data.subject && data.body) {
-        const emailResultsDir = path.join(DATA_DIR, 'ipc', sourceAgent, 'email_results');
+      if (
+        data.requestId &&
+        data.messageId &&
+        data.to &&
+        data.subject &&
+        data.body
+      ) {
+        const emailResultsDir = path.join(
+          DATA_DIR,
+          'ipc',
+          sourceAgent,
+          'email_results',
+        );
         fs.mkdirSync(emailResultsDir, { recursive: true });
         try {
-          await sendEmailReply(data.messageId, data.to, data.subject, data.body);
-          const resultFile = path.join(emailResultsDir, `${data.requestId}.json`);
-          fs.writeFileSync(resultFile, JSON.stringify({ success: true, message: 'Email reply sent' }));
-          logger.info({ messageId: data.messageId, to: data.to, sourceAgent }, 'Email reply sent via IPC');
+          await sendEmailReply(
+            data.messageId,
+            data.to,
+            data.subject,
+            data.body,
+          );
+          const resultFile = path.join(
+            emailResultsDir,
+            `${data.requestId}.json`,
+          );
+          fs.writeFileSync(
+            resultFile,
+            JSON.stringify({ success: true, message: 'Email reply sent' }),
+          );
+          logger.info(
+            { messageId: data.messageId, to: data.to, sourceAgent },
+            'Email reply sent via IPC',
+          );
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
-          const resultFile = path.join(emailResultsDir, `${data.requestId}.json`);
-          fs.writeFileSync(resultFile, JSON.stringify({ success: false, message: `Failed to send email: ${errorMsg}` }));
-          logger.error({ messageId: data.messageId, err, sourceAgent }, 'Failed to send email reply via IPC');
+          const resultFile = path.join(
+            emailResultsDir,
+            `${data.requestId}.json`,
+          );
+          fs.writeFileSync(
+            resultFile,
+            JSON.stringify({
+              success: false,
+              message: `Failed to send email: ${errorMsg}`,
+            }),
+          );
+          logger.error(
+            { messageId: data.messageId, err, sourceAgent },
+            'Failed to send email reply via IPC',
+          );
         }
       }
       break;
@@ -858,87 +989,23 @@ async function processTaskIpc(
   }
 }
 
-function checkSessionResets(): void {
-  const now = new Date();
-  const today = localDate(now);
-  let changed = false;
-
-  // Daily reset at configured hour
-  if (SESSION_RESET_HOUR >= 0 && SESSION_RESET_HOUR <= 23) {
-    if (localHour(now) === SESSION_RESET_HOUR && lastDailyReset !== today) {
-      const folders = Object.keys(sessions);
-      if (folders.length > 0) {
-        for (const folder of folders) {
-          if (sessions[folder]) {
-            flushBeforeSessionClear(folder, sessions[folder]);
-          }
-          delete sessions[folder];
-          delete sessionLastActivity[folder];
-        }
-        lastDailyReset = today;
-        changed = true;
-        logger.info(
-          { hour: SESSION_RESET_HOUR, cleared: folders },
-          'Daily session reset',
-        );
-      } else {
-        lastDailyReset = today;
-      }
-    }
-  }
-
-  // Idle reset per session
-  if (SESSION_IDLE_MINUTES > 0) {
-    const cutoff = now.getTime() - SESSION_IDLE_MINUTES * 60 * 1000;
-    for (const folder of Object.keys(sessions)) {
-      const lastActive = sessionLastActivity[folder];
-      if (lastActive && new Date(lastActive).getTime() < cutoff) {
-        if (sessions[folder]) {
-          flushBeforeSessionClear(folder, sessions[folder]);
-        }
-        delete sessions[folder];
-        delete sessionLastActivity[folder];
-        changed = true;
-        logger.info(
-          { folder, idleMinutes: SESSION_IDLE_MINUTES },
-          'Idle session reset',
-        );
-      }
-    }
-  }
-
-  if (changed) {
-    saveState();
-  }
-}
-
-function startSessionResetLoop(): void {
-  if (SESSION_RESET_HOUR < 0 && SESSION_IDLE_MINUTES <= 0) {
-    logger.debug('Session reset disabled');
-    return;
-  }
-
-  setInterval(checkSessionResets, 60_000);
-  logger.info(
-    { resetHour: SESSION_RESET_HOUR, idleMinutes: SESSION_IDLE_MINUTES },
-    'Session reset loop started',
-  );
-}
-
 function dispatchMessage(msg: NewMessage): void {
   const agent = registeredAgents[msg.chat_jid];
   if (!agent) return;
-  const botPrefixes = DISPLAY_NAME !== ASSISTANT_NAME
-    ? [DISPLAY_NAME, ASSISTANT_NAME]
-    : [ASSISTANT_NAME];
-  if (botPrefixes.some(p => msg.content.startsWith(`${p}:`))) return;
+  const botPrefixes =
+    DISPLAY_NAME !== ASSISTANT_NAME
+      ? [DISPLAY_NAME, ASSISTANT_NAME]
+      : [ASSISTANT_NAME];
+  if (botPrefixes.some((p) => msg.content.startsWith(`${p}:`))) return;
 
   lastTimestamp = msg.timestamp;
   saveState();
   const prev = folderQueues.get(agent.folder) ?? Promise.resolve();
   const next = prev
     .then(() => processMessage(msg))
-    .catch((err) => logger.error({ err, msg: msg.id }, 'Error processing message'));
+    .catch((err) =>
+      logger.error({ err, msg: msg.id }, 'Error processing message'),
+    );
   folderQueues.set(agent.folder, next);
 }
 
@@ -954,12 +1021,16 @@ async function startMessageLoop(): Promise<void> {
     try {
       // Recovery sweep: catches messages missed during channel disconnects or restarts
       const jids = Object.keys(registeredAgents);
-      const botPrefixes = DISPLAY_NAME !== ASSISTANT_NAME
-        ? [DISPLAY_NAME, ASSISTANT_NAME]
-        : [ASSISTANT_NAME];
+      const botPrefixes =
+        DISPLAY_NAME !== ASSISTANT_NAME
+          ? [DISPLAY_NAME, ASSISTANT_NAME]
+          : [ASSISTANT_NAME];
       const { messages } = getNewMessages(jids, lastTimestamp, botPrefixes);
       if (messages.length > 0) {
-        logger.info({ count: messages.length }, 'Recovery: dispatching missed messages');
+        logger.info(
+          { count: messages.length },
+          'Recovery: dispatching missed messages',
+        );
         for (const msg of messages) dispatchMessage(msg);
       }
     } catch (err) {
@@ -980,12 +1051,20 @@ async function main(): Promise<void> {
 
   registerHeartbeatHandlers(registeredAgents);
   registerEmailHandlers(registeredAgents);
+  registerDreamHandlers(registeredAgents);
+
+  // Best-effort: backfill embeddings for any chunks created or migrated.
+  void embedPendingChunks();
 
   // Initialize channels based on config
   if (!TELEGRAM_ONLY) {
     const whatsapp = new WhatsAppChannel({
-      onMessage: (_chatJid, msg) => { storeMessage(msg); dispatchMessage(msg); },
-      onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
+      onMessage: (_chatJid, msg) => {
+        storeMessage(msg);
+        dispatchMessage(msg);
+      },
+      onChatMetadata: (chatJid, ts, name) =>
+        storeChatMetadata(chatJid, ts, name),
       registeredAgents: () => registeredAgents,
     });
     channels.push(whatsapp);
@@ -994,8 +1073,12 @@ async function main(): Promise<void> {
 
   if (TELEGRAM_BOT_TOKEN) {
     const telegram = new TelegramChannel(TELEGRAM_BOT_TOKEN, {
-      onMessage: (_chatJid, msg) => { storeMessage(msg); dispatchMessage(msg); },
-      onChatMetadata: (chatJid, timestamp, name) => storeChatMetadata(chatJid, timestamp, name),
+      onMessage: (_chatJid, msg) => {
+        storeMessage(msg);
+        dispatchMessage(msg);
+      },
+      onChatMetadata: (chatJid, timestamp, name) =>
+        storeChatMetadata(chatJid, timestamp, name),
       registeredAgents: () => registeredAgents,
     });
     channels.push(telegram);
@@ -1007,8 +1090,12 @@ async function main(): Promise<void> {
 
   if (IMESSAGE_ENABLED) {
     const imessage = new IMessageChannel({
-      onMessage: (_chatJid, msg) => { storeMessage(msg); dispatchMessage(msg); },
-      onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
+      onMessage: (_chatJid, msg) => {
+        storeMessage(msg);
+        dispatchMessage(msg);
+      },
+      onChatMetadata: (chatJid, ts, name) =>
+        storeChatMetadata(chatJid, ts, name),
       registeredAgents: () => registeredAgents,
     });
     channels.push(imessage);
@@ -1016,12 +1103,12 @@ async function main(): Promise<void> {
   }
 
   // Start all subsystems unconditionally
-  startSessionResetLoop();
   startSchedulerEmitter();
   startEventBusLoop({
     registeredAgents: () => registeredAgents,
     getSessions: () => sessions,
-    saveSessions: () => saveJson(path.join(DATA_DIR, 'sessions.json'), sessions),
+    saveSessions: () =>
+      saveJson(path.join(DATA_DIR, 'sessions.json'), sessions),
   });
   startIpcWatcher();
   startMessageLoop();

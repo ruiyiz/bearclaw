@@ -6,7 +6,9 @@ import {
   AGENTS_DIR,
   MAIN_AGENT_FOLDER,
   HEARTBEAT_HANDLER_PREFIX,
+  DREAM_HANDLER_PREFIX,
 } from '../config.js';
+import { dispatchDreamHandler } from '../dream/orchestrator.js';
 import {
   cleanupProcessedEvents,
   emitEvent,
@@ -17,10 +19,7 @@ import {
   markEventProcessed,
   updateHandlerAfterTrigger,
 } from '../db.js';
-import {
-  runContainerAgent,
-  writeHandlersSnapshot,
-} from '../agent/runner.js';
+import { runContainerAgent, writeHandlersSnapshot } from '../agent/runner.js';
 import { logger } from '../logger.js';
 import { isInQuietPeriod } from '../utils/time.js';
 import { EventRecord, Handler, RegisteredAgent } from '../types.js';
@@ -39,6 +38,40 @@ async function runHandler(
   const startTime = Date.now();
   const agentDir = path.join(AGENTS_DIR, handler.group_folder);
   fs.mkdirSync(agentDir, { recursive: true });
+
+  // Dream handlers bypass the standard agent runner — they invoke the dream
+  // orchestrator, which handles its own session reset and subagent runs.
+  if (handler.id.startsWith(DREAM_HANDLER_PREFIX)) {
+    let error: string | null = null;
+    try {
+      await dispatchDreamHandler(handler.group_folder, {
+        registeredAgents: deps.registeredAgents,
+        getSessions: deps.getSessions,
+        saveSessions: deps.saveSessions,
+      });
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      logger.error({ handlerId: handler.id, error }, 'Dream handler failed');
+    }
+    const durationMs = Date.now() - startTime;
+    logHandlerRun({
+      handler_id: handler.id,
+      event_id: event.id,
+      run_at: new Date().toISOString(),
+      duration_ms: durationMs,
+      status: error ? 'error' : 'success',
+      result: error ? null : 'Dream cycle completed',
+      error,
+    });
+    updateHandlerAfterTrigger(handler.id);
+    emitEvent('handler_complete', {
+      handler_id: handler.id,
+      group_folder: handler.group_folder,
+      status: error ? 'error' : 'success',
+      result_summary: error ? `Error: ${error}` : 'Dream cycle completed',
+    });
+    return;
+  }
 
   const agents = deps.registeredAgents();
   const agent = Object.values(agents).find(
@@ -68,7 +101,10 @@ async function runHandler(
     agent.heartbeat?.quiet &&
     isInQuietPeriod(agent.heartbeat.quiet)
   ) {
-    logger.debug({ handlerId: handler.id }, 'Heartbeat handler skipped (quiet period)');
+    logger.debug(
+      { handlerId: handler.id },
+      'Heartbeat handler skipped (quiet period)',
+    );
     return;
   }
 
