@@ -273,13 +273,27 @@ export function runDeepPhase(
     return { c, score: s, diversity };
   });
 
-  // Apply gates
+  // Cold-start / solo-agent fallback: when nothing in this run accumulated
+  // support across multiple sources, support and diversity gates would reject
+  // every candidate by construction. Drop them in that case.
+  const useSupportGates = runMaxSupport >= DREAM_MIN_SUPPORT;
+
+  // Apply gates. summary must be non-null (REM judged worth keeping).
   const survivors = scored.filter(
     ({ c, score, diversity }) =>
+      c.summary !== null &&
+      c.summary.length > 0 &&
       score >= DREAM_MIN_SCORE &&
-      c.support_count >= DREAM_MIN_SUPPORT &&
-      diversity >= DREAM_MIN_DIVERSITY,
+      (!useSupportGates || c.support_count >= DREAM_MIN_SUPPORT) &&
+      (!useSupportGates || diversity >= DREAM_MIN_DIVERSITY),
   );
+
+  if (!useSupportGates) {
+    logger.info(
+      { agentFolder, runMaxSupport, candidates: all.length },
+      'Deep phase: solo-agent fallback (support/diversity gates relaxed)',
+    );
+  }
 
   // Rehydrate
   const rehydrated = survivors.filter(({ c }) => rehydrate(c, agentDir));
@@ -291,7 +305,8 @@ export function runDeepPhase(
     );
   }
 
-  // Build PromotedEngram entries with absolute-date rewriting
+  // Build PromotedEngram entries with absolute-date rewriting. Promote the
+  // distilled summary (REM output), not the raw snippet.
   const now = Math.floor(Date.now() / 1000);
   const promoted: PromotedEngram[] = rehydrated.map(({ c, score: s }) => {
     let themes: string[] = [];
@@ -300,10 +315,11 @@ export function runDeepPhase(
     } catch {
       /* empty */
     }
+    const text = c.summary && c.summary.trim() ? c.summary : c.snippet;
     return {
       candidate_id: c.id,
       agent_folder: agentFolder,
-      snippet: rewriteRelativeDates(c.snippet),
+      snippet: rewriteRelativeDates(text),
       score: s,
       theme_tags: themes,
     };

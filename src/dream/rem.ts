@@ -18,17 +18,19 @@ import { runDreamSubagent } from './subagent.js';
 
 const SYSTEM_PROMPT = `You are the REM phase of a memory-consolidation pipeline.
 
-You receive a JSON list of candidate memory snippets the agent has accumulated over the past week. Your job:
-  1. Assign each candidate one or more theme tags (concise, kebab-case, prefixed: "user:", "task:", "decision:", "fact:", "preference:", "person:", "project:", or "topic:"). Examples: "user:health", "decision:budget-cap", "fact:address", "person:alice".
-  2. Flag a candidate's "contradicts_id" if its content directly conflicts with another candidate (use the other candidate's id).
-  3. Flag a candidate's "reinforces_id" if its content strongly restates another candidate (use the other candidate's id).
+You receive a JSON list of candidate memory snippets the agent has accumulated over the past week. Each snippet is raw/messy text from logs and conversations. Your job for each candidate:
+  1. Distill a single-sentence "summary" capturing the durable fact, preference, decision, or observation worth remembering long-term. Maximum 200 characters. Third-person voice. Do NOT include timestamps, quotes, transcript framing, or narration of mechanics. If nothing in the snippet is worth keeping, set summary to null.
+  2. Assign theme tags (concise, kebab-case, prefixed: "user:", "task:", "decision:", "fact:", "preference:", "person:", "project:", or "topic:"). Examples: "user:health", "decision:budget-cap", "fact:address", "person:alice".
+  3. Flag contradicts_id if the snippet directly conflicts with another candidate (use the other candidate's id).
+  4. Flag reinforces_id if the snippet strongly restates another candidate (use the other candidate's id).
 
 Output ONLY a single JSON object, no prose, no markdown fences:
 
-{"items":[{"id":1,"themes":["user:health","fact:gym"],"contradicts_id":null,"reinforces_id":null}]}
+{"items":[{"id":1,"summary":"User prefers strength training over cardio.","themes":["user:health","preference:training"],"contradicts_id":null,"reinforces_id":null}]}
 
 Rules:
   - Every candidate id must appear exactly once in items.
+  - summary: ≤200 chars, single sentence, or null if not worth keeping.
   - themes: 1–5 tags per candidate.
   - contradicts_id and reinforces_id may both be null.
   - Do NOT invent ids. Only reference ids present in the input.
@@ -37,6 +39,7 @@ Rules:
 interface RemOutput {
   items: Array<{
     id: number;
+    summary: string | null;
     themes: string[];
     contradicts_id: number | null;
     reinforces_id: number | null;
@@ -134,7 +137,11 @@ export async function runRemPhase(
       item.reinforces_id !== null && validIds.has(item.reinforces_id)
         ? item.reinforces_id
         : null;
-    setDreamCandidateThemes(item.id, themes, contradicts, reinforces);
+    const summary =
+      typeof item.summary === 'string' && item.summary.trim()
+        ? item.summary.trim().slice(0, 200)
+        : null;
+    setDreamCandidateThemes(item.id, themes, contradicts, reinforces, summary);
     tagged++;
   }
 

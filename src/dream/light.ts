@@ -46,18 +46,58 @@ function normalize(s: string): string {
     .trim();
 }
 
-/** Split markdown on H2 boundaries; drop empty sections; strip the H2 line. */
+/**
+ * Strip event-handler boilerplate, MCP tool references, transcript framing.
+ * Returns null if what's left is too thin to be useful.
+ */
+function cleanSnippet(raw: string): string | null {
+  let s = raw;
+  s = s.replace(/\[EVENT TRIGGERED[\s\S]*?\]/gi, '');
+  s = s.replace(/<event[\s\S]*?<\/event>/gi, '');
+  s = s.replace(/<handler_instructions>[\s\S]*?<\/handler_instructions>/gi, '');
+  // Strip transcript wrappers (also handle truncated/unclosed forms)
+  s = s.replace(/<\/?messages>/gi, '');
+  s = s.replace(/<message[^>]*>/gi, ' ');
+  s = s.replace(/<\/message>/gi, ' ');
+  s = s.replace(/^\s*[-*]\s*(?:User|Assistant|Andy|CoCo):\s*/gim, '');
+  s = s.replace(/^\s*\*\*(?:User|Assistant|Andy|CoCo)\*\*:\s*/gim, '');
+  s = s.replace(/mcp__\w+__\w+/g, '');
+  s = s.replace(/^#\s+Conversation\s+Archived:.*$/gim, '');
+  s = normalize(s);
+  if (s.length < 30 || s.length > 1500) return null;
+  return s;
+}
+
+const SECTION_HEADER =
+  /^(?:##\s+[^\n]*|\*\*(?:User|Assistant|Andy|CoCo)\*\*:|\s*[-*]\s*(?:User|Assistant|Andy|CoCo):)/m;
+
+/**
+ * Split markdown into snippets. Boundaries: H2 headers, **User**:/**Andy**:
+ * transcript markers, and `- User:`/`- Assistant:` bullet rolls. Each segment
+ * is then cleaned of boilerplate.
+ */
 function extractSnippets(content: string): string[] {
-  const sections = content
-    .split(/(?=^## )/m)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const stripHeading = (s: string) => s.replace(/^##\s+[^\n]*\n+/, '').trim();
-  if (sections.length === 0 && content.trim()) return [normalize(content)];
-  return sections
-    .map(stripHeading)
-    .map(normalize)
-    .filter((s) => s.length >= 30 && s.length <= 1500);
+  const lines = content.split('\n');
+  const segments: string[] = [];
+  let buf: string[] = [];
+  const flush = () => {
+    if (buf.length) {
+      segments.push(buf.join('\n'));
+      buf = [];
+    }
+  };
+  for (const line of lines) {
+    if (SECTION_HEADER.test(line) && buf.length) flush();
+    buf.push(line);
+  }
+  flush();
+
+  const out: string[] = [];
+  for (const seg of segments) {
+    const cleaned = cleanSnippet(seg);
+    if (cleaned) out.push(cleaned);
+  }
+  return out;
 }
 
 function extractDateFromFilename(filename: string): string | null {

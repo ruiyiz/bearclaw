@@ -1090,6 +1090,13 @@ function initDreamTables(): void {
     CREATE INDEX IF NOT EXISTS dream_runs_agent
       ON dream_runs(agent_folder, started_at DESC);
   `);
+
+  // Migration: add summary column for distilled REM output
+  try {
+    db.exec(`ALTER TABLE dream_candidates ADD COLUMN summary TEXT`);
+  } catch {
+    /* column already exists */
+  }
 }
 
 export interface DreamCandidate {
@@ -1111,6 +1118,7 @@ export interface DreamCandidate {
   score: number | null;
   promoted_at: number | null;
   promoted_to: string | null;
+  summary: string | null;
 }
 
 export function upsertDreamCandidate(
@@ -1199,10 +1207,11 @@ export function setDreamCandidateThemes(
   themeTags: string[],
   contradictsId: number | null,
   reinforcesId: number | null,
+  summary: string | null,
 ): void {
   db.prepare(
-    'UPDATE dream_candidates SET theme_tags = ?, contradicts_id = ?, reinforces_id = ? WHERE id = ?',
-  ).run(JSON.stringify(themeTags), contradictsId, reinforcesId, id);
+    'UPDATE dream_candidates SET theme_tags = ?, contradicts_id = ?, reinforces_id = ?, summary = ? WHERE id = ?',
+  ).run(JSON.stringify(themeTags), contradictsId, reinforcesId, summary, id);
 }
 
 export function setDreamCandidateScore(id: number, score: number): void {
