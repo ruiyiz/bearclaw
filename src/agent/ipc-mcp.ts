@@ -1105,6 +1105,15 @@ Set wait=true if you need the file path back synchronously (e.g. to chain
 edits or feed the image into another tool). In wait mode, you must call
 send_message yourself to deliver it.
 
+EDIT MODE: Pass input_images=["/path/to/img.jpg", ...] to feed reference
+images into the model. The prompt then describes how to transform / combine
+them. Required for identity-preserving edits (e.g. "make this person wear
+a charcoal blazer" — without input_images the model just hallucinates a
+new person). Paths may be absolute, ~-prefixed, relative to the agent
+folder, or http(s) URLs. Gemini accepts multiple inputs (composition,
+style transfer, multi-subject blends). OpenAI accepts one or more via the
+edits endpoint.
+
 Tips:
 - Be specific in the prompt (subject, style, lighting, composition).
 - For OpenAI: size="1024x1536" portrait, "1536x1024" landscape, "1024x1024" square, "auto".
@@ -1150,6 +1159,12 @@ Tips:
                   .enum(['png', 'jpeg', 'webp'])
                   .optional()
                   .describe('Output file format (OpenAI only; default: png)'),
+                input_images: z
+                  .array(z.string())
+                  .optional()
+                  .describe(
+                    'File paths (absolute, ~-prefixed, agent-folder-relative) or http(s) URLs to use as edit/reference inputs. When provided, the model edits/composes from these instead of generating from scratch.',
+                  ),
               },
               async (args) => {
                 const agentDir = path.join(AGENTS_DIR, agentFolder);
@@ -1173,6 +1188,8 @@ Tips:
                   background: args.background,
                   outputFormat: args.output_format,
                   outputDir,
+                  inputImages: args.input_images,
+                  baseDir: agentDir,
                 };
 
                 if (args.wait) {
