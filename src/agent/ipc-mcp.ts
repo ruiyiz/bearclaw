@@ -15,6 +15,7 @@ import { embedPendingChunks } from './memory-embed.js';
 import {
   AGENTS_DIR,
   CONTEXT_DIR,
+  GOOGLE_API_KEY,
   OPENAI_API_KEY,
   localDate,
   localTime,
@@ -1069,14 +1070,30 @@ Prefer this over Write/Edit for memory — it handles paths and indexing for you
         },
       ),
 
-      ...(OPENAI_API_KEY
+      ...(OPENAI_API_KEY || GOOGLE_API_KEY
         ? [
             tool(
               'image_generate',
-              `Generate an image from a text prompt using OpenAI's image model (gpt-image-2).
+              `Generate an image from a text prompt.
+
+PROVIDERS (selected via the model parameter):
+- OpenAI gpt-image-2 (default when OPENAI_API_KEY is set) — supports size,
+  quality, background, output_format.
+- Google nano-banana (alias for gemini-2.5-flash-image) — fast, cheap,
+  strong photorealism. Ignores size/quality/background/output_format
+  (Gemini decides; output is PNG).
+- Google nano-banana-2 (alias for gemini-3.1-flash-image-preview) — newer
+  Flash Image model with stronger world knowledge and editing. Same
+  constraints as nano-banana.
+- Google nano-banana-pro (alias for gemini-3-pro-image-preview) — Pro tier;
+  highest quality, slowest, costliest.
+
+Pass model="nano-banana", "nano-banana-2", or any "gemini-*" id to use
+Google. Pass "gpt-image-2" (or any "gpt-image-*") for OpenAI. Omit to use
+the default for whichever key is configured.
 
 DEFAULT (fire-and-forget): Returns immediately. Image is generated in the
-background and delivered to the chat automatically when ready (~10–60s).
+background and delivered to the chat automatically when ready (~5–60s).
 This frees you to finish your turn without waiting on the image API.
 
 After calling this tool, write a short acknowledgment as your final reply
@@ -1090,9 +1107,9 @@ send_message yourself to deliver it.
 
 Tips:
 - Be specific in the prompt (subject, style, lighting, composition).
-- Use size="1024x1536" for portrait, "1536x1024" for landscape, "1024x1024" for square, or "auto".
-- Use quality="high" for fine detail; "low"/"medium" are faster and cheaper.
-- Use background="transparent" with output_format="png" or "webp" for cutouts.`,
+- For OpenAI: size="1024x1536" portrait, "1536x1024" landscape, "1024x1024" square, "auto".
+- For OpenAI: quality="high" for fine detail; "low"/"medium" are faster/cheaper.
+- For OpenAI: background="transparent" with output_format="png" or "webp" for cutouts.`,
               {
                 prompt: z
                   .string()
@@ -1112,42 +1129,55 @@ Tips:
                 model: z
                   .string()
                   .optional()
-                  .describe('Model id (default: gpt-image-2)'),
+                  .describe(
+                    'Model id. "gpt-image-2" (OpenAI default), "nano-banana" (gemini-2.5-flash-image), "nano-banana-2" (gemini-3.1-flash-image-preview), "nano-banana-pro" (gemini-3-pro-image-preview), or any other gpt-image-* / gemini-* id.',
+                  ),
                 size: z
                   .enum(['1024x1024', '1024x1536', '1536x1024', 'auto'])
                   .optional()
-                  .describe('Output dimensions (default: auto)'),
+                  .describe('Output dimensions (OpenAI only; default: auto)'),
                 quality: z
                   .enum(['low', 'medium', 'high', 'auto'])
                   .optional()
-                  .describe('Generation quality (default: auto)'),
+                  .describe('Generation quality (OpenAI only; default: auto)'),
                 background: z
                   .enum(['transparent', 'opaque', 'auto'])
                   .optional()
                   .describe(
-                    'Background mode; transparent requires png or webp output',
+                    'Background mode (OpenAI only); transparent requires png or webp output',
                   ),
                 output_format: z
                   .enum(['png', 'jpeg', 'webp'])
                   .optional()
-                  .describe('Output file format (default: png)'),
+                  .describe('Output file format (OpenAI only; default: png)'),
               },
               async (args) => {
                 const agentDir = path.join(AGENTS_DIR, agentFolder);
                 const outputDir = path.join(agentDir, 'media');
-                const ext = args.output_format || 'png';
+
+                // Pick a default model based on which key is configured.
+                const requestedModel =
+                  args.model ||
+                  (OPENAI_API_KEY ? 'gpt-image-2' : 'nano-banana');
+                const isGemini =
+                  requestedModel.startsWith('nano-banana') ||
+                  requestedModel.startsWith('gemini');
+                // Gemini emits PNG; OpenAI honours output_format (default png).
+                const ext = isGemini ? 'png' : args.output_format || 'png';
+
+                const callArgs = {
+                  prompt: args.prompt,
+                  model: requestedModel,
+                  size: args.size,
+                  quality: args.quality,
+                  background: args.background,
+                  outputFormat: args.output_format,
+                  outputDir,
+                };
 
                 if (args.wait) {
                   try {
-                    const filepath = await generateImage({
-                      prompt: args.prompt,
-                      model: args.model,
-                      size: args.size,
-                      quality: args.quality,
-                      background: args.background,
-                      outputFormat: args.output_format,
-                      outputDir,
-                    });
+                    const filepath = await generateImage(callArgs);
                     return {
                       content: [
                         {
@@ -1175,15 +1205,7 @@ Tips:
                 // The host process keeps the promise alive past the agent run.
                 void (async () => {
                   try {
-                    const filepath = await generateImage({
-                      prompt: args.prompt,
-                      model: args.model,
-                      size: args.size,
-                      quality: args.quality,
-                      background: args.background,
-                      outputFormat: args.output_format,
-                      outputDir,
-                    });
+                    const filepath = await generateImage(callArgs);
                     writeIpcFile(messagesDir, {
                       type: 'message',
                       chatJid,
@@ -1214,7 +1236,7 @@ Tips:
                   content: [
                     {
                       type: 'text',
-                      text: `Image generation queued. It will be delivered to the chat automatically when ready (~10–60s). Do not call send_message for it.`,
+                      text: `Image generation queued (${requestedModel}). It will be delivered to the chat automatically when ready (~5–60s). Do not call send_message for it.`,
                     },
                   ],
                 };

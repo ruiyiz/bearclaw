@@ -163,7 +163,7 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
   - `emit_event`, `register_agent`, `reply_email`
   - `memory_write`, `memory_search`
   - `subprocess_start/read/write/poll/kill/list`
-  - `image_generate` (registered only when `OPENAI_API_KEY` is set)
+  - `image_generate` (registered when either `OPENAI_API_KEY` or `GOOGLE_API_KEY` is set; routes by model — `gpt-image-*` → OpenAI, `nano-banana`/`gemini-*` → Google)
 - Handlers stored in SQLite with run history
 - Scheduler checks for due cron handlers every minute; the event bus drains the queue every 5 seconds
 

@@ -95,6 +95,10 @@ export const EMBEDDING_DIMS = parseInt(
   10,
 );
 
+// Google AI (Gemini) — image generation via gemini-2.5-flash-image (nano-banana)
+export const GOOGLE_API_KEY =
+  process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || '';
+
 export const HEARTBEAT_PROMPT = `[HEARTBEAT — Proactive check-in. You are waking up on your own to look around.]
 
 Read HEARTBEAT.md in your working directory. Follow its instructions exactly.

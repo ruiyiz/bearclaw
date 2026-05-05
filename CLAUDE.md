@@ -32,7 +32,7 @@ src/
 | `src/agent/ipc-mcp.ts`                  | MCP tools for agent ↔ host communication                          |
 | `src/agent/embedder.ts`                 | OpenAI embedding HTTP client                                      |
 | `src/agent/memory-embed.ts`             | Embeds chunks into `memory_vec`                                   |
-| `src/agent/image-gen.ts`                | OpenAI image generation client (gpt-image-2)                      |
+| `src/agent/image-gen.ts`                | Image generation client (OpenAI gpt-image-2 + Google nano-banana) |
 | `src/dream/orchestrator.ts`             | Bundles session reset + Light/REM/Deep/Narrate/Shared/Report      |
 | `src/dream/handler.ts`                  | Registers `dream-{folder}` cron handlers                          |
 | `src/events/bus.ts`                     | Event dispatch + handler runner (intercepts `dream-` handlers)    |
