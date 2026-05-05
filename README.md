@@ -56,6 +56,7 @@ Talk to your assistant with the trigger word (default: `@Andy`):
 ```
 
 From the main channel (your self-chat), you can manage agents and tasks:
+
 ```
 @Andy list all scheduled tasks across agents
 @Andy pause the Monday briefing task
@@ -88,15 +89,18 @@ Users then run `/add-telegram` on their fork and get clean code that does exactl
 Skills we'd love to see:
 
 **Communication Channels**
+
 - `/add-telegram` - Add Telegram as channel. Should give the user option to replace WhatsApp or add as additional channel. Also should be possible to add it as a control channel (where it can trigger actions) or just a channel that can be used in actions triggered elsewhere
 - `/add-slack` - Add Slack
 - `/add-discord` - Add Discord
 
 **Platform Support**
+
 - `/setup-windows` - Windows via WSL2
 - `/setup-linux` - Linux setup
 
 **Session Management**
+
 - `/add-clear` - Add a `/clear` command that compacts the conversation (summarizes context while preserving critical information in the same session). Requires figuring out how to trigger compaction programmatically via the Claude Agent SDK.
 
 ## Requirements
@@ -124,6 +128,7 @@ launchctl list | grep nanoclaw
 ```
 
 Logs:
+
 ```bash
 tail -f logs/nanoclaw.log        # Main log
 tail -f logs/nanoclaw.error.log  # Errors
@@ -131,6 +136,7 @@ cat ~/.nanoclaw/agents/main/logs/agent-*.log | tail -50  # Agent logs
 ```
 
 Re-authenticate WhatsApp (if disconnected):
+
 ```bash
 npm run auth
 launchctl kickstart -k gui/$(id -u)/com.nanoclaw
@@ -145,9 +151,10 @@ WhatsApp (baileys) --> SQLite --> Polling loop --> Claude Agent SDK (in-process)
 Single Node.js process. Agents execute via the Claude Agent SDK directly in the host process with per-agent working directories. IPC via filesystem. No daemons, no queues, no complexity.
 
 Key files:
+
 - `src/index.ts` - Main app: channel connections, routing, IPC
 - `src/agent/runner.ts` - Runs the Claude Agent SDK in-process
-- `src/agent/ipc-mcp.ts` - MCP tools for agent ↔ host communication
+- `src/agent/ipc-mcp.ts` - MCP tools for agent ↔ host communication (send_message, schedule_task, memory, image_generate, …)
 - `src/events/scheduler.ts` - Runs scheduled handlers
 - `src/events/bus.ts` - Dispatches events to handlers
 - `src/db.ts` - SQLite operations

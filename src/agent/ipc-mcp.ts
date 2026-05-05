@@ -12,7 +12,13 @@ import { CronExpressionParser } from 'cron-parser';
 import { indexMemoryFiles, searchMemory } from '../db.js';
 import { embed } from './embedder.js';
 import { embedPendingChunks } from './memory-embed.js';
-import { AGENTS_DIR, CONTEXT_DIR, localDate, localTime } from '../config.js';
+import {
+  AGENTS_DIR,
+  CONTEXT_DIR,
+  OPENAI_API_KEY,
+  localDate,
+  localTime,
+} from '../config.js';
 import {
   startSubprocess,
   readSubprocessOutput,
@@ -21,6 +27,7 @@ import {
   killSubprocess,
   listSubprocesses,
 } from './subprocess-manager.js';
+import { generateImage } from './image-gen.js';
 
 interface IpcMcpContext {
   chatJid: string;
@@ -1061,6 +1068,160 @@ Prefer this over Write/Edit for memory — it handles paths and indexing for you
           };
         },
       ),
+
+      ...(OPENAI_API_KEY
+        ? [
+            tool(
+              'image_generate',
+              `Generate an image from a text prompt using OpenAI's image model (gpt-image-2).
+
+DEFAULT (fire-and-forget): Returns immediately. Image is generated in the
+background and delivered to the chat automatically when ready (~10–60s).
+This frees you to finish your turn without waiting on the image API.
+
+After calling this tool, write a short acknowledgment as your final reply
+(e.g. "Generating — coming up.") and end the turn. Do NOT call send_message
+for the image; it will be delivered automatically with the caption you
+supplied.
+
+Set wait=true if you need the file path back synchronously (e.g. to chain
+edits or feed the image into another tool). In wait mode, you must call
+send_message yourself to deliver it.
+
+Tips:
+- Be specific in the prompt (subject, style, lighting, composition).
+- Use size="1024x1536" for portrait, "1536x1024" for landscape, "1024x1024" for square, or "auto".
+- Use quality="high" for fine detail; "low"/"medium" are faster and cheaper.
+- Use background="transparent" with output_format="png" or "webp" for cutouts.`,
+              {
+                prompt: z
+                  .string()
+                  .describe('Text description of the image to generate'),
+                caption: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'Caption sent with the image in fire-and-forget mode (ignored when wait=true)',
+                  ),
+                wait: z
+                  .boolean()
+                  .default(false)
+                  .describe(
+                    'If true, block until generation completes and return the file path. If false (default), return immediately and deliver the image asynchronously.',
+                  ),
+                model: z
+                  .string()
+                  .optional()
+                  .describe('Model id (default: gpt-image-2)'),
+                size: z
+                  .enum(['1024x1024', '1024x1536', '1536x1024', 'auto'])
+                  .optional()
+                  .describe('Output dimensions (default: auto)'),
+                quality: z
+                  .enum(['low', 'medium', 'high', 'auto'])
+                  .optional()
+                  .describe('Generation quality (default: auto)'),
+                background: z
+                  .enum(['transparent', 'opaque', 'auto'])
+                  .optional()
+                  .describe(
+                    'Background mode; transparent requires png or webp output',
+                  ),
+                output_format: z
+                  .enum(['png', 'jpeg', 'webp'])
+                  .optional()
+                  .describe('Output file format (default: png)'),
+              },
+              async (args) => {
+                const agentDir = path.join(AGENTS_DIR, agentFolder);
+                const outputDir = path.join(agentDir, 'media');
+                const ext = args.output_format || 'png';
+
+                if (args.wait) {
+                  try {
+                    const filepath = await generateImage({
+                      prompt: args.prompt,
+                      model: args.model,
+                      size: args.size,
+                      quality: args.quality,
+                      background: args.background,
+                      outputFormat: args.output_format,
+                      outputDir,
+                    });
+                    return {
+                      content: [
+                        {
+                          type: 'text',
+                          text: `Image generated at: ${filepath}\n\nDeliver it with send_message: media_type="image", file_path="${filepath}".`,
+                        },
+                      ],
+                    };
+                  } catch (err) {
+                    const msg =
+                      err instanceof Error ? err.message : String(err);
+                    return {
+                      content: [
+                        {
+                          type: 'text',
+                          text: `Image generation failed: ${msg}`,
+                        },
+                      ],
+                      isError: true,
+                    };
+                  }
+                }
+
+                // Fire-and-forget: kick off generation, deliver via IPC when ready.
+                // The host process keeps the promise alive past the agent run.
+                void (async () => {
+                  try {
+                    const filepath = await generateImage({
+                      prompt: args.prompt,
+                      model: args.model,
+                      size: args.size,
+                      quality: args.quality,
+                      background: args.background,
+                      outputFormat: args.output_format,
+                      outputDir,
+                    });
+                    writeIpcFile(messagesDir, {
+                      type: 'message',
+                      chatJid,
+                      text: args.caption || null,
+                      agentFolder,
+                      timestamp: new Date().toISOString(),
+                      mediaType: 'image',
+                      filePath: filepath,
+                      mediaUrl: null,
+                      fileName: null,
+                      mimetype: `image/${ext === 'jpeg' ? 'jpeg' : ext}`,
+                      ptt: false,
+                    });
+                  } catch (err) {
+                    const msg =
+                      err instanceof Error ? err.message : String(err);
+                    writeIpcFile(messagesDir, {
+                      type: 'message',
+                      chatJid,
+                      text: `Image generation failed: ${msg}`,
+                      agentFolder,
+                      timestamp: new Date().toISOString(),
+                    });
+                  }
+                })();
+
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `Image generation queued. It will be delivered to the chat automatically when ready (~10–60s). Do not call send_message for it.`,
+                    },
+                  ],
+                };
+              },
+            ),
+          ]
+        : []),
     ],
   });
 }
