@@ -3,10 +3,25 @@ import path from 'path';
 import fs from 'fs';
 import { promisify } from 'util';
 
-import { ASSISTANT_NAME, DISPLAY_NAME, AGENTS_DIR, DATA_DIR, TRIGGER_PATTERN } from '../config.js';
+import {
+  ASSISTANT_NAME,
+  DISPLAY_NAME,
+  AGENTS_DIR,
+  DATA_DIR,
+  TRIGGER_PATTERN,
+} from '../config.js';
 import { renderMarkdown, PlainTextRenderer } from '../media/format.js';
 import { logger } from '../logger.js';
-import { Channel, MediaType, MediaSource, MediaOptions, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredAgent } from '../types.js';
+import {
+  Channel,
+  MediaType,
+  MediaSource,
+  MediaOptions,
+  NewMessage,
+  OnChatMetadata,
+  OnInboundMessage,
+  RegisteredAgent,
+} from '../types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -66,11 +81,16 @@ export class IMessageChannel implements Channel {
     this.connected = true;
     this.schedulePoll();
 
-    logger.info({ watchFile: IMSG_WATCH_FILE }, 'iMessage channel connected (file-tail mode)');
+    logger.info(
+      { watchFile: IMSG_WATCH_FILE },
+      'iMessage channel connected (file-tail mode)',
+    );
     console.log('\n  iMessage channel active (file-tail mode)');
     console.log(`  In a terminal with Full Disk Access, run:`);
     console.log(`  imsg watch --json --attachments >> ${IMSG_WATCH_FILE}`);
-    console.log('  Register chats with JID: imsg:<chatID>  (from: imsg chats --json)\n');
+    console.log(
+      '  Register chats with JID: imsg:<chatID>  (from: imsg chats --json)\n',
+    );
   }
 
   private schedulePoll(): void {
@@ -134,7 +154,10 @@ export class IMessageChannel implements Channel {
     const chatJid = `imsg:${event.chat_id}`;
     const agent = this.opts.registeredAgents()[chatJid];
     if (!agent) {
-      logger.debug({ chatJid, chat_id: event.chat_id }, 'iMessage from unregistered chat');
+      logger.debug(
+        { chatJid, chat_id: event.chat_id },
+        'iMessage from unregistered chat',
+      );
       return;
     }
 
@@ -169,9 +192,13 @@ export class IMessageChannel implements Channel {
 
         const mime = att.mime_type || '';
         const originalName = att.transfer_name || path.basename(expanded);
+        // Normalize Unicode whitespace (e.g. NARROW NO-BREAK SPACE U+202F in
+        // macOS screenshot filenames) to ASCII so the agent can reproduce the
+        // path verbatim when calling tools like image_generate.
+        const safeName = originalName.replace(/\s+/gu, ' ');
         const mediaDir = path.join(AGENTS_DIR, agent.folder, 'media');
         fs.mkdirSync(mediaDir, { recursive: true });
-        const destPath = path.join(mediaDir, `imsg-${event.id}-${originalName}`);
+        const destPath = path.join(mediaDir, `imsg-${event.id}-${safeName}`);
         fs.copyFileSync(expanded, destPath);
 
         if (mime.startsWith('image/')) {
@@ -209,22 +236,43 @@ export class IMessageChannel implements Channel {
     const plain = renderMarkdown(text, PlainTextRenderer);
     const prefixed = `${DISPLAY_NAME}: ${plain}`;
     try {
-      await execFileAsync('imsg', ['send', '--chat-id', chatId, '--text', prefixed]);
+      await execFileAsync('imsg', [
+        'send',
+        '--chat-id',
+        chatId,
+        '--text',
+        prefixed,
+      ]);
       logger.info({ jid, length: text.length }, 'iMessage sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send iMessage');
     }
   }
 
-  async sendMedia(jid: string, type: MediaType, source: MediaSource, options?: MediaOptions): Promise<void> {
+  async sendMedia(
+    jid: string,
+    type: MediaType,
+    source: MediaSource,
+    options?: MediaOptions,
+  ): Promise<void> {
     const chatId = jid.replace(/^imsg:/, '');
 
     let filePath: string | null = null;
     let tempFile: string | null = null;
 
     if (source.buffer) {
-      const ext = type === 'image' ? '.jpg' : type === 'video' ? '.mp4' : type === 'audio' ? '.m4a' : '.bin';
-      tempFile = path.join(process.env.TMPDIR || '/tmp', `nanoclaw-imsg-${Date.now()}${ext}`);
+      const ext =
+        type === 'image'
+          ? '.jpg'
+          : type === 'video'
+            ? '.mp4'
+            : type === 'audio'
+              ? '.m4a'
+              : '.bin';
+      tempFile = path.join(
+        process.env.TMPDIR || '/tmp',
+        `nanoclaw-imsg-${Date.now()}${ext}`,
+      );
       fs.writeFileSync(tempFile, source.buffer);
       filePath = tempFile;
     } else if (source.url) {
@@ -233,7 +281,10 @@ export class IMessageChannel implements Channel {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const buffer = Buffer.from(await response.arrayBuffer());
         const ext = path.extname(new URL(source.url).pathname) || '.bin';
-        tempFile = path.join(process.env.TMPDIR || '/tmp', `nanoclaw-imsg-${Date.now()}${ext}`);
+        tempFile = path.join(
+          process.env.TMPDIR || '/tmp',
+          `nanoclaw-imsg-${Date.now()}${ext}`,
+        );
         fs.writeFileSync(tempFile, buffer);
         filePath = tempFile;
       } catch (err) {
@@ -259,7 +310,9 @@ export class IMessageChannel implements Channel {
       logger.error({ jid, type, err }, 'Failed to send iMessage media');
     } finally {
       if (tempFile) {
-        try { fs.unlinkSync(tempFile); } catch {}
+        try {
+          fs.unlinkSync(tempFile);
+        } catch {}
       }
     }
   }
@@ -268,7 +321,13 @@ export class IMessageChannel implements Channel {
     if (!isTyping) return;
     const chatId = jid.replace(/^imsg:/, '');
     try {
-      await execFileAsync('imsg', ['typing', '--chat-id', chatId, '--duration', '5s']);
+      await execFileAsync('imsg', [
+        'typing',
+        '--chat-id',
+        chatId,
+        '--duration',
+        '5s',
+      ]);
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send iMessage typing indicator');
     }
