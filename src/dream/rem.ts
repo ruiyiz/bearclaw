@@ -91,7 +91,7 @@ function tryParseRemOutput(raw: string): RemOutput | null {
  */
 export async function runRemPhase(
   agentFolder: string,
-  agentDir: string,
+  varDir: string,
 ): Promise<number> {
   const candidates = getDreamCandidatesForAgent(agentFolder);
   if (candidates.length === 0) return 0;
@@ -100,7 +100,7 @@ export async function runRemPhase(
   const prompt = buildPrompt(candidates);
   const out = await runDreamSubagent({
     prompt,
-    cwd: agentDir,
+    cwd: varDir,
     systemPrompt: SYSTEM_PROMPT,
     allowedTools: [],
     timeoutMs: 4 * 60 * 1000,

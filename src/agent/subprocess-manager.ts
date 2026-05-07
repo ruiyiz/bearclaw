@@ -2,12 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import * as pty from 'node-pty';
-import { DATA_DIR, NANOCLAW_HOME } from '../config.js';
+import { CACHE_DIR, RUN_DIR } from '../config.js';
 import { createHandler, emitEvent } from '../db.js';
 import { logger } from '../logger.js';
 
-const SUBPROCESSES_DIR = path.join(DATA_DIR, 'subprocesses');
-const BIN_DIR = path.join(NANOCLAW_HOME, 'bin');
+const SUBPROCESSES_DIR = path.join(RUN_DIR, 'subprocesses');
+const BIN_DIR = path.join(CACHE_DIR, 'bin');
 const NOTIFY_SCRIPT_PATH = path.join(BIN_DIR, 'nanoclaw-notify');
 
 interface SessionState {
@@ -42,7 +42,7 @@ const [,, sessionId, eventType] = process.argv;
 if (!sessionId || !eventType) process.exit(1);
 
 const home = path.join(os.homedir(), '.nanoclaw');
-const sessionFile = path.join(home, 'data', 'subprocesses', sessionId + '.json');
+const sessionFile = path.join(home, 'var', 'run', 'subprocesses', sessionId + '.json');
 
 let session;
 try {
@@ -62,7 +62,7 @@ try {
 } catch {}
 
 const ipcType = 'subprocess_notification';
-const tasksDir = path.join(home, 'data', 'ipc', session.agentFolder, 'tasks');
+const tasksDir = path.join(home, 'var', 'run', 'ipc', session.agentFolder, 'tasks');
 fs.mkdirSync(tasksDir, { recursive: true });
 
 const filename = Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.json';
@@ -98,7 +98,7 @@ function loadSessionState(sessionId: string): SessionState | null {
 function recoverSessions(): void {
   let files: string[];
   try {
-    files = fs.readdirSync(SUBPROCESSES_DIR).filter(f => f.endsWith('.json'));
+    files = fs.readdirSync(SUBPROCESSES_DIR).filter((f) => f.endsWith('.json'));
   } catch {
     return;
   }
@@ -120,7 +120,10 @@ function recoverSessions(): void {
       state.status = 'exited';
       state.exitedAt = new Date().toISOString();
       saveSessionState(state);
-      logger.info({ sessionId, pid: state.pid }, 'Subprocess recovered as exited');
+      logger.info(
+        { sessionId, pid: state.pid },
+        'Subprocess recovered as exited',
+      );
     }
   }
 }
@@ -150,7 +153,14 @@ export function startSubprocess(params: {
   prompt_suffix?: string;
   pre_spawn?: (sessionId: string) => void;
 }): string {
-  const { agentFolder, chatJid, cols = 220, rows = 50, on_exit, on_notification } = params;
+  const {
+    agentFolder,
+    chatJid,
+    cols = 220,
+    rows = 50,
+    on_exit,
+    on_notification,
+  } = params;
   const sessionId = `proc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   const workdir = params.workdir
@@ -161,7 +171,8 @@ export function startSubprocess(params: {
 
   let command = params.command;
   if (params.prompt_suffix) {
-    command = command + params.prompt_suffix.replace(/\{sessionId\}/g, sessionId);
+    command =
+      command + params.prompt_suffix.replace(/\{sessionId\}/g, sessionId);
   }
 
   const ptyProcess = pty.spawn('sh', ['-c', command], {
@@ -211,7 +222,12 @@ export function startSubprocess(params: {
         saveSessionState(s);
       }
     }
-    emitEvent('subprocess_exit', { sessionId, exitCode, signal: signal ?? null, agentFolder });
+    emitEvent('subprocess_exit', {
+      sessionId,
+      exitCode,
+      signal: signal ?? null,
+      agentFolder,
+    });
     logger.info({ sessionId, exitCode, signal }, 'Subprocess exited');
   });
 
@@ -253,11 +269,17 @@ export function startSubprocess(params: {
     });
   }
 
-  logger.info({ sessionId, command: params.command, pid: ptyProcess.pid, agentFolder }, 'Subprocess started');
+  logger.info(
+    { sessionId, command: params.command, pid: ptyProcess.pid, agentFolder },
+    'Subprocess started',
+  );
   return sessionId;
 }
 
-export function readSubprocessOutput(sessionId: string, offset: number = 0): { output: string; nextOffset: number } {
+export function readSubprocessOutput(
+  sessionId: string,
+  offset: number = 0,
+): { output: string; nextOffset: number } {
   const outputFile = path.join(SUBPROCESSES_DIR, `${sessionId}.output`);
   if (!fs.existsSync(outputFile)) return { output: '', nextOffset: offset };
 
@@ -305,7 +327,7 @@ export function listSubprocesses(): SessionState[] {
   const results: SessionState[] = [];
   let files: string[];
   try {
-    files = fs.readdirSync(SUBPROCESSES_DIR).filter(f => f.endsWith('.json'));
+    files = fs.readdirSync(SUBPROCESSES_DIR).filter((f) => f.endsWith('.json'));
   } catch {
     return results;
   }

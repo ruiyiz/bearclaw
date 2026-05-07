@@ -1,14 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 
-import { AGENTS_DIR } from '../config.js';
+import { agentVarDir } from '../config.js';
 import { logger } from '../logger.js';
 import { MediaSource } from '../types.js';
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.doc': 'application/msword',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.docx':
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xls': 'application/vnd.ms-excel',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.csv': 'text/csv',
@@ -48,7 +49,7 @@ export function resolveMediaSource(
   if (filePath) {
     const resolvedPath = path.isAbsolute(filePath)
       ? filePath
-      : path.join(AGENTS_DIR, sourceAgent, filePath);
+      : path.join(agentVarDir(sourceAgent), filePath);
 
     if (!fs.existsSync(resolvedPath)) {
       logger.error({ resolvedPath, sourceAgent }, 'Media file not found');

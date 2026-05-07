@@ -13,10 +13,10 @@ import { indexMemoryFiles, searchMemory } from '../db.js';
 import { embed } from './embedder.js';
 import { embedPendingChunks } from './memory-embed.js';
 import {
-  AGENTS_DIR,
   CONTEXT_DIR,
   GOOGLE_API_KEY,
   OPENAI_API_KEY,
+  agentVarDir,
   localDate,
   localTime,
 } from '../config.js';
@@ -769,8 +769,8 @@ Use this to recall past context, decisions, or conversation details.`,
             .describe('Max results to return (default: 5)'),
         },
         async (args) => {
-          const agentDir = path.join(AGENTS_DIR, agentFolder);
-          indexMemoryFiles(agentFolder, agentDir);
+          const varDir = agentVarDir(agentFolder);
+          indexMemoryFiles(agentFolder, varDir);
           // Best-effort embed-then-search; if either step fails, search falls back to FTS-only.
           await embedPendingChunks();
           const queryVec = await embed(args.query);
@@ -1046,8 +1046,8 @@ Prefer this over Write/Edit for memory — it handles paths and indexing for you
             };
           }
 
-          const agentDir = path.join(AGENTS_DIR, agentFolder);
-          const memoryDir = path.join(agentDir, 'memory');
+          const varDir = agentVarDir(agentFolder);
+          const memoryDir = path.join(varDir, 'memory');
           fs.mkdirSync(memoryDir, { recursive: true });
 
           const date = localDate();
@@ -1060,7 +1060,7 @@ Prefer this over Write/Edit for memory — it handles paths and indexing for you
           const entry = `\n${header}\n\n${args.content}\n`;
 
           fs.appendFileSync(memoryFile, entry);
-          indexMemoryFiles(agentFolder, agentDir);
+          indexMemoryFiles(agentFolder, varDir);
           // Fire-and-forget embedding of new chunks; don't block the agent.
           void embedPendingChunks();
 
@@ -1167,8 +1167,8 @@ Tips:
                   ),
               },
               async (args) => {
-                const agentDir = path.join(AGENTS_DIR, agentFolder);
-                const outputDir = path.join(agentDir, 'media');
+                const varDir = agentVarDir(agentFolder);
+                const outputDir = path.join(varDir, 'media');
 
                 // Pick a default model based on which key is configured.
                 const requestedModel =
@@ -1189,7 +1189,7 @@ Tips:
                   outputFormat: args.output_format,
                   outputDir,
                   inputImages: args.input_images,
-                  baseDir: agentDir,
+                  baseDir: varDir,
                 };
 
                 if (args.wait) {

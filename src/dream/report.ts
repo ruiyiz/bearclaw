@@ -10,11 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import {
-  DATA_DIR,
-  DREAM_REPORT_CHANNEL,
-  MAIN_AGENT_FOLDER,
-} from '../config.js';
+import { DREAM_REPORT_CHANNEL, MAIN_AGENT_FOLDER, RUN_DIR } from '../config.js';
 import { logger } from '../logger.js';
 import { runDreamSubagent } from './subagent.js';
 import { SharedPromotion } from './shared.js';
@@ -108,7 +104,7 @@ function pickReportChatJid(
 }
 
 function writeReportIpc(text: string, chatJid: string | null): void {
-  const ipcDir = path.join(DATA_DIR, 'ipc', MAIN_AGENT_FOLDER, 'messages');
+  const ipcDir = path.join(RUN_DIR, 'ipc', MAIN_AGENT_FOLDER, 'messages');
   fs.mkdirSync(ipcDir, { recursive: true });
   const filename = `${Date.now()}-hypnopompic-${Math.random().toString(36).slice(2, 8)}.json`;
   const filepath = path.join(ipcDir, filename);
@@ -125,7 +121,7 @@ function writeReportIpc(text: string, chatJid: string | null): void {
 }
 
 export async function runHypnopompicReport(
-  agentDir: string,
+  varDir: string,
   input: ReportInput,
   registeredAgents: Record<string, { folder: string; primary?: boolean }>,
 ): Promise<void> {
@@ -138,7 +134,7 @@ export async function runHypnopompicReport(
 
   const out = await runDreamSubagent({
     prompt: buildPrompt(input),
-    cwd: agentDir,
+    cwd: varDir,
     systemPrompt: SYSTEM_PROMPT,
     allowedTools: [],
     timeoutMs: 4 * 60 * 1000,

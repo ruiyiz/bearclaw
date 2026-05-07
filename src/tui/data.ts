@@ -4,7 +4,12 @@ import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
 
-import { STORE_DIR, AGENTS_DIR, DATA_DIR, NANOCLAW_HOME } from '../config.js';
+import {
+  CONFIG_DIR,
+  DATA_DIR,
+  SKILLS_DIR as NANOCLAW_SKILLS_DIR,
+  agentVarDir,
+} from '../config.js';
 import { loadJson } from '../utils/json.js';
 import type {
   EventRecord,
@@ -13,7 +18,7 @@ import type {
   RegisteredAgent,
 } from '../types.js';
 
-const DB_PATH = path.join(STORE_DIR, 'messages.db');
+const DB_PATH = path.join(DATA_DIR, 'messages.db');
 
 function openDb(readonly = true): Database.Database {
   return new Database(DB_PATH, { readonly });
@@ -36,7 +41,9 @@ export function getEventsByType(type: string, limit = 200): EventRecord[] {
   const db = openDb();
   try {
     return db
-      .prepare('SELECT * FROM events WHERE type LIKE ? ORDER BY id DESC LIMIT ?')
+      .prepare(
+        'SELECT * FROM events WHERE type LIKE ? ORDER BY id DESC LIMIT ?',
+      )
       .all(`%${type}%`, limit) as EventRecord[];
   } finally {
     db.close();
@@ -100,8 +107,11 @@ export function getRecentHandlerLogs(limit = 100): HandlerRunLog[] {
 // ─── Agents ─────────────────────────────────────────────────────────────────
 
 export function getRegisteredAgents(): RegisteredAgent[] {
-  const filePath = path.join(DATA_DIR, 'registered_agents.json');
-  const raw = loadJson<Record<string, RegisteredAgent> | RegisteredAgent[]>(filePath, []);
+  const filePath = path.join(CONFIG_DIR, 'registered_agents.json');
+  const raw = loadJson<Record<string, RegisteredAgent> | RegisteredAgent[]>(
+    filePath,
+    [],
+  );
   if (Array.isArray(raw)) return raw;
   // File is an object keyed by JID — convert to array
   return Object.entries(raw).map(([jid, agent]) => ({ ...agent, jid }));
@@ -149,9 +159,9 @@ export function runHealthChecks(): HealthCheck[] {
   }
 
   try {
-    const count = db
-      .prepare('SELECT count(*) as c FROM handlers')
-      .get() as { c: number };
+    const count = db.prepare('SELECT count(*) as c FROM handlers').get() as {
+      c: number;
+    };
     checks.push({
       name: 'Database',
       status: 'ok',
@@ -269,9 +279,12 @@ export interface SkillSource {
   builtin: boolean;
 }
 
-const SKILLS_DIR = path.join(NANOCLAW_HOME, 'skills');
-const SKILL_SOURCES_PATH = path.join(DATA_DIR, 'skill_sources.json');
-const SKILL_INSTALL_META_PATH = path.join(DATA_DIR, 'skill_install_meta.json');
+const SKILLS_DIR = NANOCLAW_SKILLS_DIR;
+const SKILL_SOURCES_PATH = path.join(CONFIG_DIR, 'skill_sources.json');
+const SKILL_INSTALL_META_PATH = path.join(
+  CONFIG_DIR,
+  'skill_install_meta.json',
+);
 const CLAUDE_SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 
 function parseSkillDescription(content: string): string {
@@ -421,7 +434,9 @@ export function syncInstalledSkills(): { synced: string[]; skipped: string[] } {
 }
 
 export function addSkillSource(dir: string): void {
-  const resolved = dir.startsWith('~/') ? path.join(os.homedir(), dir.slice(2)) : dir;
+  const resolved = dir.startsWith('~/')
+    ? path.join(os.homedir(), dir.slice(2))
+    : dir;
   const sources = getSkillSources();
   if (!sources.includes(resolved)) {
     sources.push(resolved);
@@ -460,11 +475,8 @@ export function readSkillContent(skillPath: string): string {
 
 // ─── Heartbeat ──────────────────────────────────────────────────────────────
 
-export function getHeartbeatLogTail(
-  agentFolder: string,
-  lines = 20,
-): string {
-  const logPath = path.join(AGENTS_DIR, agentFolder, 'heartbeat-log.md');
+export function getHeartbeatLogTail(agentFolder: string, lines = 20): string {
+  const logPath = path.join(agentVarDir(agentFolder), 'heartbeat-log.md');
   try {
     const content = fs.readFileSync(logPath, 'utf-8');
     const allLines = content.split('\n');

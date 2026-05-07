@@ -3,11 +3,20 @@ import path from 'path';
 
 import { Api, Bot, InputFile } from 'grammy';
 
-import { ASSISTANT_NAME, AGENTS_DIR, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, TRIGGER_PATTERN, agentVarDir } from '../config.js';
 import { renderMarkdown, TelegramHtmlRenderer } from '../media/format.js';
 import { logger } from '../logger.js';
 import { transcribeAudio } from '../media/transcribe.js';
-import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredAgent } from '../types.js';
+import {
+  Channel,
+  MediaOptions,
+  MediaSource,
+  MediaType,
+  NewMessage,
+  OnChatMetadata,
+  OnInboundMessage,
+  RegisteredAgent,
+} from '../types.js';
 
 interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
@@ -21,7 +30,12 @@ interface TelegramChannelOpts {
 // through sendPhoto so they appear inline.
 function isPng(buffer: Buffer | undefined): boolean {
   if (!buffer || buffer.length < 4) return false;
-  return buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+  return (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  );
 }
 
 export class TelegramChannel implements Channel {
@@ -96,7 +110,10 @@ export class TelegramChannel implements Channel {
 
       const agent = this.opts.registeredAgents()[chatJid];
       if (!agent) {
-        logger.debug({ chatJid, chatName }, 'Message from unregistered Telegram agent');
+        logger.debug(
+          { chatJid, chatName },
+          'Message from unregistered Telegram agent',
+        );
         return;
       }
 
@@ -109,7 +126,10 @@ export class TelegramChannel implements Channel {
         timestamp,
       });
 
-      logger.info({ chatJid, chatName, sender: senderName }, 'Telegram message stored');
+      logger.info(
+        { chatJid, chatName, sender: senderName },
+        'Telegram message stored',
+      );
     });
 
     const storeNonText = (ctx: any, placeholder: string) => {
@@ -119,7 +139,10 @@ export class TelegramChannel implements Channel {
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
-        ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || 'Unknown';
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
       const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
       this.opts.onChatMetadata(chatJid, timestamp);
@@ -140,7 +163,10 @@ export class TelegramChannel implements Channel {
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
-        ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || 'Unknown';
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
       const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
       this.opts.onChatMetadata(chatJid, timestamp);
@@ -156,7 +182,7 @@ export class TelegramChannel implements Channel {
           if (response.ok) {
             const buffer = Buffer.from(await response.arrayBuffer());
             const ext = path.extname(file.file_path) || '.jpg';
-            const mediaDir = path.join(AGENTS_DIR, agent.folder, 'media');
+            const mediaDir = path.join(agentVarDir(agent.folder), 'media');
             fs.mkdirSync(mediaDir, { recursive: true });
             const filename = `photo-${ctx.message.message_id}${ext}`;
             const filePath = path.join(mediaDir, filename);
@@ -185,7 +211,10 @@ export class TelegramChannel implements Channel {
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
-        ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || 'Unknown';
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
       const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
       this.opts.onChatMetadata(chatJid, timestamp);
@@ -193,7 +222,12 @@ export class TelegramChannel implements Channel {
       let content = `[Video]${caption}`;
       try {
         const fileId = ctx.message.video.file_id;
-        const filePath = await this.downloadTelegramFile(fileId, agent.folder, `video-${ctx.message.message_id}`, '.mp4');
+        const filePath = await this.downloadTelegramFile(
+          fileId,
+          agent.folder,
+          `video-${ctx.message.message_id}`,
+          '.mp4',
+        );
         if (filePath) content = `[Video: ${filePath}]${caption}`;
       } catch (err) {
         logger.warn({ err }, 'Failed to download Telegram video');
@@ -216,7 +250,10 @@ export class TelegramChannel implements Channel {
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
-        ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || 'Unknown';
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
 
       this.opts.onChatMetadata(chatJid, timestamp);
 
@@ -225,10 +262,16 @@ export class TelegramChannel implements Channel {
         const fileId = ctx.message.voice.file_id;
         const buffer = await this.downloadTelegramFileBuffer(fileId);
         if (buffer) {
-          const transcription = await transcribeAudio(buffer, `tg-voice-${ctx.message.message_id}`);
+          const transcription = await transcribeAudio(
+            buffer,
+            `tg-voice-${ctx.message.message_id}`,
+          );
           if (transcription) {
             content = `[Voice message] ${transcription}`;
-            logger.info({ length: transcription.length }, 'Telegram voice transcribed');
+            logger.info(
+              { length: transcription.length },
+              'Telegram voice transcribed',
+            );
           } else {
             content = '[Voice message - transcription failed]';
           }
@@ -254,7 +297,10 @@ export class TelegramChannel implements Channel {
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
-        ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || 'Unknown';
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
       const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
       this.opts.onChatMetadata(chatJid, timestamp);
@@ -263,7 +309,12 @@ export class TelegramChannel implements Channel {
       try {
         const fileId = ctx.message.audio.file_id;
         const ext = path.extname(ctx.message.audio.file_name || '') || '.mp3';
-        const filePath = await this.downloadTelegramFile(fileId, agent.folder, `audio-${ctx.message.message_id}`, ext);
+        const filePath = await this.downloadTelegramFile(
+          fileId,
+          agent.folder,
+          `audio-${ctx.message.message_id}`,
+          ext,
+        );
         if (filePath) content = `[Audio: ${filePath}]${caption}`;
       } catch (err) {
         logger.warn({ err }, 'Failed to download Telegram audio');
@@ -286,7 +337,10 @@ export class TelegramChannel implements Channel {
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
-        ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || 'Unknown';
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
       const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
       const name = ctx.message.document?.file_name || 'file';
 
@@ -296,7 +350,12 @@ export class TelegramChannel implements Channel {
       try {
         const fileId = ctx.message.document.file_id;
         const ext = path.extname(name) || '';
-        const filePath = await this.downloadTelegramFile(fileId, agent.folder, `doc-${ctx.message.message_id}`, ext);
+        const filePath = await this.downloadTelegramFile(
+          fileId,
+          agent.folder,
+          `doc-${ctx.message.message_id}`,
+          ext,
+        );
         if (filePath) content = `[Document: ${filePath}]${caption}`;
       } catch (err) {
         logger.warn({ err }, 'Failed to download Telegram document');
@@ -330,7 +389,9 @@ export class TelegramChannel implements Channel {
             'Telegram bot connected',
           );
           console.log(`\n  Telegram bot: @${botInfo.username}`);
-          console.log(`  Send /chatid to the bot to get a chat's registration ID\n`);
+          console.log(
+            `  Send /chatid to the bot to get a chat's registration ID\n`,
+          );
           resolve();
         },
       });
@@ -348,10 +409,16 @@ export class TelegramChannel implements Channel {
       const formatted = renderMarkdown(text, TelegramHtmlRenderer);
       const MAX_LENGTH = 4096;
       if (formatted.length <= MAX_LENGTH) {
-        await this.bot.api.sendMessage(numericId, formatted, { parse_mode: 'HTML' });
+        await this.bot.api.sendMessage(numericId, formatted, {
+          parse_mode: 'HTML',
+        });
       } else {
         for (let i = 0; i < formatted.length; i += MAX_LENGTH) {
-          await this.bot.api.sendMessage(numericId, formatted.slice(i, i + MAX_LENGTH), { parse_mode: 'HTML' });
+          await this.bot.api.sendMessage(
+            numericId,
+            formatted.slice(i, i + MAX_LENGTH),
+            { parse_mode: 'HTML' },
+          );
         }
       }
       logger.info({ jid, length: formatted.length }, 'Telegram message sent');
@@ -366,11 +433,20 @@ export class TelegramChannel implements Channel {
     return msg.message_id;
   }
 
-  async editMessage(jid: string, messageId: number, text: string): Promise<void> {
+  async editMessage(
+    jid: string,
+    messageId: number,
+    text: string,
+  ): Promise<void> {
     try {
       const numericId = jid.replace(/^tg:/, '');
-      const formatted = renderMarkdown(text, TelegramHtmlRenderer).slice(0, 4096);
-      await this.bot!.api.editMessageText(numericId, messageId, formatted, { parse_mode: 'HTML' });
+      const formatted = renderMarkdown(text, TelegramHtmlRenderer).slice(
+        0,
+        4096,
+      );
+      await this.bot!.api.editMessageText(numericId, messageId, formatted, {
+        parse_mode: 'HTML',
+      });
     } catch {
       // Ignore "message is not modified" and other transient edit errors
     }
@@ -385,7 +461,12 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  async sendMedia(jid: string, type: MediaType, source: MediaSource, options?: MediaOptions): Promise<void> {
+  async sendMedia(
+    jid: string,
+    type: MediaType,
+    source: MediaSource,
+    options?: MediaOptions,
+  ): Promise<void> {
     if (!this.bot) {
       logger.warn('Telegram bot not initialized');
       return;
@@ -455,15 +536,33 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  async sendAsAgent(jid: string, text: string, agentName: string, agentFolder: string): Promise<void> {
+  async sendAsAgent(
+    jid: string,
+    text: string,
+    agentName: string,
+    agentFolder: string,
+  ): Promise<void> {
     await sendPoolMessage(jid, text, agentName, agentFolder);
   }
 
-  async sendMediaAsAgent(jid: string, type: MediaType, source: MediaSource, options: MediaOptions, agentName: string, agentFolder: string): Promise<void> {
-    await sendPoolMessage(jid, '', agentName, agentFolder, { type, source, options });
+  async sendMediaAsAgent(
+    jid: string,
+    type: MediaType,
+    source: MediaSource,
+    options: MediaOptions,
+    agentName: string,
+    agentFolder: string,
+  ): Promise<void> {
+    await sendPoolMessage(jid, '', agentName, agentFolder, {
+      type,
+      source,
+      options,
+    });
   }
 
-  private async downloadTelegramFileBuffer(fileId: string): Promise<Buffer | null> {
+  private async downloadTelegramFileBuffer(
+    fileId: string,
+  ): Promise<Buffer | null> {
     if (!this.bot) return null;
     const file = await this.bot.api.getFile(fileId);
     if (!file.file_path) return null;
@@ -473,10 +572,15 @@ export class TelegramChannel implements Channel {
     return Buffer.from(await response.arrayBuffer());
   }
 
-  private async downloadTelegramFile(fileId: string, agentFolder: string, baseName: string, ext: string): Promise<string | null> {
+  private async downloadTelegramFile(
+    fileId: string,
+    agentFolder: string,
+    baseName: string,
+    ext: string,
+  ): Promise<string | null> {
     const buffer = await this.downloadTelegramFileBuffer(fileId);
     if (!buffer) return null;
-    const mediaDir = path.join(AGENTS_DIR, agentFolder, 'media');
+    const mediaDir = path.join(agentVarDir(agentFolder), 'media');
     fs.mkdirSync(mediaDir, { recursive: true });
     const filePath = path.join(mediaDir, `${baseName}${ext}`);
     fs.writeFileSync(filePath, buffer);
@@ -527,7 +631,10 @@ async function sendPoolMessage(
     try {
       await poolApis[idx].setMyName(sender);
       await new Promise((r) => setTimeout(r, 2000));
-      logger.info({ sender, agentFolder, poolIndex: idx }, 'Assigned and renamed pool bot');
+      logger.info(
+        { sender, agentFolder, poolIndex: idx },
+        'Assigned and renamed pool bot',
+      );
     } catch (err) {
       logger.warn({ sender, err }, 'Failed to rename pool bot');
     }
@@ -547,7 +654,10 @@ async function sendPoolMessage(
         case 'image':
           if (isPng(media.source.buffer)) {
             const docInput = media.source.buffer
-              ? new InputFile(media.source.buffer, media.options?.fileName || 'canvas.png')
+              ? new InputFile(
+                  media.source.buffer,
+                  media.options?.fileName || 'canvas.png',
+                )
               : input;
             await api.sendDocument(numericId, docInput, { caption });
           } else {
@@ -564,7 +674,10 @@ async function sendPoolMessage(
           await api.sendAudio(numericId, input, { caption });
           break;
       }
-      logger.info({ chatId, sender, poolIndex: idx, type: media.type }, 'Pool media sent');
+      logger.info(
+        { chatId, sender, poolIndex: idx, type: media.type },
+        'Pool media sent',
+      );
       return;
     }
 
@@ -574,12 +687,16 @@ async function sendPoolMessage(
       await api.sendMessage(numericId, formatted, { parse_mode: 'HTML' });
     } else {
       for (let i = 0; i < formatted.length; i += MAX_LENGTH) {
-        await api.sendMessage(numericId, formatted.slice(i, i + MAX_LENGTH), { parse_mode: 'HTML' });
+        await api.sendMessage(numericId, formatted.slice(i, i + MAX_LENGTH), {
+          parse_mode: 'HTML',
+        });
       }
     }
-    logger.info({ chatId, sender, poolIndex: idx, length: formatted.length }, 'Pool message sent');
+    logger.info(
+      { chatId, sender, poolIndex: idx, length: formatted.length },
+      'Pool message sent',
+    );
   } catch (err) {
     logger.error({ chatId, sender, err }, 'Failed to send pool message');
   }
 }
-

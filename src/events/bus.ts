@@ -3,10 +3,12 @@ import path from 'path';
 
 import {
   EVENT_POLL_INTERVAL,
-  AGENTS_DIR,
   MAIN_AGENT_FOLDER,
   HEARTBEAT_HANDLER_PREFIX,
   DREAM_HANDLER_PREFIX,
+  agentDir as agentPersistentDir,
+  agentVarDir,
+  buildHeartbeatPrompt,
 } from '../config.js';
 import { dispatchDreamHandler } from '../dream/orchestrator.js';
 import {
@@ -36,8 +38,10 @@ async function runHandler(
   deps: EventBusDependencies,
 ): Promise<void> {
   const startTime = Date.now();
-  const agentDir = path.join(AGENTS_DIR, handler.group_folder);
-  fs.mkdirSync(agentDir, { recursive: true });
+  const persistentDir = agentPersistentDir(handler.group_folder);
+  const varDir = agentVarDir(handler.group_folder);
+  fs.mkdirSync(persistentDir, { recursive: true });
+  fs.mkdirSync(varDir, { recursive: true });
 
   // Dream handlers bypass the standard agent runner — they invoke the dream
   // orchestrator, which handles its own session reset and subagent runs.
@@ -117,7 +121,25 @@ async function runHandler(
   const handlers = getAllHandlers();
   writeHandlersSnapshot(handler.group_folder, isMain, handlers);
 
-  // Build event-handler prompt
+  // Build event-handler prompt. Heartbeat handlers get the per-agent
+  // HEARTBEAT.md brief inlined so the agent doesn't need a file path.
+  const isHeartbeat = handler.id.startsWith(HEARTBEAT_HANDLER_PREFIX);
+  let handlerPromptBody: string;
+  if (isHeartbeat) {
+    let briefContent = '';
+    try {
+      const briefPath = path.join(persistentDir, 'HEARTBEAT.md');
+      briefContent = fs.existsSync(briefPath)
+        ? fs.readFileSync(briefPath, 'utf-8')
+        : '';
+    } catch {
+      briefContent = '';
+    }
+    handlerPromptBody = buildHeartbeatPrompt(briefContent);
+  } else {
+    handlerPromptBody = handler.prompt;
+  }
+
   const prompt = `[EVENT TRIGGERED - You are running automatically in response to an internal event.
  Use mcp__nanoclaw__send_message to communicate with the user.
  Use mcp__nanoclaw__emit_event to chain to the next step.]
@@ -127,7 +149,7 @@ ${event.payload}
 </event>
 
 <handler_instructions>
-${handler.prompt}
+${handlerPromptBody}
 </handler_instructions>`;
 
   // Determine session key: use payload's session_key if present, else fall back to group folder

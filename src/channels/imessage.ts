@@ -6,9 +6,9 @@ import { promisify } from 'util';
 import {
   ASSISTANT_NAME,
   DISPLAY_NAME,
-  AGENTS_DIR,
-  DATA_DIR,
+  LOG_DIR,
   TRIGGER_PATTERN,
+  agentVarDir,
 } from '../config.js';
 import { renderMarkdown, PlainTextRenderer } from '../media/format.js';
 import { logger } from '../logger.js';
@@ -26,8 +26,8 @@ import {
 const execFileAsync = promisify(execFile);
 
 // Path to the file that `imsg watch --json --attachments` is piped into.
-// The user runs: imsg watch --json --attachments >> ~/.nanoclaw/data/imsg-watch.jsonl
-const IMSG_WATCH_FILE = path.join(DATA_DIR, 'imsg-watch.jsonl');
+// The user runs: imsg watch --json --attachments >> ~/.nanoclaw/var/log/imsg-watch.jsonl
+const IMSG_WATCH_FILE = path.join(LOG_DIR, 'imsg-watch.jsonl');
 
 interface IMessageChannelOpts {
   onMessage: OnInboundMessage;
@@ -196,7 +196,7 @@ export class IMessageChannel implements Channel {
         // macOS screenshot filenames) to ASCII so the agent can reproduce the
         // path verbatim when calling tools like image_generate.
         const safeName = originalName.replace(/\s+/gu, ' ');
-        const mediaDir = path.join(AGENTS_DIR, agent.folder, 'media');
+        const mediaDir = path.join(agentVarDir(agent.folder), 'media');
         fs.mkdirSync(mediaDir, { recursive: true });
         const destPath = path.join(mediaDir, `imsg-${event.id}-${safeName}`);
         fs.copyFileSync(expanded, destPath);

@@ -23,11 +23,28 @@ export const EVENT_POLL_INTERVAL = 5000;
 
 export const NANOCLAW_HOME = path.resolve(os.homedir(), '.nanoclaw');
 
-export const STORE_DIR = path.resolve(NANOCLAW_HOME, 'store');
+// Persistent (tracked)
+export const CONFIG_DIR = path.resolve(NANOCLAW_HOME, 'config');
 export const CONTEXT_DIR = path.resolve(NANOCLAW_HOME, 'context');
 export const AGENTS_DIR = path.resolve(NANOCLAW_HOME, 'agents');
-export const DATA_DIR = path.resolve(NANOCLAW_HOME, 'data');
+export const SKILLS_DIR = path.resolve(NANOCLAW_HOME, 'skills');
+
+// Runtime (gitignored)
+export const VAR_DIR = path.resolve(NANOCLAW_HOME, 'var');
+export const CACHE_DIR = path.resolve(VAR_DIR, 'cache');
+export const DATA_DIR = VAR_DIR; // top-level state files (sessions.json etc.) live directly under var/
+export const RUN_DIR = path.resolve(VAR_DIR, 'run');
+export const LOG_DIR = path.resolve(VAR_DIR, 'log');
+export const TMP_DIR = path.resolve(VAR_DIR, 'tmp');
+export const AUTH_DIR = path.resolve(VAR_DIR, 'auth');
+export const AGENTS_VAR_DIR = path.resolve(VAR_DIR, 'agents');
+
 export const MAIN_AGENT_FOLDER = 'main';
+
+export const agentDir = (folder: string): string =>
+  path.join(AGENTS_DIR, folder);
+export const agentVarDir = (folder: string): string =>
+  path.join(AGENTS_VAR_DIR, folder);
 
 export const AGENT_TIMEOUT = parseInt(
   process.env.AGENT_TIMEOUT || '300000',
@@ -99,10 +116,9 @@ export const EMBEDDING_DIMS = parseInt(
 export const GOOGLE_API_KEY =
   process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || '';
 
-export const HEARTBEAT_PROMPT = `[HEARTBEAT — Proactive check-in. You are waking up on your own to look around.]
+const HEARTBEAT_BASE_PROMPT = `[HEARTBEAT — Proactive check-in. You are waking up on your own to look around.]
 
-Read HEARTBEAT.md in your working directory. Follow its instructions exactly.
-Do not infer tasks from previous conversations — only act on what HEARTBEAT.md says.
+Follow the instructions in <heartbeat_brief> exactly. Do not infer tasks from previous conversations — only act on what the brief says.
 
 MEMORY: Read heartbeat-log.md in your working directory (create it if missing). This is your persistent memory across runs. It tracks what you have already suggested, asked about, or acted on. Use it to avoid repeating yourself:
 - Before messaging the user, check if you already suggested or asked about the same thing recently.
@@ -111,6 +127,17 @@ MEMORY: Read heartbeat-log.md in your working directory (create it if missing). 
 
 If nothing needs attention, reply with exactly: HEARTBEAT_OK
 If something does need attention, take action (send messages, run commands, etc.) and describe what you did. Do NOT include HEARTBEAT_OK in your response if you took action.`;
+
+// Static handler prompt stored in DB. Brief content is appended at run time.
+export const HEARTBEAT_PROMPT = HEARTBEAT_BASE_PROMPT;
+
+export function buildHeartbeatPrompt(brief: string): string {
+  const trimmed = brief.trim();
+  const briefBlock = trimmed
+    ? `<heartbeat_brief>\n${trimmed}\n</heartbeat_brief>`
+    : `<heartbeat_brief>\n(empty — no brief configured for this agent)\n</heartbeat_brief>`;
+  return `${HEARTBEAT_BASE_PROMPT}\n\n${briefBlock}`;
+}
 
 // Timezone — uses TZ env var or system default
 export const TIMEZONE =

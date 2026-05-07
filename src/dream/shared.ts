@@ -13,13 +13,13 @@ import fs from 'fs';
 import path from 'path';
 
 import {
-  AGENTS_DIR,
   CONTEXT_DIR,
   DREAM_ENGRAM_LINE_CAP,
   DREAM_MIN_DIVERSITY,
   DREAM_MIN_SCORE,
   DREAM_MIN_SUPPORT,
   DREAM_RECENCY_HALFLIFE,
+  agentDir as agentPersistentDir,
 } from '../config.js';
 import { logger } from '../logger.js';
 
@@ -186,7 +186,7 @@ function rehydrateShared(c: SharedCandidate): boolean {
   const tokens = tokenize(c.representativeText);
   if (tokens.size === 0) return false;
   for (const { agent } of c.rawLines) {
-    const engramPath = path.join(AGENTS_DIR, agent, 'ENGRAM.md');
+    const engramPath = path.join(agentPersistentDir(agent), 'ENGRAM.md');
     if (!fs.existsSync(engramPath)) continue;
     const content = fs.readFileSync(engramPath, 'utf-8');
     const fileTokens = tokenize(content);
@@ -252,7 +252,7 @@ export function runSharedPromotion(
 
   const all: EngramEntry[] = [];
   for (const folder of registeredAgentFolders) {
-    const engramPath = path.join(AGENTS_DIR, folder, 'ENGRAM.md');
+    const engramPath = path.join(agentPersistentDir(folder), 'ENGRAM.md');
     if (!fs.existsSync(engramPath)) continue;
     try {
       const content = fs.readFileSync(engramPath, 'utf-8');

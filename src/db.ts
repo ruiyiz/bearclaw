@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-import { EMBEDDING_DIMS, STORE_DIR } from './config.js';
+import { DATA_DIR, EMBEDDING_DIMS } from './config.js';
 import { logger } from './logger.js';
 import { EventRecord, Handler, HandlerRunLog, NewMessage } from './types.js';
 
@@ -20,7 +20,7 @@ export function isVectorAvailable(): boolean {
 }
 
 export function initDatabase(): void {
-  const dbPath = path.join(STORE_DIR, 'messages.db');
+  const dbPath = path.join(DATA_DIR, 'messages.db');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   db = new Database(dbPath);
@@ -783,10 +783,12 @@ export function setChunkEmbedding(
   );
 }
 
-export function indexMemoryFiles(agentFolder: string, agentDir: string): void {
+export function indexMemoryFiles(agentFolder: string, varDir: string): void {
+  // varDir is the agent's runtime root (var/agents/{folder}); memory/ and
+  // conversations/ live under it.
   const dirs = [
-    { dir: path.join(agentDir, 'memory'), prefix: 'memory' },
-    { dir: path.join(agentDir, 'conversations'), prefix: 'conversations' },
+    { dir: path.join(varDir, 'memory'), prefix: 'memory' },
+    { dir: path.join(varDir, 'conversations'), prefix: 'conversations' },
   ];
 
   const currentFiles = new Map<string, number>();
@@ -820,7 +822,7 @@ export function indexMemoryFiles(agentFolder: string, agentDir: string): void {
       if (existingMtime !== undefined && Math.abs(existingMtime - mtime) < 1000)
         continue;
 
-      const fullPath = path.join(agentDir, relPath);
+      const fullPath = path.join(varDir, relPath);
       const content = fs.readFileSync(fullPath, 'utf-8');
       if (!content.trim()) continue;
 

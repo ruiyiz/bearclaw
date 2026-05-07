@@ -8,11 +8,12 @@ import { query, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 
 import {
   AGENT_TIMEOUT,
-  AGENTS_DIR,
+  CONFIG_DIR,
   CONTEXT_DIR,
-  DATA_DIR,
-  NANOCLAW_HOME,
+  RUN_DIR,
   TIMEZONE,
+  agentDir as agentPersistentDir,
+  agentVarDir,
   localDate,
   localTime,
 } from '../config.js';
@@ -53,7 +54,10 @@ interface SessionsIndex {
   entries: SessionEntry[];
 }
 
-export function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
+export function getSessionSummary(
+  sessionId: string,
+  transcriptPath: string,
+): string | null {
   const projectDir = path.dirname(transcriptPath);
   const indexPath = path.join(projectDir, 'sessions-index.json');
 
@@ -62,8 +66,10 @@ export function getSessionSummary(sessionId: string, transcriptPath: string): st
   }
 
   try {
-    const index: SessionsIndex = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
-    const entry = index.entries.find(e => e.sessionId === sessionId);
+    const index: SessionsIndex = JSON.parse(
+      fs.readFileSync(indexPath, 'utf-8'),
+    );
+    const entry = index.entries.find((e) => e.sessionId === sessionId);
     if (entry?.summary) {
       return entry.summary;
     }
@@ -74,11 +80,13 @@ export function getSessionSummary(sessionId: string, transcriptPath: string): st
   return null;
 }
 
-function createSessionStartHook(agentDir: string): HookCallback {
+function createSessionStartHook(varDir: string): HookCallback {
   return async (_input, _toolUseId, _context) => {
     const today = new Date().toISOString().split('T')[0];
-    const yesterday = new Date(Date.now() - 86_400_000).toISOString().split('T')[0];
-    const memoryDir = path.join(agentDir, 'memory');
+    const yesterday = new Date(Date.now() - 86_400_000)
+      .toISOString()
+      .split('T')[0];
+    const memoryDir = path.join(varDir, 'memory');
 
     const parts: string[] = [];
     for (const date of [yesterday, today]) {
@@ -131,9 +139,12 @@ export function parseTranscript(content: string): ParsedMessage[] {
     try {
       const entry = JSON.parse(line);
       if (entry.type === 'user' && entry.message?.content) {
-        const text = typeof entry.message.content === 'string'
-          ? entry.message.content
-          : entry.message.content.map((c: { text?: string }) => c.text || '').join('');
+        const text =
+          typeof entry.message.content === 'string'
+            ? entry.message.content
+            : entry.message.content
+                .map((c: { text?: string }) => c.text || '')
+                .join('');
         if (text) messages.push({ role: 'user', content: text });
       } else if (entry.type === 'assistant' && entry.message?.content) {
         const textParts = entry.message.content
@@ -142,23 +153,26 @@ export function parseTranscript(content: string): ParsedMessage[] {
         const text = textParts.join('');
         if (text) messages.push({ role: 'assistant', content: text });
       }
-    } catch {
-    }
+    } catch {}
   }
 
   return messages;
 }
 
-export function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | null): string {
+export function formatTranscriptMarkdown(
+  messages: ParsedMessage[],
+  title?: string | null,
+): string {
   const now = new Date();
-  const formatDateTime = (d: Date) => d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZone: TIMEZONE,
-  });
+  const formatDateTime = (d: Date) =>
+    d.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: TIMEZONE,
+    });
 
   const lines: string[] = [];
   lines.push(`# ${title || 'Conversation'}`);
@@ -170,9 +184,10 @@ export function formatTranscriptMarkdown(messages: ParsedMessage[], title?: stri
 
   for (const msg of messages) {
     const sender = msg.role === 'user' ? 'User' : 'Andy';
-    const content = msg.content.length > 2000
-      ? msg.content.slice(0, 2000) + '...'
-      : msg.content;
+    const content =
+      msg.content.length > 2000
+        ? msg.content.slice(0, 2000) + '...'
+        : msg.content;
     lines.push(`**${sender}**: ${content}`);
     lines.push('');
   }
@@ -191,7 +206,10 @@ function buildContextPrompt(agentFolder: string): string {
     }
   }
 
-  const identityPath = path.join(AGENTS_DIR, agentFolder, 'IDENTITY.md');
+  const identityPath = path.join(
+    agentPersistentDir(agentFolder),
+    'IDENTITY.md',
+  );
   if (fs.existsSync(identityPath)) {
     const content = fs.readFileSync(identityPath, 'utf-8').trim();
     if (content) parts.push(content);
@@ -206,14 +224,16 @@ export async function runContainerAgent(
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
-  const agentDir = path.join(AGENTS_DIR, group.folder);
-  fs.mkdirSync(agentDir, { recursive: true });
+  const persistentDir = agentPersistentDir(group.folder);
+  const varDir = agentVarDir(group.folder);
+  fs.mkdirSync(persistentDir, { recursive: true });
+  fs.mkdirSync(varDir, { recursive: true });
 
-  const logsDir = path.join(agentDir, 'logs');
+  const logsDir = path.join(varDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
   // Set up per-agent IPC namespace
-  const agentIpcDir = path.join(DATA_DIR, 'ipc', group.folder);
+  const agentIpcDir = path.join(RUN_DIR, 'ipc', group.folder);
   fs.mkdirSync(path.join(agentIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(agentIpcDir, 'tasks'), { recursive: true });
 
@@ -236,10 +256,10 @@ export async function runContainerAgent(
     },
   });
 
-  // Load user-configured MCP servers from ~/.nanoclaw/mcp.json
+  // Load user-configured MCP servers from ~/.nanoclaw/config/mcp.json
   let userMcpServers: Record<string, unknown> = {};
   try {
-    const mcpConfigPath = path.join(NANOCLAW_HOME, 'mcp.json');
+    const mcpConfigPath = path.join(CONFIG_DIR, 'mcp.json');
     const raw = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
     userMcpServers = raw.mcpServers || {};
   } catch {
@@ -257,7 +277,10 @@ export async function runContainerAgent(
   let timedOut = false;
   const timeoutHandle = setTimeout(() => {
     timedOut = true;
-    logger.error({ group: group.name }, `Agent timeout after ${timeout}ms, aborting`);
+    logger.error(
+      { group: group.name },
+      `Agent timeout after ${timeout}ms, aborting`,
+    );
     abortController.abort();
   }, timeout);
 
@@ -265,14 +288,16 @@ export async function runContainerAgent(
     logger.debug({ group: group.name }, 'Starting agent...');
 
     const contextPrompt = buildContextPrompt(input.agentFolder);
-    const fullSystemPrompt = [contextPrompt, SYSTEM_PROMPT].filter(Boolean).join('\n\n---\n\n');
+    const fullSystemPrompt = [contextPrompt, SYSTEM_PROMPT]
+      .filter(Boolean)
+      .join('\n\n---\n\n');
 
     let streamText = '';
     for await (const message of query({
       prompt,
       options: {
         abortController,
-        cwd: agentDir,
+        cwd: varDir,
         resume: input.sessionId,
         model: input.model || 'claude-opus-4-7',
         systemPrompt: {
@@ -282,10 +307,15 @@ export async function runContainerAgent(
         },
         allowedTools: [
           'Bash',
-          'Read', 'Write', 'Edit', 'Glob', 'Grep',
-          'WebSearch', 'WebFetch',
+          'Read',
+          'Write',
+          'Edit',
+          'Glob',
+          'Grep',
+          'WebSearch',
+          'WebFetch',
           'Skill',
-          'mcp__*'
+          'mcp__*',
         ],
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
@@ -296,20 +326,26 @@ export async function runContainerAgent(
           ...userMcpServers,
         },
         hooks: {
-          SessionStart: [{ hooks: [createSessionStartHook(agentDir)] }],
-        }
-      }
+          SessionStart: [{ hooks: [createSessionStartHook(varDir)] }],
+        },
+      },
     })) {
       if (message.type === 'system' && message.subtype === 'init') {
         newSessionId = message.session_id;
-        logger.debug({ sessionId: newSessionId, group: group.name }, 'Session initialized');
+        logger.debug(
+          { sessionId: newSessionId, group: group.name },
+          'Session initialized',
+        );
       }
 
       if (input.onText && message.type === 'stream_event') {
         const event = (message as any).event;
         if (event?.type === 'message_start') {
           streamText = '';
-        } else if (event?.type === 'content_block_delta' && event?.delta?.type === 'text_delta') {
+        } else if (
+          event?.type === 'content_block_delta' &&
+          event?.delta?.type === 'text_delta'
+        ) {
           streamText += event.delta.text;
           if (streamText.trim()) input.onText(streamText);
         }
@@ -336,7 +372,8 @@ export async function runContainerAgent(
     // Write log file
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const logFile = path.join(logsDir, `agent-${timestamp}.log`);
-    const isVerbose = process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
+    const isVerbose =
+      process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
 
     const logLines = [
       `=== Agent Run Log ===`,
@@ -375,7 +412,6 @@ export async function runContainerAgent(
       newSessionId,
       sentMediaViaIpc,
     };
-
   } catch (err) {
     clearTimeout(timeoutHandle);
 
@@ -390,15 +426,18 @@ export async function runContainerAgent(
     // Write error log
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const logFile = path.join(logsDir, `agent-${timestamp}.log`);
-    fs.writeFileSync(logFile, [
-      `=== Agent Run Log ===`,
-      `Timestamp: ${new Date().toISOString()}`,
-      `Group: ${group.name}`,
-      `IsMain: ${input.isMain}`,
-      `Duration: ${duration}ms`,
-      `Status: error`,
-      `Error: ${errorMessage}`,
-    ].join('\n'));
+    fs.writeFileSync(
+      logFile,
+      [
+        `=== Agent Run Log ===`,
+        `Timestamp: ${new Date().toISOString()}`,
+        `Group: ${group.name}`,
+        `IsMain: ${input.isMain}`,
+        `Duration: ${duration}ms`,
+        `Status: error`,
+        `Error: ${errorMessage}`,
+      ].join('\n'),
+    );
 
     // Emit agent_complete event (error path)
     const triggerType = input.isEventHandler ? 'event_handler' : 'message';
@@ -432,7 +471,7 @@ export function writeHandlersSnapshot(
   isMain: boolean,
   handlers: Handler[],
 ): void {
-  const agentIpcDir = path.join(DATA_DIR, 'ipc', agentFolder);
+  const agentIpcDir = path.join(RUN_DIR, 'ipc', agentFolder);
   fs.mkdirSync(agentIpcDir, { recursive: true });
 
   const filteredHandlers = isMain
@@ -469,7 +508,7 @@ export function writeAgentsSnapshot(
   groups: AvailableGroup[],
   registeredJids: Set<string>,
 ): void {
-  const agentIpcDir = path.join(DATA_DIR, 'ipc', agentFolder);
+  const agentIpcDir = path.join(RUN_DIR, 'ipc', agentFolder);
   fs.mkdirSync(agentIpcDir, { recursive: true });
 
   const visibleGroups = isMain ? groups : [];

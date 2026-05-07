@@ -10,11 +10,12 @@ import fs from 'fs';
 import path from 'path';
 
 import {
-  AGENTS_DIR,
   DATA_DIR,
   DREAM_LOOKBACK_DAYS,
   DREAM_MIN_NEW_ENTRIES,
   MAIN_AGENT_FOLDER,
+  agentDir as agentPersistentDir,
+  agentVarDir,
 } from '../config.js';
 import {
   finishDreamRun,
@@ -39,8 +40,8 @@ interface DreamOrchestratorDeps {
   saveSessions: () => void;
 }
 
-function countNewDailyEntries(agentDir: string, lookbackDays: number): number {
-  const memDir = path.join(agentDir, 'memory');
+function countNewDailyEntries(varDir: string, lookbackDays: number): number {
+  const memDir = path.join(varDir, 'memory');
   if (!fs.existsSync(memDir)) return 0;
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - lookbackDays);
@@ -69,8 +70,10 @@ export async function runDreamCycle(
   agentFolder: string,
   deps: DreamOrchestratorDeps,
 ): Promise<void> {
-  const agentDir = path.join(AGENTS_DIR, agentFolder);
-  fs.mkdirSync(agentDir, { recursive: true });
+  const persistentDir = agentPersistentDir(agentFolder);
+  const varDir = agentVarDir(agentFolder);
+  fs.mkdirSync(persistentDir, { recursive: true });
+  fs.mkdirSync(varDir, { recursive: true });
 
   // Step 0: Reset (always)
   const sessions = deps.getSessions();
@@ -82,7 +85,7 @@ export async function runDreamCycle(
   }
 
   // Skip phases if too little new content
-  const newEntries = countNewDailyEntries(agentDir, DREAM_LOOKBACK_DAYS);
+  const newEntries = countNewDailyEntries(varDir, DREAM_LOOKBACK_DAYS);
   if (newEntries < DREAM_MIN_NEW_ENTRIES) {
     logger.info(
       { agentFolder, newEntries, threshold: DREAM_MIN_NEW_ENTRIES },
@@ -98,16 +101,16 @@ export async function runDreamCycle(
     await embedPendingChunks();
 
     // Light
-    const lightCount = runLightPhase(agentFolder, agentDir);
+    const lightCount = runLightPhase(agentFolder, varDir);
 
     // REM
-    const remCount = await runRemPhase(agentFolder, agentDir);
+    const remCount = await runRemPhase(agentFolder, varDir);
 
     // Deep
-    const promoted = runDeepPhase(agentFolder, agentDir);
+    const promoted = runDeepPhase(agentFolder);
 
     // Narrate
-    const dreamPath = await runNarratePhase(agentFolder, agentDir, promoted);
+    const dreamPath = await runNarratePhase(agentFolder, varDir, promoted);
 
     // Main-only: shared promotion + Hypnopompic Report
     let sharedPromoted = 0;
@@ -130,7 +133,7 @@ export async function runDreamCycle(
       // the diary is the more authoritative signal.
       for (const folder of folders) {
         if (folder === MAIN_AGENT_FOLDER) continue;
-        const otherEngram = path.join(AGENTS_DIR, folder, 'ENGRAM.md');
+        const otherEngram = path.join(agentPersistentDir(folder), 'ENGRAM.md');
         if (!fs.existsSync(otherEngram)) {
           perAgent.push({ agentFolder: folder, promoted: 0 });
           continue;
@@ -145,14 +148,14 @@ export async function runDreamCycle(
       }
 
       await runHypnopompicReport(
-        agentDir,
+        varDir,
         {
           perAgent,
           shared: sharedResults,
           mainDreamPath:
             dreamPath ??
             path.join(
-              agentDir,
+              varDir,
               'dreams',
               `${new Date().toISOString().slice(0, 10)}.md`,
             ),

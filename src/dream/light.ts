@@ -120,15 +120,18 @@ function cutoffDate(): string {
 /**
  * Run the Light phase for one agent.
  * Returns the number of distinct candidates seen this run.
+ *
+ * `varDir` is the agent's runtime directory (var/agents/{folder}) where
+ * memory/ and conversations/ live.
  */
-export function runLightPhase(agentFolder: string, agentDir: string): number {
+export function runLightPhase(agentFolder: string, varDir: string): number {
   const cutoff = cutoffDate();
   const now = Math.floor(Date.now() / 1000);
 
   const sources: Array<{ relPath: string; content: string }> = [];
 
   for (const sub of ['memory', 'conversations']) {
-    const dir = path.join(agentDir, sub);
+    const dir = path.join(varDir, sub);
     if (!fs.existsSync(dir)) continue;
     for (const f of fs.readdirSync(dir).sort()) {
       if (!f.endsWith('.md')) continue;

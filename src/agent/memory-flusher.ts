@@ -2,7 +2,12 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { AGENTS_DIR, MEMORY_FLUSH_INTERVAL, localDate, localTime } from '../config.js';
+import {
+  MEMORY_FLUSH_INTERVAL,
+  agentVarDir,
+  localDate,
+  localTime,
+} from '../config.js';
 import { logger } from '../logger.js';
 import {
   formatTranscriptMarkdown,
@@ -19,13 +24,24 @@ interface MemoryFlusherDeps {
 // sessionId -> number of lines already flushed
 const cursors = new Map<string, number>();
 
-function getTranscriptPath(agentDir: string, sessionId: string): string {
-  const encodedCwd = agentDir.replace(/[/.]/g, '-');
-  return path.join(os.homedir(), '.claude', 'projects', encodedCwd, `${sessionId}.jsonl`);
+function getTranscriptPath(cwd: string, sessionId: string): string {
+  const encodedCwd = cwd.replace(/[/.]/g, '-');
+  return path.join(
+    os.homedir(),
+    '.claude',
+    'projects',
+    encodedCwd,
+    `${sessionId}.jsonl`,
+  );
 }
 
-function flushSession(folder: string, sessionId: string, agentDir: string, isFinal: boolean): void {
-  const transcriptPath = getTranscriptPath(agentDir, sessionId);
+function flushSession(
+  folder: string,
+  sessionId: string,
+  varDir: string,
+  isFinal: boolean,
+): void {
+  const transcriptPath = getTranscriptPath(varDir, sessionId);
 
   if (!fs.existsSync(transcriptPath)) {
     if (isFinal) cursors.delete(sessionId);
@@ -42,15 +58,18 @@ function flushSession(folder: string, sessionId: string, agentDir: string, isFin
   const newMessages = parseTranscript(newLines.join('\n'));
   const date = localDate();
   const time = localTime();
-  const memoryDir = path.join(agentDir, 'memory');
+  const memoryDir = path.join(varDir, 'memory');
   fs.mkdirSync(memoryDir, { recursive: true });
   const memoryFile = path.join(memoryDir, `${date}.md`);
 
   if (newMessages.length > 0) {
-    const heading = isFinal ? `## Session ended (${time})` : `## Session update (${time})`;
+    const heading = isFinal
+      ? `## Session ended (${time})`
+      : `## Session update (${time})`;
     const contextLines = newMessages.map((m) => {
       const prefix = m.role === 'user' ? 'User' : 'Assistant';
-      const text = m.content.length > 300 ? m.content.slice(0, 300) + '...' : m.content;
+      const text =
+        m.content.length > 300 ? m.content.slice(0, 300) + '...' : m.content;
       return `  - ${prefix}: ${text}`;
     });
     const entry = ['', heading, '', ...contextLines, ''].join('\n');
@@ -63,11 +82,14 @@ function flushSession(folder: string, sessionId: string, agentDir: string, isFin
     if (allMessages.length > 0) {
       const summary = getSessionSummary(sessionId, transcriptPath);
       const name = summary ? sanitizeFilename(summary) : generateFallbackName();
-      const conversationsDir = path.join(agentDir, 'conversations');
+      const conversationsDir = path.join(varDir, 'conversations');
       fs.mkdirSync(conversationsDir, { recursive: true });
       const filename = `${date}-${name}.md`;
       const filePath = path.join(conversationsDir, filename);
-      fs.writeFileSync(filePath, formatTranscriptMarkdown(allMessages, summary));
+      fs.writeFileSync(
+        filePath,
+        formatTranscriptMarkdown(allMessages, summary),
+      );
       logger.debug({ filePath }, 'Archived conversation');
     }
     cursors.delete(sessionId);
@@ -78,20 +100,29 @@ function flushSession(folder: string, sessionId: string, agentDir: string, isFin
 
 export function initFlushCursors(sessions: Record<string, string>): void {
   for (const [folder, sessionId] of Object.entries(sessions)) {
-    const agentDir = path.join(AGENTS_DIR, folder);
-    const transcriptPath = getTranscriptPath(agentDir, sessionId);
+    const varDir = agentVarDir(folder);
+    const transcriptPath = getTranscriptPath(varDir, sessionId);
     if (fs.existsSync(transcriptPath)) {
-      const lines = fs.readFileSync(transcriptPath, 'utf-8').split('\n').filter((l) => l.trim());
+      const lines = fs
+        .readFileSync(transcriptPath, 'utf-8')
+        .split('\n')
+        .filter((l) => l.trim());
       cursors.set(sessionId, lines.length);
-      logger.debug({ folder, sessionId, lineCount: lines.length }, 'Flush cursor initialized');
+      logger.debug(
+        { folder, sessionId, lineCount: lines.length },
+        'Flush cursor initialized',
+      );
     }
   }
 }
 
-export function flushBeforeSessionClear(folder: string, sessionId: string): void {
-  const agentDir = path.join(AGENTS_DIR, folder);
+export function flushBeforeSessionClear(
+  folder: string,
+  sessionId: string,
+): void {
+  const varDir = agentVarDir(folder);
   try {
-    flushSession(folder, sessionId, agentDir, true);
+    flushSession(folder, sessionId, varDir, true);
   } catch (err) {
     logger.error({ err, folder }, 'Memory flush error on session clear');
   }
@@ -101,9 +132,9 @@ export function startMemoryFlusher(deps: MemoryFlusherDeps): void {
   const flush = () => {
     const sessions = deps.getSessions();
     for (const [folder, sessionId] of Object.entries(sessions)) {
-      const agentDir = path.join(AGENTS_DIR, folder);
+      const varDir = agentVarDir(folder);
       try {
-        flushSession(folder, sessionId, agentDir, false);
+        flushSession(folder, sessionId, varDir, false);
       } catch (err) {
         logger.error({ err, folder }, 'Memory flush error');
       }

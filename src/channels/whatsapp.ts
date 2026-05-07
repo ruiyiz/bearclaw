@@ -10,12 +10,26 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 
-import { DISPLAY_NAME, AGENTS_DIR, STORE_DIR } from '../config.js';
+import { AUTH_DIR, DISPLAY_NAME, agentVarDir } from '../config.js';
 import { renderMarkdown, WhatsAppRenderer } from '../media/format.js';
-import { getLastGroupSync, setLastGroupSync, storeChatMetadata, updateChatName } from '../db.js';
+import {
+  getLastGroupSync,
+  setLastGroupSync,
+  storeChatMetadata,
+  updateChatName,
+} from '../db.js';
 import { logger } from '../logger.js';
 import { transcribeAudio } from '../media/transcribe.js';
-import { Channel, MediaOptions, MediaSource, MediaType, NewMessage, OnChatMetadata, OnInboundMessage, RegisteredAgent } from '../types.js';
+import {
+  Channel,
+  MediaOptions,
+  MediaSource,
+  MediaType,
+  NewMessage,
+  OnChatMetadata,
+  OnInboundMessage,
+  RegisteredAgent,
+} from '../types.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -38,7 +52,7 @@ export class WhatsAppChannel implements Channel {
   }
 
   async connect(): Promise<void> {
-    const authDir = path.join(STORE_DIR, 'auth');
+    const authDir = path.join(AUTH_DIR, 'whatsapp');
     fs.mkdirSync(authDir, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
@@ -67,7 +81,9 @@ export class WhatsAppChannel implements Channel {
           `osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`,
         );
         this.sock = null;
-        logger.warn('WhatsApp channel disabled (auth required). Other channels remain active.');
+        logger.warn(
+          'WhatsApp channel disabled (auth required). Other channels remain active.',
+        );
       }
 
       if (connection === 'close') {
@@ -80,7 +96,9 @@ export class WhatsAppChannel implements Channel {
           this.sock = null;
           this.connect();
         } else {
-          logger.warn('WhatsApp logged out. Run /setup to re-authenticate. Other channels remain active.');
+          logger.warn(
+            'WhatsApp logged out. Run /setup to re-authenticate. Other channels remain active.',
+          );
           this.sock = null;
         }
       } else if (connection === 'open') {
@@ -151,7 +169,12 @@ export class WhatsAppChannel implements Channel {
     }
   }
 
-  async sendMedia(jid: string, type: MediaType, source: MediaSource, options?: MediaOptions): Promise<void> {
+  async sendMedia(
+    jid: string,
+    type: MediaType,
+    source: MediaSource,
+    options?: MediaOptions,
+  ): Promise<void> {
     if (!this.sock) return;
     try {
       const media = source.buffer || (source.url ? { url: source.url } : null);
@@ -169,7 +192,12 @@ export class WhatsAppChannel implements Channel {
         case 'document': {
           const mimetype = options?.mimetype || 'application/octet-stream';
           const fileName = options?.fileName || 'file';
-          await this.sock.sendMessage(jid, { document: media, mimetype, fileName, caption });
+          await this.sock.sendMessage(jid, {
+            document: media,
+            mimetype,
+            fileName,
+            caption,
+          });
           break;
         }
         case 'video':
@@ -190,7 +218,11 @@ export class WhatsAppChannel implements Channel {
   }
 
   ownsJid(jid: string): boolean {
-    return jid.endsWith('@g.us') || jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid');
+    return (
+      jid.endsWith('@g.us') ||
+      jid.endsWith('@s.whatsapp.net') ||
+      jid.endsWith('@lid')
+    );
   }
 
   isConnected(): boolean {
@@ -207,7 +239,10 @@ export class WhatsAppChannel implements Channel {
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (!this.sock) return;
     try {
-      await this.sock.sendPresenceUpdate(isTyping ? 'composing' : 'paused', jid);
+      await this.sock.sendPresenceUpdate(
+        isTyping ? 'composing' : 'paused',
+        jid,
+      );
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to update typing status');
     }
@@ -281,15 +316,34 @@ export class WhatsAppChannel implements Channel {
     let content = '';
 
     if (msg.message?.conversation || msg.message?.extendedTextMessage) {
-      content = msg.message.conversation || msg.message.extendedTextMessage.text || '';
+      content =
+        msg.message.conversation || msg.message.extendedTextMessage.text || '';
     } else if (msg.message?.imageMessage) {
-      const caption = msg.message.imageMessage.caption ? ` ${msg.message.imageMessage.caption}` : '';
-      const filePath = await this.downloadMedia(msg, chatJid, `photo-${msgId}`, '.jpg');
-      content = filePath ? `[Photo: ${filePath}]${caption}` : `[Photo]${caption}`;
+      const caption = msg.message.imageMessage.caption
+        ? ` ${msg.message.imageMessage.caption}`
+        : '';
+      const filePath = await this.downloadMedia(
+        msg,
+        chatJid,
+        `photo-${msgId}`,
+        '.jpg',
+      );
+      content = filePath
+        ? `[Photo: ${filePath}]${caption}`
+        : `[Photo]${caption}`;
     } else if (msg.message?.videoMessage) {
-      const caption = msg.message.videoMessage.caption ? ` ${msg.message.videoMessage.caption}` : '';
-      const filePath = await this.downloadMedia(msg, chatJid, `video-${msgId}`, '.mp4');
-      content = filePath ? `[Video: ${filePath}]${caption}` : `[Video]${caption}`;
+      const caption = msg.message.videoMessage.caption
+        ? ` ${msg.message.videoMessage.caption}`
+        : '';
+      const filePath = await this.downloadMedia(
+        msg,
+        chatJid,
+        `video-${msgId}`,
+        '.mp4',
+      );
+      content = filePath
+        ? `[Video: ${filePath}]${caption}`
+        : `[Video]${caption}`;
     } else if (msg.message?.audioMessage?.ptt) {
       // Voice message (Push-to-Talk)
       try {
@@ -298,7 +352,10 @@ export class WhatsAppChannel implements Channel {
           const transcription = await transcribeAudio(buffer as Buffer, msgId);
           if (transcription) {
             content = `[Voice message] ${transcription}`;
-            logger.info({ length: transcription.length }, 'Voice message transcribed');
+            logger.info(
+              { length: transcription.length },
+              'Voice message transcribed',
+            );
           } else {
             content = '[Voice message - transcription failed]';
           }
@@ -310,18 +367,32 @@ export class WhatsAppChannel implements Channel {
         logger.error({ err }, 'Voice transcription error');
       }
     } else if (msg.message?.audioMessage) {
-      const filePath = await this.downloadMedia(msg, chatJid, `audio-${msgId}`, '.ogg');
+      const filePath = await this.downloadMedia(
+        msg,
+        chatJid,
+        `audio-${msgId}`,
+        '.ogg',
+      );
       content = filePath ? `[Audio: ${filePath}]` : '[Audio]';
     } else if (msg.message?.documentMessage) {
       const fileName = msg.message.documentMessage.fileName || 'file';
       const ext = path.extname(fileName) || '';
-      const filePath = await this.downloadMedia(msg, chatJid, `doc-${msgId}`, ext);
-      content = filePath ? `[Document: ${filePath}]` : `[Document: ${fileName}]`;
+      const filePath = await this.downloadMedia(
+        msg,
+        chatJid,
+        `doc-${msgId}`,
+        ext,
+      );
+      content = filePath
+        ? `[Document: ${filePath}]`
+        : `[Document: ${fileName}]`;
     } else if (msg.message?.stickerMessage) {
       content = '[Sticker]';
     }
 
-    const timestamp = new Date(Number(msg.messageTimestamp) * 1000).toISOString();
+    const timestamp = new Date(
+      Number(msg.messageTimestamp) * 1000,
+    ).toISOString();
     const sender = msg.key.participant || msg.key.remoteJid || '';
     const senderName = msg.pushName || sender.split('@')[0];
 
@@ -335,7 +406,12 @@ export class WhatsAppChannel implements Channel {
     };
   }
 
-  private async downloadMedia(msg: any, chatJid: string, baseName: string, ext: string): Promise<string | null> {
+  private async downloadMedia(
+    msg: any,
+    chatJid: string,
+    baseName: string,
+    ext: string,
+  ): Promise<string | null> {
     try {
       const buffer = await downloadMediaMessage(msg, 'buffer', {});
       if (!buffer) return null;
@@ -343,7 +419,7 @@ export class WhatsAppChannel implements Channel {
       const agent = this.opts.registeredAgents()[chatJid];
       if (!agent) return null;
 
-      const mediaDir = path.join(AGENTS_DIR, agent.folder, 'media');
+      const mediaDir = path.join(agentVarDir(agent.folder), 'media');
       fs.mkdirSync(mediaDir, { recursive: true });
       const filePath = path.join(mediaDir, `${baseName}${ext}`);
       fs.writeFileSync(filePath, buffer as Buffer);

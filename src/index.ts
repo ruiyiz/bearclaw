@@ -3,19 +3,30 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  AUTH_DIR,
+  CACHE_DIR,
+  CONFIG_DIR,
+  CONTEXT_DIR,
   DATA_DIR,
   DISPLAY_NAME,
   AGENTS_DIR,
+  AGENTS_VAR_DIR,
   IPC_POLL_INTERVAL,
   IMESSAGE_ENABLED,
+  LOG_DIR,
   MAIN_AGENT_FOLDER,
   NANOCLAW_HOME,
   POLL_INTERVAL,
+  RUN_DIR,
+  SKILLS_DIR,
   TELEGRAM_BOT_POOL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
   TIMEZONE,
+  TMP_DIR,
+  VAR_DIR,
   STT_ECHO_ENABLED,
+  agentVarDir,
 } from './config.js';
 import {
   AvailableGroup,
@@ -87,8 +98,7 @@ const channels: Channel[] = [];
 
 function migrateToAgents(): void {
   const oldGroupsDir = path.join(NANOCLAW_HOME, 'groups');
-  const newAgentsDir = path.join(NANOCLAW_HOME, 'agents');
-  const contextDir = path.join(NANOCLAW_HOME, 'context');
+  const newAgentsDir = AGENTS_DIR;
 
   if (fs.existsSync(newAgentsDir) || !fs.existsSync(oldGroupsDir)) return;
 
@@ -98,9 +108,9 @@ function migrateToAgents(): void {
 
   const globalClaudeMd = path.join(newAgentsDir, 'CLAUDE.md');
   if (fs.existsSync(globalClaudeMd)) {
-    const targetAgentsMd = path.join(contextDir, 'AGENTS.md');
+    const targetAgentsMd = path.join(CONTEXT_DIR, 'AGENTS.md');
     if (!fs.existsSync(targetAgentsMd)) {
-      fs.mkdirSync(contextDir, { recursive: true });
+      fs.mkdirSync(CONTEXT_DIR, { recursive: true });
       fs.renameSync(globalClaudeMd, targetAgentsMd);
       logger.info(
         'Moved groups/CLAUDE.md to context/AGENTS.md — split into SOUL.md, USER.md, MEMORY.md manually',
@@ -122,27 +132,272 @@ function migrateToAgents(): void {
     }
   }
 
-  const oldFile = path.join(DATA_DIR, 'registered_groups.json');
-  const newFile = path.join(DATA_DIR, 'registered_agents.json');
+  const legacyDataDir = path.join(NANOCLAW_HOME, 'data');
+  const oldFile = path.join(legacyDataDir, 'registered_groups.json');
+  const newFile = path.join(legacyDataDir, 'registered_agents.json');
   if (fs.existsSync(oldFile) && !fs.existsSync(newFile)) {
     fs.renameSync(oldFile, newFile);
   }
 
   // Move skills from agents/.claude/skills/ to top-level skills/
-  // Then create .claude/skills symlink so the SDK auto-discovers them
   const oldSkillsDir = path.join(newAgentsDir, '.claude', 'skills');
-  const newSkillsDir = path.join(NANOCLAW_HOME, 'skills');
-  if (fs.existsSync(oldSkillsDir) && !fs.existsSync(newSkillsDir)) {
-    fs.renameSync(oldSkillsDir, newSkillsDir);
-  }
-  const symlinkDir = path.join(NANOCLAW_HOME, '.claude');
-  const symlinkPath = path.join(symlinkDir, 'skills');
-  if (fs.existsSync(newSkillsDir) && !fs.existsSync(symlinkPath)) {
-    fs.mkdirSync(symlinkDir, { recursive: true });
-    fs.symlinkSync('../skills', symlinkPath);
+  if (fs.existsSync(oldSkillsDir) && !fs.existsSync(SKILLS_DIR)) {
+    fs.renameSync(oldSkillsDir, SKILLS_DIR);
   }
 
   logger.info('Migration complete');
+}
+
+/**
+ * Migrate the on-disk layout from the legacy split (data/, store/, cache/,
+ * canvas/, bin/, mcp.json at root, per-agent runtime mixed with persistent
+ * identity files) to the var/ + config/ layout. Idempotent: every move is
+ * skipped if the destination already exists.
+ */
+function migrateLayout(): void {
+  // Detect first-time layout migration: any of these legacy roots indicates
+  // we're moving from the pre-var layout. Used to decide whether to reset
+  // SDK sessions (their CWD-encoded transcript paths no longer match).
+  const legacyRoots = [
+    path.join(NANOCLAW_HOME, 'data'),
+    path.join(NANOCLAW_HOME, 'store'),
+    path.join(NANOCLAW_HOME, 'cache'),
+    path.join(NANOCLAW_HOME, 'bin'),
+    path.join(NANOCLAW_HOME, 'canvas'),
+    path.join(NANOCLAW_HOME, 'mcp.json'),
+  ];
+  const isLegacyLayout = legacyRoots.some((p) => fs.existsSync(p));
+
+  const moves: Array<[string, string]> = [
+    // top-level reorganization
+    [path.join(NANOCLAW_HOME, 'bin'), path.join(CACHE_DIR, 'bin')],
+    [
+      path.join(NANOCLAW_HOME, 'cache', 'renders'),
+      path.join(CACHE_DIR, 'canvas-renders'),
+    ],
+    [path.join(NANOCLAW_HOME, 'canvas'), path.join(CACHE_DIR, 'canvas')],
+    [
+      path.join(NANOCLAW_HOME, 'store', 'messages.db'),
+      path.join(DATA_DIR, 'messages.db'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'store', 'auth'),
+      path.join(AUTH_DIR, 'whatsapp'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'store', 'audio_temp'),
+      path.join(TMP_DIR, 'audio'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'nanoclaw.sqlite'),
+      path.join(DATA_DIR, 'nanoclaw.sqlite'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'nanoclaw.db'),
+      path.join(DATA_DIR, 'nanoclaw.db'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'sessions.json'),
+      path.join(DATA_DIR, 'sessions.json'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'router_state.json'),
+      path.join(DATA_DIR, 'router_state.json'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'x-auth.json'),
+      path.join(AUTH_DIR, 'x-auth.json'),
+    ],
+    [path.join(NANOCLAW_HOME, 'data', 'ipc'), path.join(RUN_DIR, 'ipc')],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'subprocesses'),
+      path.join(RUN_DIR, 'subprocesses'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'imsg-watch.jsonl'),
+      path.join(LOG_DIR, 'imsg-watch.jsonl'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'imsg-watch-err.log'),
+      path.join(LOG_DIR, 'imsg-watch-err.log'),
+    ],
+    // config files
+    [path.join(NANOCLAW_HOME, 'mcp.json'), path.join(CONFIG_DIR, 'mcp.json')],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'registered_agents.json'),
+      path.join(CONFIG_DIR, 'registered_agents.json'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'skill_sources.json'),
+      path.join(CONFIG_DIR, 'skill_sources.json'),
+    ],
+    [
+      path.join(NANOCLAW_HOME, 'data', 'skill_install_meta.json'),
+      path.join(CONFIG_DIR, 'skill_install_meta.json'),
+    ],
+  ];
+
+  for (const [from, to] of moves) {
+    if (!fs.existsSync(from) || fs.existsSync(to)) continue;
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    try {
+      fs.renameSync(from, to);
+      logger.info({ from, to }, 'Migrated path');
+    } catch (err) {
+      logger.warn({ err, from, to }, 'Failed to migrate path');
+    }
+  }
+
+  // Glob: email_state_*.json (one per folder)
+  const legacyDataDir = path.join(NANOCLAW_HOME, 'data');
+  if (fs.existsSync(legacyDataDir)) {
+    for (const f of fs.readdirSync(legacyDataDir)) {
+      if (!f.startsWith('email_state_') || !f.endsWith('.json')) continue;
+      const from = path.join(legacyDataDir, f);
+      const to = path.join(DATA_DIR, f);
+      if (fs.existsSync(to)) continue;
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      try {
+        fs.renameSync(from, to);
+        logger.info({ from, to }, 'Migrated email state');
+      } catch (err) {
+        logger.warn({ err, from, to }, 'Failed to migrate email state');
+      }
+    }
+  }
+
+  // Per-agent runtime moves: agents/{n}/{memory,conversations,workspace,media,
+  // files,logs,heartbeat-log.md,dreams} → var/agents/{n}/...
+  if (fs.existsSync(AGENTS_DIR)) {
+    const perAgentSubpaths = [
+      'memory',
+      'conversations',
+      'workspace',
+      'media',
+      'files',
+      'logs',
+      'heartbeat-log.md',
+      'dreams',
+    ];
+    for (const entry of fs.readdirSync(AGENTS_DIR, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const src = path.join(AGENTS_DIR, entry.name);
+      const dst = agentVarDir(entry.name);
+      for (const sub of perAgentSubpaths) {
+        const from = path.join(src, sub);
+        const to = path.join(dst, sub);
+        if (!fs.existsSync(from) || fs.existsSync(to)) continue;
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        try {
+          fs.renameSync(from, to);
+          logger.info({ from, to }, 'Migrated agent runtime');
+        } catch (err) {
+          logger.warn({ err, from, to }, 'Failed to migrate agent runtime');
+        }
+      }
+    }
+  }
+
+  // Stray top-level heartbeat-log.md (legacy)
+  const strayHeartbeat = path.join(AGENTS_DIR, 'heartbeat-log.md');
+  if (fs.existsSync(strayHeartbeat)) {
+    try {
+      fs.unlinkSync(strayHeartbeat);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // ImsgWatcher.app has hardcoded path ~/.nanoclaw/data/imsg-watch.jsonl
+  // baked into its binary. Keep that path as a symlink into var/log/ so the
+  // .app keeps working without a rebuild.
+  const legacyImsgFiles: Array<[string, string]> = [
+    ['imsg-watch.jsonl', path.join(LOG_DIR, 'imsg-watch.jsonl')],
+    ['imsg-watch-err.log', path.join(LOG_DIR, 'imsg-watch-err.log')],
+  ];
+  for (const [name, target] of legacyImsgFiles) {
+    const linkPath = path.join(NANOCLAW_HOME, 'data', name);
+    if (
+      fs.existsSync(linkPath) ||
+      fs.lstatSync(linkPath, { throwIfNoEntry: false })
+    )
+      continue;
+    fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (!fs.existsSync(target)) fs.writeFileSync(target, '');
+    try {
+      fs.symlinkSync(target, linkPath);
+      logger.info(
+        { linkPath, target },
+        'Created legacy imsg-watch compatibility symlink',
+      );
+    } catch (err) {
+      logger.warn({ err, linkPath }, 'Failed to create imsg-watch symlink');
+    }
+  }
+
+  // Best-effort cleanup of now-empty legacy directories. data/ is only kept
+  // if it still has the imsg-watch symlinks above.
+  for (const d of [
+    path.join(NANOCLAW_HOME, 'data'),
+    path.join(NANOCLAW_HOME, 'store'),
+    path.join(NANOCLAW_HOME, 'cache'),
+  ]) {
+    if (!fs.existsSync(d)) continue;
+    try {
+      const remaining = fs.readdirSync(d);
+      if (remaining.length === 0) fs.rmdirSync(d);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Reset SDK sessions on first-time migration: old transcripts live under
+  // the old CWD-encoded directory and won't resume cleanly under the new
+  // CWD (var/agents/{folder}). The agent starts a fresh session next turn;
+  // memory journal entries written before the migration are preserved and
+  // get re-injected via the SessionStart hook.
+  if (isLegacyLayout) {
+    const sessionsFile = path.join(DATA_DIR, 'sessions.json');
+    if (fs.existsSync(sessionsFile)) {
+      try {
+        fs.writeFileSync(sessionsFile, '{}');
+        logger.info('Reset sessions.json after layout migration');
+      } catch (err) {
+        logger.warn({ err }, 'Failed to reset sessions.json');
+      }
+    }
+  }
+}
+
+function ensureLayoutDirs(): void {
+  const dirs = [
+    CONFIG_DIR,
+    CONTEXT_DIR,
+    AGENTS_DIR,
+    SKILLS_DIR,
+    VAR_DIR,
+    CACHE_DIR,
+    DATA_DIR,
+    RUN_DIR,
+    LOG_DIR,
+    TMP_DIR,
+    AUTH_DIR,
+    AGENTS_VAR_DIR,
+  ];
+  for (const d of dirs) fs.mkdirSync(d, { recursive: true });
+
+  // Maintain the .claude/skills symlink for SDK auto-discovery.
+  const symlinkDir = path.join(NANOCLAW_HOME, '.claude');
+  const symlinkPath = path.join(symlinkDir, 'skills');
+  if (!fs.existsSync(symlinkPath) && fs.existsSync(SKILLS_DIR)) {
+    fs.mkdirSync(symlinkDir, { recursive: true });
+    try {
+      fs.symlinkSync('../skills', symlinkPath);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function loadState(): void {
@@ -155,7 +410,7 @@ function loadState(): void {
   lastAgentTimestamp = state.last_agent_timestamp || {};
   sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
   registeredAgents = loadJson(
-    path.join(DATA_DIR, 'registered_agents.json'),
+    path.join(CONFIG_DIR, 'registered_agents.json'),
     {},
   );
   logger.info(
@@ -174,10 +429,13 @@ function saveState(): void {
 
 function registerAgent(jid: string, agent: RegisteredAgent): void {
   registeredAgents[jid] = agent;
-  saveJson(path.join(DATA_DIR, 'registered_agents.json'), registeredAgents);
+  saveJson(path.join(CONFIG_DIR, 'registered_agents.json'), registeredAgents);
 
-  const agentDir = path.join(AGENTS_DIR, agent.folder);
-  fs.mkdirSync(path.join(agentDir, 'logs'), { recursive: true });
+  const persistentDir = path.join(AGENTS_DIR, agent.folder);
+  fs.mkdirSync(persistentDir, { recursive: true });
+  fs.mkdirSync(path.join(agentVarDir(agent.folder), 'logs'), {
+    recursive: true,
+  });
 
   logger.info(
     { jid, name: agent.name, folder: agent.folder },
@@ -486,7 +744,7 @@ function startIpcWatcher(): void {
   }
   ipcWatcherRunning = true;
 
-  const ipcBaseDir = path.join(DATA_DIR, 'ipc');
+  const ipcBaseDir = path.join(RUN_DIR, 'ipc');
   fs.mkdirSync(ipcBaseDir, { recursive: true });
 
   const processIpcFiles = async () => {
@@ -944,7 +1202,7 @@ async function processTaskIpc(
         data.body
       ) {
         const emailResultsDir = path.join(
-          DATA_DIR,
+          RUN_DIR,
           'ipc',
           sourceAgent,
           'email_results',
@@ -1047,9 +1305,11 @@ async function startMessageLoop(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  ensureLayoutDirs();
+  migrateToAgents();
+  migrateLayout();
   initDatabase();
   logger.info('Database initialized');
-  migrateToAgents();
   loadState();
   initFlushCursors(sessions);
   startMemoryFlusher({ getSessions: () => sessions });

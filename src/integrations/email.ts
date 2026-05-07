@@ -1,8 +1,17 @@
 import { execFile } from 'child_process';
 import path from 'path';
 
-import { DATA_DIR, EMAIL_DEFAULT_INTERVAL, EMAIL_HANDLER_PREFIX } from '../config.js';
-import { createHandler, emitEvent, getAllHandlers, updateHandler } from '../db.js';
+import {
+  DATA_DIR,
+  EMAIL_DEFAULT_INTERVAL,
+  EMAIL_HANDLER_PREFIX,
+} from '../config.js';
+import {
+  createHandler,
+  emitEvent,
+  getAllHandlers,
+  updateHandler,
+} from '../db.js';
 import { logger } from '../logger.js';
 import { EmailMessage, RegisteredAgent } from '../types.js';
 import { loadJson, saveJson } from '../utils/json.js';
@@ -21,14 +30,19 @@ function intervalToMs(interval: string): number {
   const value = parseInt(match[1], 10);
   const unit = match[2];
   switch (unit) {
-    case 'm': return value * 60 * 1000;
-    case 'h': return value * 60 * 60 * 1000;
-    case 'd': return value * 24 * 60 * 60 * 1000;
-    default: return 3600000;
+    case 'm':
+      return value * 60 * 1000;
+    case 'h':
+      return value * 60 * 60 * 1000;
+    case 'd':
+      return value * 24 * 60 * 60 * 1000;
+    default:
+      return 3600000;
   }
 }
 
 function stateFile(folder: string): string {
+  // DATA_DIR points at var/, top of the runtime tree.
   return path.join(DATA_DIR, `email_state_${folder}.json`);
 }
 
@@ -39,9 +53,10 @@ function loadEmailState(folder: string): Set<string> {
 
 function saveEmailState(folder: string, processedIds: Set<string>): void {
   const ids = Array.from(processedIds);
-  const trimmed = ids.length > MAX_PROCESSED_IDS
-    ? ids.slice(ids.length - MAX_PROCESSED_IDS)
-    : ids;
+  const trimmed =
+    ids.length > MAX_PROCESSED_IDS
+      ? ids.slice(ids.length - MAX_PROCESSED_IDS)
+      : ids;
   saveJson(stateFile(folder), { processedIds: trimmed });
 }
 
@@ -53,7 +68,11 @@ function runGog(args: string[], stdin?: string): Promise<string> {
       { timeout: 30000, maxBuffer: 10 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
-          reject(new Error(`gog ${args[0]} ${args[1] || ''} failed: ${stderr || err.message}`));
+          reject(
+            new Error(
+              `gog ${args[0]} ${args[1] || ''} failed: ${stderr || err.message}`,
+            ),
+          );
           return;
         }
         resolve(stdout);
@@ -68,9 +87,14 @@ function runGog(args: string[], stdin?: string): Promise<string> {
 
 async function fetchUnreadEmails(address: string): Promise<EmailMessage[]> {
   const output = await runGog([
-    'gmail', 'messages', 'search',
+    'gmail',
+    'messages',
+    'search',
     `to:${address} is:unread`,
-    '--json', '--no-input', '--include-body', '--max=10',
+    '--json',
+    '--no-input',
+    '--include-body',
+    '--max=10',
   ]);
 
   const data = JSON.parse(output);
@@ -78,27 +102,33 @@ async function fetchUnreadEmails(address: string): Promise<EmailMessage[]> {
     return [];
   }
 
-  return data.messages.map((m: {
-    id: string;
-    threadId: string;
-    from: string;
-    subject: string;
-    body: string;
-    date: string;
-  }) => ({
-    id: m.id,
-    threadId: m.threadId,
-    from: m.from,
-    subject: m.subject || '(no subject)',
-    body: m.body || '',
-    date: m.date || '',
-  }));
+  return data.messages.map(
+    (m: {
+      id: string;
+      threadId: string;
+      from: string;
+      subject: string;
+      body: string;
+      date: string;
+    }) => ({
+      id: m.id,
+      threadId: m.threadId,
+      from: m.from,
+      subject: m.subject || '(no subject)',
+      body: m.body || '',
+      date: m.date || '',
+    }),
+  );
 }
 
 async function markThreadRead(threadId: string): Promise<void> {
   await runGog([
-    'gmail', 'thread', 'modify', threadId,
-    '--remove=UNREAD', '--no-input',
+    'gmail',
+    'thread',
+    'modify',
+    threadId,
+    '--remove=UNREAD',
+    '--no-input',
   ]);
 }
 
@@ -110,12 +140,14 @@ export async function sendEmailReply(
 ): Promise<void> {
   await runGog(
     [
-      'gmail', 'send',
+      'gmail',
+      'send',
       `--to=${to}`,
       `--subject=${subject}`,
       '--body-file=-',
       `--reply-to-message-id=${messageId}`,
-      '--no-input', '--json',
+      '--no-input',
+      '--json',
     ],
     body,
   );
@@ -137,7 +169,10 @@ export function startEmailLoops(agents: Record<string, RegisteredAgent>): void {
   for (const agent of Object.values(agents)) {
     if (!agent.email) continue;
     if (runningLoops.has(agent.folder)) {
-      logger.debug({ folder: agent.folder }, 'Email loop already running, skipping');
+      logger.debug(
+        { folder: agent.folder },
+        'Email loop already running, skipping',
+      );
       continue;
     }
     runningLoops.add(agent.folder);
@@ -155,12 +190,18 @@ export function startEmailLoops(agents: Record<string, RegisteredAgent>): void {
       try {
         const emails = await fetchUnreadEmails(address);
         if (emails.length > 0) {
-          logger.info({ count: emails.length, folder: agent.folder }, 'Found unread emails');
+          logger.info(
+            { count: emails.length, folder: agent.folder },
+            'Found unread emails',
+          );
         }
 
         for (const email of emails) {
           if (processedIds.has(email.id)) {
-            logger.debug({ messageId: email.id }, 'Skipping already-processed email');
+            logger.debug(
+              { messageId: email.id },
+              'Skipping already-processed email',
+            );
             continue;
           }
 
@@ -182,7 +223,10 @@ export function startEmailLoops(agents: Record<string, RegisteredAgent>): void {
           try {
             await markThreadRead(email.threadId);
           } catch (err) {
-            logger.error({ threadId: email.threadId, err }, 'Failed to mark thread read');
+            logger.error(
+              { threadId: email.threadId, err },
+              'Failed to mark thread read',
+            );
           }
         }
       } catch (err) {
@@ -200,7 +244,9 @@ export function startEmailLoops(agents: Record<string, RegisteredAgent>): void {
  * Register email_received handlers for all agents with email config.
  * Mirrors the Heartbeat pattern: creates/updates/pauses handlers based on config.
  */
-export function registerEmailHandlers(agents: Record<string, RegisteredAgent>): void {
+export function registerEmailHandlers(
+  agents: Record<string, RegisteredAgent>,
+): void {
   const existingHandlers = getAllHandlers();
   const emailHandlers = new Map(
     existingHandlers

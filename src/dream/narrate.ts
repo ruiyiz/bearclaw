@@ -48,10 +48,10 @@ function buildPrompt(promoted: PromotedEngram[], outputPath: string): string {
 
 export async function runNarratePhase(
   agentFolder: string,
-  agentDir: string,
+  varDir: string,
   promoted: PromotedEngram[],
 ): Promise<string | null> {
-  const dreamsDir = path.join(agentDir, 'dreams');
+  const dreamsDir = path.join(varDir, 'dreams');
   fs.mkdirSync(dreamsDir, { recursive: true });
   const today = new Date().toISOString().slice(0, 10);
   const outputPath = path.join(dreamsDir, `${today}.md`);
@@ -65,7 +65,7 @@ export async function runNarratePhase(
 
   const out = await runDreamSubagent({
     prompt: buildPrompt(promoted, outputPath),
-    cwd: agentDir,
+    cwd: varDir,
     systemPrompt: SYSTEM_PROMPT,
     allowedTools: ['Write'],
     timeoutMs: 4 * 60 * 1000,

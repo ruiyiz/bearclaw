@@ -17,9 +17,9 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 
-import { STORE_DIR } from '../config.js';
+import { AUTH_DIR as VAR_AUTH_DIR } from '../config.js';
 
-const AUTH_DIR = path.join(STORE_DIR, 'auth');
+const AUTH_DIR = path.join(VAR_AUTH_DIR, 'whatsapp');
 
 const logger = pino({
   level: 'warn', // Quiet logging - only show errors
@@ -32,9 +32,7 @@ async function authenticate(): Promise<void> {
 
   if (state.creds.registered) {
     console.log('✓ Already authenticated with WhatsApp');
-    console.log(
-      `  To re-authenticate, delete ${AUTH_DIR} and run again.`,
-    );
+    console.log(`  To re-authenticate, delete ${AUTH_DIR} and run again.`);
     process.exit(0);
   }
 

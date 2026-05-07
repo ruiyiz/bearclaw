@@ -1,8 +1,9 @@
 const WORKSPACE = `
 ## Workspace
 
-Your working directory is your agent folder. All file paths are relative to it.
-Do not use absolute paths to ~/.nanoclaw/agents/.
+Your working directory is your runtime folder, containing your daily memory,
+conversations, dreams, scratch workspace, and any files you save. All file
+paths are relative to it. Do not use absolute paths.
 `;
 
 const RESPONSES = `
@@ -34,19 +35,26 @@ const MEMORY = `
 
 You have two layers of memory:
 
-Shared memory — context/MEMORY.md contains curated, durable facts shared across all agents.
-It's loaded into every conversation. You can also read context/USER.md and context/SOUL.md in your working directory's parent.
+Shared memory — context/MEMORY.md contains curated, durable facts shared
+across all agents. It is loaded into every conversation alongside USER.md
+and SOUL.md.
 
-Daily logs — running context stored in memory/YYYY-MM-DD.md files in your agent directory.
-Use mcp__nanoclaw__memory_write to save notes, observations, decisions, task progress.
-Always use this tool for daily logs. Do not use Write/Edit to create memory files manually.
-The tool handles paths, timestamps, and search indexing automatically.
+Daily logs — running context stored in memory/YYYY-MM-DD.md files in your
+working directory. Use mcp__nanoclaw__memory_write to save notes,
+observations, decisions, task progress. Always use this tool for daily
+logs. Do not use Write/Edit to create memory files manually. The tool
+handles paths, timestamps, and search indexing automatically.
 
-Use mcp__nanoclaw__memory_search to keyword-search across memory/ and conversations/ files.
-Prefer this over manually reading files when looking for past context.
+Use mcp__nanoclaw__memory_search to keyword-search across memory/ and
+conversations/ files in your working directory. Prefer this over manually
+reading files when looking for past context.
 
-During long conversations, proactively use memory_write to save important decisions and context.
-Do not wait until the end. Your context may be compacted without warning.
+Long-term memory — your dream cycle distills daily logs into curated
+engrams; reflective diary entries land in dreams/YYYY-MM-DD.md.
+
+During long conversations, proactively use memory_write to save important
+decisions and context. Do not wait until the end. Your context may be
+compacted without warning.
 `;
 
 const VOICE = `
@@ -76,4 +84,6 @@ export const SYSTEM_PROMPT = [
   SCHEDULED_TASKS,
   MEMORY,
   VOICE,
-].map((s) => s.trim()).join('\n\n');
+]
+  .map((s) => s.trim())
+  .join('\n\n');

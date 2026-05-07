@@ -15,6 +15,8 @@ import {
   DREAM_MIN_SCORE,
   DREAM_MIN_SUPPORT,
   DREAM_RECENCY_HALFLIFE,
+  agentDir as agentPersistentDir,
+  agentVarDir,
 } from '../config.js';
 import {
   DreamCandidate,
@@ -57,7 +59,7 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return union ? intersect / union : 0;
 }
 
-function rehydrate(candidate: DreamCandidate, agentDir: string): boolean {
+function rehydrate(candidate: DreamCandidate, varDir: string): boolean {
   let paths: string[];
   try {
     paths = JSON.parse(candidate.source_paths);
@@ -69,7 +71,7 @@ function rehydrate(candidate: DreamCandidate, agentDir: string): boolean {
 
   for (const p of paths) {
     try {
-      const full = path.join(agentDir, p);
+      const full = path.join(varDir, p);
       if (!fs.existsSync(full)) continue;
       const content = fs.readFileSync(full, 'utf-8');
       const fileTokens = tokenize(content);
@@ -224,13 +226,16 @@ function formatEngramLine(promoted: PromotedEngram, runDate: string): string {
  * Append promoted lines to ENGRAM.md and enforce the line cap by demoting
  * lowest-scored entries. The file is kept human-readable; metadata is in
  * trailing HTML comments.
+ *
+ * `persistentDir` is the agent's persistent directory (agents/{folder})
+ * where ENGRAM.md lives.
  */
 export function appendToEngram(
-  agentDir: string,
+  persistentDir: string,
   promoted: PromotedEngram[],
 ): void {
   if (promoted.length === 0) return;
-  const engramPath = path.join(agentDir, 'ENGRAM.md');
+  const engramPath = path.join(persistentDir, 'ENGRAM.md');
   const existing = fs.existsSync(engramPath)
     ? fs.readFileSync(engramPath, 'utf-8')
     : '';
@@ -257,10 +262,9 @@ export function appendToEngram(
 /**
  * Run the Deep phase for one agent. Returns the list of promoted entries.
  */
-export function runDeepPhase(
-  agentFolder: string,
-  agentDir: string,
-): PromotedEngram[] {
+export function runDeepPhase(agentFolder: string): PromotedEngram[] {
+  const persistentDir = agentPersistentDir(agentFolder);
+  const varDir = agentVarDir(agentFolder);
   const all = getDreamCandidatesForAgent(agentFolder);
   if (all.length === 0) return [];
 
@@ -296,7 +300,7 @@ export function runDeepPhase(
   }
 
   // Rehydrate
-  const rehydrated = survivors.filter(({ c }) => rehydrate(c, agentDir));
+  const rehydrated = survivors.filter(({ c }) => rehydrate(c, varDir));
 
   if (rehydrated.length < survivors.length) {
     logger.info(
@@ -326,7 +330,7 @@ export function runDeepPhase(
   });
 
   // Write to ENGRAM.md
-  appendToEngram(agentDir, promoted);
+  appendToEngram(persistentDir, promoted);
 
   for (const p of promoted) {
     markDreamCandidatePromoted(p.candidate_id, 'ENGRAM', now);
