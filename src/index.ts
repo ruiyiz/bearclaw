@@ -84,6 +84,7 @@ import {
 } from './agent/memory-flusher.js';
 import { logger } from './logger.js';
 import { initSubprocessManager } from './agent/subprocess-manager.js';
+import { startMaintenance } from './maintenance.js';
 
 let lastTimestamp = '';
 let sessions: Session = {};
@@ -1038,6 +1039,7 @@ async function main(): Promise<void> {
   initFlushCursors(sessions);
   startMemoryFlusher({ getSessions: () => sessions });
   initSubprocessManager();
+  startMaintenance();
 
   registerHeartbeatHandlers(registeredAgents);
   registerEmailHandlers(registeredAgents);
