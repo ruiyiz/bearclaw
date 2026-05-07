@@ -3,6 +3,8 @@ import path from 'path';
 
 import { Api, Bot, InputFile } from 'grammy';
 
+import { commands } from '../commands/registry.js';
+import { formatStatus } from '../commands/status.js';
 import { ASSISTANT_NAME, TRIGGER_PATTERN, agentVarDir } from '../config.js';
 import { renderMarkdown, TelegramHtmlRenderer } from '../media/format.js';
 import { logger } from '../logger.js';
@@ -53,22 +55,25 @@ export class TelegramChannel implements Channel {
   async connect(): Promise<void> {
     this.bot = new Bot(this.botToken);
 
-    this.bot.command('chatid', (ctx) => {
-      const chatId = ctx.chat.id;
+    // Bootstrap fast-path: lets unregistered chats discover their chat_jid
+    // for agent registration. Registered chats normally hit /status via the
+    // shared registry through opts.onMessage; this handler terminates the
+    // middleware chain first when present, so the bootstrap output and the
+    // registry output must stay in sync (both call formatStatus).
+    this.bot.command('status', (ctx) => {
       const chatType = ctx.chat.type;
       const chatName =
         chatType === 'private'
           ? ctx.from?.first_name || 'Private'
           : (ctx.chat as any).title || 'Unknown';
-
-      ctx.reply(
-        `Chat ID: \`tg:${chatId}\`\nName: ${chatName}\nType: ${chatType}`,
-        { parse_mode: 'Markdown' },
+      void this.sendMessage(
+        `tg:${ctx.chat.id}`,
+        formatStatus({
+          chatJid: `tg:${ctx.chat.id}`,
+          chatName,
+          chatType,
+        }),
       );
-    });
-
-    this.bot.command('ping', (ctx) => {
-      ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
     this.bot.on('message:text', async (ctx) => {
@@ -392,6 +397,16 @@ export class TelegramChannel implements Channel {
           console.log(
             `  Send /chatid to the bot to get a chat's registration ID\n`,
           );
+          void this.bot!.api.setMyCommands(
+            commands
+              .map((c) => ({ command: c.name, description: c.description }))
+              .sort((a, b) => a.command.localeCompare(b.command)),
+          ).catch((err) => {
+            logger.warn(
+              { err: err instanceof Error ? err.message : String(err) },
+              'Failed to set Telegram bot commands',
+            );
+          });
           resolve();
         },
       });

@@ -57,6 +57,7 @@ import {
   sendEmailReply,
   startEmailLoops,
 } from './integrations/email.js';
+import { commandMap } from './commands/registry.js';
 import { startEventBusLoop } from './events/bus.js';
 import { registerHeartbeatHandlers } from './events/heartbeat.js';
 import { registerDreamHandlers } from './dream/handler.js';
@@ -245,25 +246,37 @@ async function processMessage(msg: NewMessage): Promise<void> {
     return;
   }
 
-  if (content === '/new' || content.toLowerCase().startsWith('/new ')) {
-    if (sessions[agent.folder]) {
-      flushBeforeSessionClear(agent.folder, sessions[agent.folder]);
-    }
-    delete sessions[agent.folder];
-    saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
-    logger.info({ agent: agent.name }, 'Session cleared by user');
-
-    const followUp = content.slice(4).trim();
-    if (!followUp) {
-      const ch = findChannel(channels, msg.chat_jid);
-      if (ch) {
-        await ch.sendMessage(msg.chat_jid, 'Session cleared! Starting fresh.');
+  const cmdHead = content.split(/[\s@]/)[0];
+  if (cmdHead.startsWith('/')) {
+    const cmd = commandMap.get(cmdHead.slice(1).toLowerCase());
+    if (cmd) {
+      const args = content.slice(cmdHead.length).trim();
+      const result = await cmd.handler({
+        args,
+        agent,
+        chatJid: msg.chat_jid,
+        msg,
+        reply: async (text) => {
+          const ch = findChannel(channels, msg.chat_jid);
+          if (ch) await ch.sendMessage(msg.chat_jid, text);
+        },
+        clearSession: () => {
+          if (sessions[agent.folder]) {
+            flushBeforeSessionClear(agent.folder, sessions[agent.folder]);
+          }
+          delete sessions[agent.folder];
+          saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
+          logger.info({ agent: agent.name }, 'Session cleared by user');
+        },
+      });
+      if (result?.continueAs) {
+        content = result.continueAs;
+      } else {
+        lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
+        saveState();
+        return;
       }
-      lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
-      saveState();
-      return;
     }
-    content = followUp;
   }
 
   const sinceTimestamp = lastAgentTimestamp[msg.chat_jid] || '';
