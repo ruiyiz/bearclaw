@@ -775,10 +775,12 @@ export function setChunkEmbedding(
 ): void {
   if (!vecAvailable) return;
   const buf = Buffer.from(embedding.buffer);
-  // Replace existing if any
-  db.prepare('DELETE FROM memory_vec WHERE rowid = ?').run(chunkId);
+  // vec0 strictly requires SQLITE_INTEGER for rowid; better-sqlite3 v12 binds
+  // JS Number as DOUBLE, so coerce to BigInt to force int64 binding.
+  const rowid = BigInt(chunkId);
+  db.prepare('DELETE FROM memory_vec WHERE rowid = ?').run(rowid);
   db.prepare('INSERT INTO memory_vec(rowid, embedding) VALUES (?, ?)').run(
-    chunkId,
+    rowid,
     buf,
   );
 }
@@ -873,7 +875,7 @@ function deleteMemoryPath(agentFolder: string, relPath: string): void {
       )
       .all(agentFolder, relPath) as Array<{ id: number }>;
     const delVec = db.prepare('DELETE FROM memory_vec WHERE rowid = ?');
-    for (const { id } of oldChunks) delVec.run(id);
+    for (const { id } of oldChunks) delVec.run(BigInt(id));
   }
 
   db.prepare(
