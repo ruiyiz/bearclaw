@@ -7,6 +7,10 @@ export interface SlashContext {
   msg: NewMessage;
   reply: (text: string) => Promise<void>;
   clearSession: () => void;
+  getModel: () => string | undefined;
+  setModel: (model: string) => void;
+  getEffort: () => string | undefined;
+  setEffort: (effort: string) => void;
 }
 
 export interface SlashResult {

@@ -29,6 +29,33 @@ import { logger } from '../logger.js';
 import { Handler, RegisteredAgent } from '../types.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 
+export const DEFAULT_MODEL = 'claude-opus-4-7';
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export const DEFAULT_EFFORT: EffortLevel = 'low';
+export const EFFORT_LEVELS: EffortLevel[] = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
+
+// Per-turn keyword bumps. Scans the prompt for trigger words and returns the
+// highest implied effort, or undefined if no keyword present. Composes with
+// the configured baseline via max().
+export function detectEffortKeyword(prompt: string): EffortLevel | undefined {
+  if (/\bultrathink\b/i.test(prompt)) return 'max';
+  if (/\bthink harder\b/i.test(prompt)) return 'xhigh';
+  if (/\bthink hard\b/i.test(prompt)) return 'high';
+  if (/\bthink (?:more|deeply|carefully)\b/i.test(prompt)) return 'medium';
+  return undefined;
+}
+
+function maxEffort(a: EffortLevel, b?: EffortLevel): EffortLevel {
+  if (!b) return a;
+  return EFFORT_LEVELS.indexOf(a) >= EFFORT_LEVELS.indexOf(b) ? a : b;
+}
+
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -37,6 +64,7 @@ interface ContainerInput {
   isMain: boolean;
   isEventHandler?: boolean;
   model?: string;
+  effort?: EffortLevel;
   onText?: (text: string) => void;
 }
 
@@ -469,7 +497,11 @@ export async function runContainerAgent(
         abortController,
         cwd: varDir,
         resume: input.sessionId,
-        model: input.model || 'claude-opus-4-7',
+        model: input.model || DEFAULT_MODEL,
+        effort: maxEffort(
+          input.effort || DEFAULT_EFFORT,
+          detectEffortKeyword(input.prompt),
+        ),
         systemPrompt: {
           type: 'preset',
           preset: 'claude_code',

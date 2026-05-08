@@ -89,6 +89,8 @@ import { startMaintenance } from './maintenance.js';
 
 let lastTimestamp = '';
 let sessions: Session = {};
+let agentModels: Record<string, string> = {};
+let agentEfforts: Record<string, string> = {};
 let registeredAgents: Record<string, RegisteredAgent> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
@@ -137,6 +139,8 @@ function loadState(): void {
   lastTimestamp = state.last_timestamp || '';
   lastAgentTimestamp = state.last_agent_timestamp || {};
   sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
+  agentModels = loadJson(path.join(DATA_DIR, 'models.json'), {});
+  agentEfforts = loadJson(path.join(DATA_DIR, 'efforts.json'), {});
   registeredAgents = loadJson(
     path.join(CONFIG_DIR, 'registered_agents.json'),
     {},
@@ -267,6 +271,21 @@ async function processMessage(msg: NewMessage): Promise<void> {
           delete sessions[agent.folder];
           saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
           logger.info({ agent: agent.name }, 'Session cleared by user');
+        },
+        getModel: () => agentModels[agent.folder],
+        setModel: (model: string) => {
+          agentModels[agent.folder] = model;
+          saveJson(path.join(DATA_DIR, 'models.json'), agentModels);
+          logger.info({ agent: agent.name, model }, 'Agent model set by user');
+        },
+        getEffort: () => agentEfforts[agent.folder],
+        setEffort: (effort: string) => {
+          agentEfforts[agent.folder] = effort;
+          saveJson(path.join(DATA_DIR, 'efforts.json'), agentEfforts);
+          logger.info(
+            { agent: agent.name, effort },
+            'Agent effort set by user',
+          );
         },
       });
       if (result?.continueAs) {
@@ -448,6 +467,14 @@ async function runAgent(
       agentFolder: agent.folder,
       chatJid,
       isMain,
+      model: agentModels[agent.folder],
+      effort: agentEfforts[agent.folder] as
+        | 'low'
+        | 'medium'
+        | 'high'
+        | 'xhigh'
+        | 'max'
+        | undefined,
       onText,
     });
 
