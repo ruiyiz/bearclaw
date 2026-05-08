@@ -6,7 +6,11 @@ import { Api, Bot, InputFile } from 'grammy';
 import { commands } from '../commands/registry.js';
 import { formatStatus } from '../commands/status.js';
 import { ASSISTANT_NAME, TRIGGER_PATTERN, agentVarDir } from '../config.js';
-import { renderMarkdown, TelegramHtmlRenderer } from '../media/format.js';
+import {
+  PlainTextRenderer,
+  renderMarkdown,
+  TelegramHtmlRenderer,
+} from '../media/format.js';
 import { logger } from '../logger.js';
 import { transcribeAudio } from '../media/transcribe.js';
 import {
@@ -427,16 +431,23 @@ export class TelegramChannel implements Channel {
         await this.bot.api.sendMessage(numericId, formatted, {
           parse_mode: 'HTML',
         });
-      } else {
-        for (let i = 0; i < formatted.length; i += MAX_LENGTH) {
-          await this.bot.api.sendMessage(
-            numericId,
-            formatted.slice(i, i + MAX_LENGTH),
-            { parse_mode: 'HTML' },
-          );
-        }
+        logger.info({ jid, length: formatted.length }, 'Telegram message sent');
+        return;
       }
-      logger.info({ jid, length: formatted.length }, 'Telegram message sent');
+      // Naive chunking would split HTML tag pairs (e.g. <pre><code>...</code></pre>)
+      // and Telegram rejects each chunk as malformed entities. Fall back to
+      // plain text — chunks remain renderable, just without inline formatting.
+      const plain = renderMarkdown(text, PlainTextRenderer);
+      for (let i = 0; i < plain.length; i += MAX_LENGTH) {
+        await this.bot.api.sendMessage(
+          numericId,
+          plain.slice(i, i + MAX_LENGTH),
+        );
+      }
+      logger.info(
+        { jid, length: plain.length, mode: 'plain-chunked' },
+        'Telegram message sent',
+      );
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
     }

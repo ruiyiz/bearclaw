@@ -77,6 +77,7 @@ import {
 } from './types.js';
 import { loadJson, saveJson } from './utils/json.js';
 import {
+  startDailyConversationFlush,
   startMemoryFlusher,
   flushBeforeSessionClear,
   initFlushCursors,
@@ -1061,6 +1062,7 @@ async function main(): Promise<void> {
   }
 
   startMemoryFlusher({ getSessions: () => sessions });
+  startDailyConversationFlush({ getSessions: () => sessions });
   initSubprocessManager();
   startMaintenance();
 

@@ -3,8 +3,14 @@
  * Runs Claude Agent SDK directly in-process (no containers)
  */
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
-import { query, HookCallback } from '@anthropic-ai/claude-agent-sdk';
+import {
+  getSessionMessages,
+  query,
+  HookCallback,
+  SessionMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 
 import {
   AGENT_TIMEOUT,
@@ -56,9 +62,10 @@ interface SessionsIndex {
 
 export function getSessionSummary(
   sessionId: string,
-  transcriptPath: string,
+  cwd: string,
 ): string | null {
-  const projectDir = path.dirname(transcriptPath);
+  const encodedCwd = cwd.replace(/[/.]/g, '-');
+  const projectDir = path.join(os.homedir(), '.claude', 'projects', encodedCwd);
   const indexPath = path.join(projectDir, 'sessions-index.json');
 
   if (!fs.existsSync(indexPath)) {
@@ -167,36 +174,140 @@ export function generateFallbackName(): string {
 }
 
 interface ParsedMessage {
-  role: 'user' | 'assistant';
+  // sender: human name (from <message sender="..."> wrapper) or 'Assistant'.
+  sender: string;
+  // ISO timestamp. For user turns, taken from inner <message time="...">; for
+  // assistant turns, from the SessionMessage's top-level `timestamp`.
+  timestamp: string;
   content: string;
 }
 
-export function parseTranscript(content: string): ParsedMessage[] {
-  const messages: ParsedMessage[] = [];
+// SessionMessage's TS shape omits `timestamp`, but the runtime payload includes
+// it (we depend on it for per-turn time prefixes).
+type SessionMessageWithTs = SessionMessage & { timestamp?: string };
 
-  for (const line of content.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === 'user' && entry.message?.content) {
-        const text =
-          typeof entry.message.content === 'string'
-            ? entry.message.content
-            : entry.message.content
-                .map((c: { text?: string }) => c.text || '')
-                .join('');
-        if (text) messages.push({ role: 'user', content: text });
-      } else if (entry.type === 'assistant' && entry.message?.content) {
-        const textParts = entry.message.content
-          .filter((c: { type: string }) => c.type === 'text')
-          .map((c: { text: string }) => c.text);
-        const text = textParts.join('');
-        if (text) messages.push({ role: 'assistant', content: text });
+function unescapeXml(s: string): string {
+  return s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * The chat router wraps incoming user content as
+ *   <messages><message sender="..." time="...">text</message>...</messages>
+ * so each user turn carries the (possibly cumulative) batch of unread messages
+ * since the last agent reply. Expand the wrapper into individual entries so
+ * the archive doesn't show raw XML.
+ */
+function expandUserMessages(
+  raw: string,
+  fallbackTimestamp: string,
+): { sender: string; timestamp: string; content: string }[] | null {
+  const wrapper = raw.match(/^<messages>\s*([\s\S]*?)\s*<\/messages>\s*$/);
+  if (!wrapper) return null;
+  const inner = wrapper[1];
+  const out: { sender: string; timestamp: string; content: string }[] = [];
+  const re =
+    /<message\s+sender="([^"]*)"\s+time="([^"]*)"\s*>([\s\S]*?)<\/message>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(inner)) !== null) {
+    out.push({
+      sender: unescapeXml(m[1]),
+      timestamp: m[2] || fallbackTimestamp,
+      content: unescapeXml(m[3]).trim(),
+    });
+  }
+  return out.length > 0 ? out : null;
+}
+
+/**
+ * Load the session's user/assistant turns via the SDK, normalize them, and
+ * expand <messages>-wrapped user payloads into individual entries.
+ *
+ * Sidechain (subagent) turns are excluded by SDK contract — getSessionMessages
+ * returns main-thread only; getSubagentMessages handles those separately.
+ */
+export async function loadParsedTranscript(
+  sessionId: string,
+  dir: string,
+): Promise<ParsedMessage[]> {
+  const sessionMessages = (await getSessionMessages(sessionId, {
+    dir,
+  })) as SessionMessageWithTs[];
+
+  const out: ParsedMessage[] = [];
+  // Dedup key for repeats that the chat router re-includes in successive
+  // <messages> blocks until the agent replies.
+  const seen = new Set<string>();
+  const keyOf = (sender: string, ts: string, text: string) =>
+    `${sender}|${ts}|${text}`;
+
+  for (const entry of sessionMessages) {
+    const entryTs = entry.timestamp || '';
+    const msg = entry.message as
+      | { role?: string; content?: unknown }
+      | undefined;
+    if (!msg?.content) continue;
+
+    if (entry.type === 'user') {
+      // Strip tool_result / tool_use echoes — SDK plumbing, not user speech.
+      const text =
+        typeof msg.content === 'string'
+          ? msg.content
+          : (msg.content as { type?: string; text?: string }[])
+              .filter((c) => c.type !== 'tool_result' && c.type !== 'tool_use')
+              .map((c) => c.text || '')
+              .join('');
+      if (!text) continue;
+
+      const expanded = expandUserMessages(text.trim(), entryTs);
+      if (expanded) {
+        for (const m of expanded) {
+          if (!m.content) continue;
+          const k = keyOf(m.sender, m.timestamp, m.content);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          out.push({
+            sender: m.sender,
+            timestamp: m.timestamp,
+            content: m.content,
+          });
+        }
+      } else {
+        const k = keyOf('User', entryTs, text);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ sender: 'User', timestamp: entryTs, content: text });
       }
-    } catch {}
+    } else if (entry.type === 'assistant') {
+      const blocks = msg.content as { type?: string; text?: string }[];
+      const text = blocks
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text || '')
+        .join('')
+        .trim();
+      if (text) {
+        out.push({ sender: 'Assistant', timestamp: entryTs, content: text });
+      }
+    }
   }
 
-  return messages;
+  return out;
+}
+
+function formatTime(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: TIMEZONE,
+  });
 }
 
 export function formatTranscriptMarkdown(
@@ -223,16 +334,35 @@ export function formatTranscriptMarkdown(
   lines.push('');
 
   for (const msg of messages) {
-    const sender = msg.role === 'user' ? 'User' : 'Andy';
+    const time = formatTime(msg.timestamp);
+    const header = time ? `**${msg.sender}** (${time})` : `**${msg.sender}**`;
     const content =
       msg.content.length > 2000
         ? msg.content.slice(0, 2000) + '...'
         : msg.content;
-    lines.push(`**${sender}**: ${content}`);
+    lines.push(`${header}: ${content}`);
+    lines.push('');
+    lines.push('---');
     lines.push('');
   }
 
   return lines.join('\n');
+}
+
+async function writeTurnCheckpoint(
+  varDir: string,
+  sessionId: string,
+): Promise<void> {
+  const messages = await loadParsedTranscript(sessionId, varDir);
+  if (messages.length === 0) return;
+
+  const summary = getSessionSummary(sessionId, varDir);
+  const cpDir = path.join(varDir, 'checkpoints');
+  fs.mkdirSync(cpDir, { recursive: true });
+  const cpPath = path.join(cpDir, `${sessionId}.md`);
+  const tmp = `${cpPath}.tmp`;
+  fs.writeFileSync(tmp, formatTranscriptMarkdown(messages, summary));
+  fs.renameSync(tmp, cpPath);
 }
 
 function buildContextPrompt(agentFolder: string): string {
@@ -467,6 +597,18 @@ export async function runContainerAgent(
     }
 
     fs.writeFileSync(logFile, logLines.join('\n'));
+
+    // Crash safety: dump the current transcript to the session's checkpoint
+    // file before the periodic flusher would otherwise tick. A session that
+    // ends abruptly here (network blip, kernel signal) still leaves the
+    // latest turn on disk for the daily consolidator to pick up.
+    if (newSessionId) {
+      try {
+        await writeTurnCheckpoint(varDir, newSessionId);
+      } catch (err) {
+        logger.warn({ err, group: group.name }, 'Per-turn checkpoint failed');
+      }
+    }
 
     // Emit agent_complete event
     const triggerType = input.isEventHandler ? 'event_handler' : 'message';
