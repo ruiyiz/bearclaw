@@ -12,6 +12,8 @@ import {
   DREAM_ENABLED,
   DREAM_HANDLER_PREFIX,
   DREAM_HOUR,
+  DREAM_REPORT_HANDLER_ID,
+  DREAM_REPORT_OFFSET_MIN,
   MAIN_AGENT_FOLDER,
   TIMEZONE,
 } from '../config.js';
@@ -22,13 +24,22 @@ import {
   updateHandler,
 } from '../db.js';
 import { logger } from '../logger.js';
-import { RegisteredAgent } from '../types.js';
+import { Handler, RegisteredAgent } from '../types.js';
 
 const DREAM_PROMPT = '[DREAM CYCLE — handled by orchestrator, not the agent]';
 
 function dreamCron(): string {
   return `0 ${DREAM_HOUR} * * *`;
 }
+
+function dreamReportCron(): string {
+  const minute = ((DREAM_REPORT_OFFSET_MIN % 60) + 60) % 60;
+  const hour = (DREAM_HOUR + Math.floor(DREAM_REPORT_OFFSET_MIN / 60)) % 24;
+  return `${minute} ${hour} * * *`;
+}
+
+const DREAM_REPORT_PROMPT =
+  '[DREAM REPORT — handled by orchestrator, not the agent]';
 
 export function registerDreamHandlers(
   agents: Record<string, RegisteredAgent>,
@@ -107,9 +118,81 @@ export function registerDreamHandlers(
 
   // Pause dream handlers for folders that no longer exist
   for (const [handlerId, handler] of existingDreamHandlers) {
-    if (!seenHandlerIds.has(handlerId) && handler.status === 'active') {
+    if (
+      handlerId !== DREAM_REPORT_HANDLER_ID &&
+      !seenHandlerIds.has(handlerId) &&
+      handler.status === 'active'
+    ) {
       updateHandler(handlerId, { status: 'paused' });
       logger.info({ handlerId }, 'Dream handler paused (folder removed)');
     }
   }
+
+  registerDreamReportHandler(
+    existingDreamHandlers.get(DREAM_REPORT_HANDLER_ID),
+  );
+}
+
+function registerDreamReportHandler(existing: Handler | undefined): void {
+  const cron = dreamReportCron();
+
+  if (!DREAM_ENABLED) {
+    if (existing && existing.status === 'active') {
+      updateHandler(DREAM_REPORT_HANDLER_ID, { status: 'paused' });
+      logger.info(
+        { handlerId: DREAM_REPORT_HANDLER_ID },
+        'Dream report handler paused (DREAM_ENABLED=false)',
+      );
+    }
+    return;
+  }
+
+  if (existing) {
+    if (existing.cron !== cron) {
+      deleteHandler(DREAM_REPORT_HANDLER_ID);
+      logger.info(
+        {
+          handlerId: DREAM_REPORT_HANDLER_ID,
+          oldCron: existing.cron,
+          newCron: cron,
+        },
+        'Dream report handler recreated',
+      );
+    } else {
+      const updates: Parameters<typeof updateHandler>[1] = {};
+      if (existing.status !== 'active') updates.status = 'active';
+      if (Object.keys(updates).length > 0) {
+        updateHandler(DREAM_REPORT_HANDLER_ID, updates);
+        logger.info(
+          { handlerId: DREAM_REPORT_HANDLER_ID },
+          'Dream report handler updated',
+        );
+      }
+      return;
+    }
+  }
+
+  const nextRun = CronExpressionParser.parse(cron, { tz: TIMEZONE })
+    .next()
+    .toISOString();
+  const filter = JSON.stringify({ handler_id: DREAM_REPORT_HANDLER_ID });
+
+  createHandler({
+    id: DREAM_REPORT_HANDLER_ID,
+    group_folder: MAIN_AGENT_FOLDER,
+    prompt: DREAM_REPORT_PROMPT,
+    context_mode: 'isolated',
+    event_type: 'cron_trigger',
+    filter,
+    cron,
+    next_run: nextRun,
+    cooldown_ms: 0,
+    max_triggers: null,
+    status: 'active',
+    created_at: new Date().toISOString(),
+  });
+  logger.info(
+    { handlerId: DREAM_REPORT_HANDLER_ID, cron, nextRun },
+    'Dream report handler created',
+  );
 }

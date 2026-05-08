@@ -13,7 +13,6 @@ import {
   DATA_DIR,
   DREAM_LOOKBACK_DAYS,
   DREAM_MIN_NEW_ENTRIES,
-  MAIN_AGENT_FOLDER,
   agentDir as agentPersistentDir,
   agentVarDir,
 } from '../config.js';
@@ -31,8 +30,6 @@ import { runDeepPhase } from './deep.js';
 import { runLightPhase } from './light.js';
 import { runNarratePhase } from './narrate.js';
 import { runRemPhase } from './rem.js';
-import { runHypnopompicReport } from './report.js';
-import { runSharedPromotion } from './shared.js';
 
 interface DreamOrchestratorDeps {
   registeredAgents: () => Record<string, RegisteredAgent>;
@@ -110,59 +107,11 @@ export async function runDreamCycle(
     const promoted = runDeepPhase(agentFolder);
 
     // Narrate
-    const dreamPath = await runNarratePhase(agentFolder, varDir, promoted);
+    await runNarratePhase(agentFolder, varDir, promoted);
 
-    // Main-only: shared promotion + Hypnopompic Report
-    let sharedPromoted = 0;
-    if (agentFolder === MAIN_AGENT_FOLDER) {
-      const folders = new Set(
-        Object.values(deps.registeredAgents()).map((a) => a.folder),
-      );
-      folders.add(MAIN_AGENT_FOLDER);
-      const sharedResults = runSharedPromotion([...folders]);
-      sharedPromoted = sharedResults.length;
-
-      // Build per-agent counts from dream_runs in the past 24 hours
-      const perAgent: Array<{ agentFolder: string; promoted: number }> = [];
-      perAgent.push({
-        agentFolder: MAIN_AGENT_FOLDER,
-        promoted: promoted.length,
-      });
-      // Other agents' counts are unknown to main directly — we approximate by
-      // counting lines in their ENGRAM.md added today. Light because reading
-      // the diary is the more authoritative signal.
-      for (const folder of folders) {
-        if (folder === MAIN_AGENT_FOLDER) continue;
-        const otherEngram = path.join(agentPersistentDir(folder), 'ENGRAM.md');
-        if (!fs.existsSync(otherEngram)) {
-          perAgent.push({ agentFolder: folder, promoted: 0 });
-          continue;
-        }
-        const today = new Date().toISOString().slice(0, 10);
-        const content = fs.readFileSync(otherEngram, 'utf-8');
-        const todayLines = (
-          content.match(new RegExp(`promoted_at"\\s*:\\s*"${today}"`, 'g')) ||
-          []
-        ).length;
-        perAgent.push({ agentFolder: folder, promoted: todayLines });
-      }
-
-      await runHypnopompicReport(
-        varDir,
-        {
-          perAgent,
-          shared: sharedResults,
-          mainDreamPath:
-            dreamPath ??
-            path.join(
-              varDir,
-              'dreams',
-              `${new Date().toISOString().slice(0, 10)}.md`,
-            ),
-        },
-        deps.registeredAgents(),
-      );
-    }
+    // Shared promotion + Hypnopompic Report run in a separate post-cycle
+    // handler (`dream-cycle-report`) so they see promotions from every
+    // agent, not just the one that fires first.
 
     // Prune old, unpromoted candidates beyond 2× lookback window
     pruneOldDreamCandidates(DREAM_LOOKBACK_DAYS * 2 * 86400);
@@ -171,7 +120,6 @@ export async function runDreamCycle(
       lightCount,
       remCount,
       deepPromoted: promoted.length,
-      sharedPromoted,
     });
     logger.info(
       {
@@ -179,7 +127,6 @@ export async function runDreamCycle(
         lightCount,
         remCount,
         deepPromoted: promoted.length,
-        sharedPromoted,
       },
       'Dream cycle complete',
     );

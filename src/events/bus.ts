@@ -6,11 +6,13 @@ import {
   MAIN_AGENT_FOLDER,
   HEARTBEAT_HANDLER_PREFIX,
   DREAM_HANDLER_PREFIX,
+  DREAM_REPORT_HANDLER_ID,
   agentDir as agentPersistentDir,
   agentVarDir,
   buildHeartbeatPrompt,
 } from '../config.js';
 import { dispatchDreamHandler } from '../dream/orchestrator.js';
+import { runDreamReportCycle } from '../dream/report.js';
 import {
   cleanupProcessedEvents,
   emitEvent,
@@ -46,25 +48,33 @@ async function runHandler(
   // Dream handlers bypass the standard agent runner — they invoke the dream
   // orchestrator, which handles its own session reset and subagent runs.
   if (handler.id.startsWith(DREAM_HANDLER_PREFIX)) {
+    const isReport = handler.id === DREAM_REPORT_HANDLER_ID;
     let error: string | null = null;
     try {
-      await dispatchDreamHandler(handler.group_folder, {
-        registeredAgents: deps.registeredAgents,
-        getSessions: deps.getSessions,
-        saveSessions: deps.saveSessions,
-      });
+      if (isReport) {
+        await runDreamReportCycle({ registeredAgents: deps.registeredAgents });
+      } else {
+        await dispatchDreamHandler(handler.group_folder, {
+          registeredAgents: deps.registeredAgents,
+          getSessions: deps.getSessions,
+          saveSessions: deps.saveSessions,
+        });
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
       logger.error({ handlerId: handler.id, error }, 'Dream handler failed');
     }
     const durationMs = Date.now() - startTime;
+    const summary = isReport
+      ? 'Dream report completed'
+      : 'Dream cycle completed';
     logHandlerRun({
       handler_id: handler.id,
       event_id: event.id,
       run_at: new Date().toISOString(),
       duration_ms: durationMs,
       status: error ? 'error' : 'success',
-      result: error ? null : 'Dream cycle completed',
+      result: error ? null : summary,
       error,
     });
     updateHandlerAfterTrigger(handler.id);
@@ -72,7 +82,7 @@ async function runHandler(
       handler_id: handler.id,
       group_folder: handler.group_folder,
       status: error ? 'error' : 'success',
-      result_summary: error ? `Error: ${error}` : 'Dream cycle completed',
+      result_summary: error ? `Error: ${error}` : summary,
     });
     return;
   }

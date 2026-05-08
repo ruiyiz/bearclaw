@@ -72,8 +72,15 @@ export const HEARTBEAT_HANDLER_PREFIX = 'heartbeat-';
 
 // Dream cycle — daily memory consolidation; bundles the daily session reset
 export const DREAM_HANDLER_PREFIX = 'dream-';
+// Special handler id for the post-cycle report; runs after every agent's
+// dream cycle completes so it can see their promotions.
+export const DREAM_REPORT_HANDLER_ID = 'dream-cycle-report';
 export const DREAM_ENABLED = process.env.DREAM_ENABLED !== 'false';
 export const DREAM_HOUR = parseInt(process.env.DREAM_HOUR ?? '4', 10);
+export const DREAM_REPORT_OFFSET_MIN = parseInt(
+  process.env.DREAM_REPORT_OFFSET_MIN ?? '30',
+  10,
+);
 export const DREAM_LOOKBACK_DAYS = parseInt(
   process.env.DREAM_LOOKBACK_DAYS ?? '7',
   10,

@@ -1300,3 +1300,31 @@ export function getLastSuccessfulDreamRun(
     finished_at: number | null;
   } | null;
 }
+
+/**
+ * Latest successful dream run per agent folder since the given unix-seconds
+ * cutoff. Used by the post-cycle Hypnopompic Report so it can count each
+ * agent's promotions after every dream has finished.
+ */
+export function getRecentDreamRunsByFolder(sinceUnix: number): Array<{
+  agent_folder: string;
+  deep_promoted: number;
+  finished_at: number | null;
+}> {
+  return db
+    .prepare(
+      `SELECT agent_folder, deep_promoted, finished_at
+       FROM dream_runs
+       WHERE status = 'success' AND started_at >= ?
+       AND id IN (
+         SELECT MAX(id) FROM dream_runs
+         WHERE status = 'success' AND started_at >= ?
+         GROUP BY agent_folder
+       )`,
+    )
+    .all(sinceUnix, sinceUnix) as Array<{
+    agent_folder: string;
+    deep_promoted: number;
+    finished_at: number | null;
+  }>;
+}

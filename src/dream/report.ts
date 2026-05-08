@@ -10,10 +10,17 @@
 import fs from 'fs';
 import path from 'path';
 
-import { DREAM_REPORT_CHANNEL, MAIN_AGENT_FOLDER, RUN_DIR } from '../config.js';
+import {
+  DREAM_REPORT_CHANNEL,
+  MAIN_AGENT_FOLDER,
+  RUN_DIR,
+  agentVarDir,
+} from '../config.js';
+import { getRecentDreamRunsByFolder } from '../db.js';
 import { logger } from '../logger.js';
+import { RegisteredAgent } from '../types.js';
 import { runDreamSubagent } from './subagent.js';
-import { SharedPromotion } from './shared.js';
+import { runSharedPromotion, SharedPromotion } from './shared.js';
 
 interface PerAgentCounts {
   agentFolder: string;
@@ -156,5 +163,44 @@ export async function runHypnopompicReport(
   logger.info(
     { chatJid, totalPromoted, shared: input.shared.length },
     'Hypnopompic Report queued',
+  );
+}
+
+/**
+ * Post-cycle entrypoint. Runs after every per-agent dream cycle has
+ * completed (separate handler, later cron). Aggregates each agent's
+ * promotions from `dream_runs`, runs shared promotion across the now-final
+ * ENGRAMs, then composes and queues the Hypnopompic Report.
+ */
+export async function runDreamReportCycle(deps: {
+  registeredAgents: () => Record<string, RegisteredAgent>;
+}): Promise<void> {
+  const folders = new Set<string>([MAIN_AGENT_FOLDER]);
+  for (const a of Object.values(deps.registeredAgents())) folders.add(a.folder);
+
+  // Look back ~12h to find each folder's most-recent successful run.
+  const sinceUnix = Math.floor(Date.now() / 1000) - 12 * 3600;
+  const recent = getRecentDreamRunsByFolder(sinceUnix);
+  const promotedByFolder = new Map<string, number>();
+  for (const r of recent) promotedByFolder.set(r.agent_folder, r.deep_promoted);
+
+  const perAgent: Array<{ agentFolder: string; promoted: number }> = [];
+  for (const folder of folders) {
+    perAgent.push({
+      agentFolder: folder,
+      promoted: promotedByFolder.get(folder) ?? 0,
+    });
+  }
+
+  const shared = runSharedPromotion([...folders]);
+
+  const mainVar = agentVarDir(MAIN_AGENT_FOLDER);
+  const today = new Date().toISOString().slice(0, 10);
+  const mainDreamPath = path.join(mainVar, 'dreams', `${today}.md`);
+
+  await runHypnopompicReport(
+    mainVar,
+    { perAgent, shared, mainDreamPath },
+    deps.registeredAgents(),
   );
 }
