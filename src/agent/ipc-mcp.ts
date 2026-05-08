@@ -9,17 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { CronExpressionParser } from 'cron-parser';
-import { indexMemoryFiles, searchMemory } from '../db.js';
-import { embed } from './embedder.js';
-import { embedPendingChunks } from './memory-embed.js';
-import {
-  CONTEXT_DIR,
-  GOOGLE_API_KEY,
-  OPENAI_API_KEY,
-  agentVarDir,
-  localDate,
-  localTime,
-} from '../config.js';
+import { GOOGLE_API_KEY, OPENAI_API_KEY, agentVarDir } from '../config.js';
 import {
   startSubprocess,
   readSubprocessOutput,
@@ -754,49 +744,6 @@ Use available_groups.json to find the JID for a group. The folder name should be
         },
       ),
 
-      tool(
-        'memory_search',
-        `Search your memory files and conversation archives using hybrid retrieval (keyword + semantic).
-Returns ranked snippets from memory/ and conversations/ directories.
-Use this to recall past context, decisions, or conversation details.`,
-        {
-          query: z
-            .string()
-            .describe('Search query (keywords, phrases, names, topics)'),
-          limit: z
-            .number()
-            .default(5)
-            .describe('Max results to return (default: 5)'),
-        },
-        async (args) => {
-          const varDir = agentVarDir(agentFolder);
-          indexMemoryFiles(agentFolder, varDir);
-          // Best-effort embed-then-search; if either step fails, search falls back to FTS-only.
-          await embedPendingChunks();
-          const queryVec = await embed(args.query);
-          const results = searchMemory(
-            agentFolder,
-            args.query,
-            queryVec,
-            args.limit,
-          );
-
-          if (results.length === 0) {
-            return {
-              content: [{ type: 'text', text: 'No matching memory found.' }],
-            };
-          }
-
-          const formatted = results
-            .map((r, i) => `${i + 1}. [${r.path}]\n   ${r.snippet}`)
-            .join('\n\n');
-
-          return {
-            content: [{ type: 'text', text: formatted }],
-          };
-        },
-      ),
-
       // ─── Subprocess tools ────────────────────────────────────────────────
 
       tool(
@@ -1010,63 +957,6 @@ Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
             })
             .join('\n');
           return { content: [{ type: 'text', text: summary }] };
-        },
-      ),
-
-      tool(
-        'memory_write',
-        `Save a note to your daily memory log or shared memory. Use this to record decisions, context, observations, or anything worth remembering.
-Entries are appended to today's log (or shared MEMORY.md) and automatically indexed for search.
-Prefer this over Write/Edit for memory — it handles paths and indexing for you.`,
-        {
-          content: z.string().describe('The note to save'),
-          topic: z
-            .string()
-            .optional()
-            .describe(
-              'Optional topic header (e.g., "Ski Trip Plans", "Work Decision")',
-            ),
-          shared: z
-            .boolean()
-            .default(false)
-            .describe('Write to shared MEMORY.md instead of daily log'),
-        },
-        async (args) => {
-          if (args.shared) {
-            const memoryFile = path.join(CONTEXT_DIR, 'MEMORY.md');
-            fs.mkdirSync(path.dirname(memoryFile), { recursive: true });
-            const entry = args.topic
-              ? `\n## ${args.topic}\n\n${args.content}\n`
-              : `\n${args.content}\n`;
-            fs.appendFileSync(memoryFile, entry);
-            return {
-              content: [
-                { type: 'text', text: 'Saved to shared context/MEMORY.md' },
-              ],
-            };
-          }
-
-          const varDir = agentVarDir(agentFolder);
-          const memoryDir = path.join(varDir, 'memory');
-          fs.mkdirSync(memoryDir, { recursive: true });
-
-          const date = localDate();
-          const memoryFile = path.join(memoryDir, `${date}.md`);
-          const time = localTime();
-
-          const header = args.topic
-            ? `## ${args.topic} (${time})`
-            : `## ${time}`;
-          const entry = `\n${header}\n\n${args.content}\n`;
-
-          fs.appendFileSync(memoryFile, entry);
-          indexMemoryFiles(agentFolder, varDir);
-          // Fire-and-forget embedding of new chunks; don't block the agent.
-          void embedPendingChunks();
-
-          return {
-            content: [{ type: 'text', text: `Saved to memory/${date}.md` }],
-          };
         },
       ),
 

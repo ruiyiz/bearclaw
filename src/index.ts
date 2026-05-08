@@ -60,8 +60,6 @@ import {
 import { commandMap } from './commands/registry.js';
 import { startEventBusLoop } from './events/bus.js';
 import { registerHeartbeatHandlers } from './events/heartbeat.js';
-import { registerDreamHandlers } from './dream/handler.js';
-import { embedPendingChunks } from './agent/memory-embed.js';
 import {
   isInActiveWindow,
   getNextActiveTime,
@@ -82,7 +80,8 @@ import {
   startMemoryFlusher,
   flushBeforeSessionClear,
   initFlushCursors,
-} from './agent/memory-flusher.js';
+  recoverOrphanedCheckpoints,
+} from './agent/conversation-checkpoint.js';
 import { logger } from './logger.js';
 import { initSubprocessManager } from './agent/subprocess-manager.js';
 import { startMaintenance } from './maintenance.js';
@@ -1050,16 +1049,23 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
   initFlushCursors(sessions);
+
+  // Recover any orphaned conversation checkpoints (sessions interrupted by
+  // a previous crash). Promote each to a conversation archive.
+  const liveSessionIds = new Set(Object.values(sessions));
+  const seenFolders = new Set<string>();
+  for (const agent of Object.values(registeredAgents)) {
+    if (seenFolders.has(agent.folder)) continue;
+    seenFolders.add(agent.folder);
+    recoverOrphanedCheckpoints(agent.folder, liveSessionIds);
+  }
+
   startMemoryFlusher({ getSessions: () => sessions });
   initSubprocessManager();
   startMaintenance();
 
   registerHeartbeatHandlers(registeredAgents);
   registerEmailHandlers(registeredAgents);
-  registerDreamHandlers(registeredAgents);
-
-  // Best-effort: backfill embeddings for any chunks created or migrated.
-  void embedPendingChunks();
 
   // Initialize channels based on config
   if (!TELEGRAM_ONLY) {

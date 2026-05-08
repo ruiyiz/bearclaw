@@ -70,54 +70,16 @@ export const EMAIL_HANDLER_PREFIX = 'email-';
 // Heartbeat — proactive agent initiative loop
 export const HEARTBEAT_HANDLER_PREFIX = 'heartbeat-';
 
-// Dream cycle — daily memory consolidation; bundles the daily session reset
-export const DREAM_HANDLER_PREFIX = 'dream-';
-// Special handler id for the post-cycle report; runs after every agent's
-// dream cycle completes so it can see their promotions.
-export const DREAM_REPORT_HANDLER_ID = 'dream-cycle-report';
-export const DREAM_ENABLED = process.env.DREAM_ENABLED !== 'false';
-export const DREAM_HOUR = parseInt(process.env.DREAM_HOUR ?? '4', 10);
-export const DREAM_REPORT_OFFSET_MIN = parseInt(
-  process.env.DREAM_REPORT_OFFSET_MIN ?? '30',
+// Warm-start: today's checkpoint + last N days of conversation archives.
+export const WARM_START_DAYS = parseInt(process.env.WARM_START_DAYS ?? '2', 10);
+export const WARM_START_BUDGET_BYTES = parseInt(
+  process.env.WARM_START_BUDGET_BYTES ?? '16384',
   10,
 );
-export const DREAM_LOOKBACK_DAYS = parseInt(
-  process.env.DREAM_LOOKBACK_DAYS ?? '7',
-  10,
-);
-export const DREAM_MIN_NEW_ENTRIES = parseInt(
-  process.env.DREAM_MIN_NEW_ENTRIES ?? '5',
-  10,
-);
-export const DREAM_RECENCY_HALFLIFE = parseInt(
-  process.env.DREAM_RECENCY_HALFLIFE ?? '3',
-  10,
-);
-export const DREAM_MIN_SCORE = parseFloat(
-  process.env.DREAM_MIN_SCORE ?? '0.55',
-);
-export const DREAM_MIN_SUPPORT = parseInt(
-  process.env.DREAM_MIN_SUPPORT ?? '2',
-  10,
-);
-export const DREAM_MIN_DIVERSITY = parseInt(
-  process.env.DREAM_MIN_DIVERSITY ?? '2',
-  10,
-);
-export const DREAM_ENGRAM_LINE_CAP = parseInt(
-  process.env.DREAM_ENGRAM_LINE_CAP ?? '200',
-  10,
-);
-export const DREAM_REPORT_CHANNEL = process.env.DREAM_REPORT_CHANNEL || '';
 
-// Embeddings (vector retrieval)
+// OpenAI key — used by image_generate (gpt-image-2). Long-term memory lives
+// in gbrain (separate process); nanoclaw doesn't embed anything itself.
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-export const EMBEDDING_MODEL =
-  process.env.EMBEDDING_MODEL || 'text-embedding-3-small';
-export const EMBEDDING_DIMS = parseInt(
-  process.env.EMBEDDING_DIMS ?? '1536',
-  10,
-);
 
 // Google AI (Gemini) — image generation via gemini-2.5-flash-image (nano-banana)
 export const GOOGLE_API_KEY =

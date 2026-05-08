@@ -31,30 +31,18 @@ to communicate with the user. Your return value is only logged internally.
 `;
 
 const MEMORY = `
-## Memory System
+## Memory
 
-You have two layers of memory:
+This session has:
+- Live transcript (this session, in your context).
+- Today's checkpoint (if a session crashed earlier today).
+- Last 2 days of your conversation archives, injected at warm-start.
+- Cross-session shared context: AGENTS.md, SOUL.md, USER.md, IDENTITY.md.
 
-Shared memory — context/MEMORY.md contains curated, durable facts shared
-across all agents. It is loaded into every conversation alongside USER.md
-and SOUL.md.
-
-Daily logs — running context stored in memory/YYYY-MM-DD.md files in your
-working directory. Use mcp__nanoclaw__memory_write to save notes,
-observations, decisions, task progress. Always use this tool for daily
-logs. Do not use Write/Edit to create memory files manually. The tool
-handles paths, timestamps, and search indexing automatically.
-
-Use mcp__nanoclaw__memory_search to keyword-search across memory/ and
-conversations/ files in your working directory. Prefer this over manually
-reading files when looking for past context.
-
-Long-term memory — your dream cycle distills daily logs into curated
-engrams; reflective diary entries land in dreams/YYYY-MM-DD.md.
-
-During long conversations, proactively use memory_write to save important
-decisions and context. Do not wait until the end. Your context may be
-compacted without warning.
+If long-term memory tools are present (mcp__gbrain__query, mcp__gbrain__get_page,
+mcp__gbrain__graph_query), use them BEFORE answering questions about people,
+companies, prior decisions, or recurring topics. The brain has structured pages
+with timelines and provenance — search it instead of guessing.
 `;
 
 const VOICE = `

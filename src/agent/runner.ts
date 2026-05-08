@@ -12,10 +12,10 @@ import {
   CONTEXT_DIR,
   RUN_DIR,
   TIMEZONE,
+  WARM_START_BUDGET_BYTES,
+  WARM_START_DAYS,
   agentDir as agentPersistentDir,
   agentVarDir,
-  localDate,
-  localTime,
 } from '../config.js';
 import { createIpcMcp } from './ipc-mcp.js';
 import { emitEvent } from '../db.js';
@@ -80,25 +80,63 @@ export function getSessionSummary(
   return null;
 }
 
+function readWithCap(filePath: string, cap: number): string | null {
+  if (!fs.existsSync(filePath)) return null;
+  const raw = fs.readFileSync(filePath, 'utf-8').trim();
+  if (!raw) return null;
+  if (raw.length <= cap) return raw;
+  return raw.slice(0, cap) + '\n[...truncated]';
+}
+
 function createSessionStartHook(varDir: string): HookCallback {
   return async (_input, _toolUseId, _context) => {
-    const today = new Date().toISOString().split('T')[0];
-    const yesterday = new Date(Date.now() - 86_400_000)
-      .toISOString()
-      .split('T')[0];
-    const memoryDir = path.join(varDir, 'memory');
-
     const parts: string[] = [];
-    for (const date of [yesterday, today]) {
-      const filePath = path.join(memoryDir, `${date}.md`);
-      if (fs.existsSync(filePath)) {
-        let content = fs.readFileSync(filePath, 'utf-8').trim();
-        if (content) {
-          if (content.length > 4000) {
-            content = content.slice(-4000) + '\n[...truncated]';
-          }
-          parts.push(`=== memory/${date}.md ===\n${content}`);
+    let remaining = WARM_START_BUDGET_BYTES;
+
+    // 1. Today's checkpoint (if a session crashed earlier today).
+    const cpDir = path.join(varDir, 'checkpoints');
+    if (fs.existsSync(cpDir) && remaining > 500) {
+      for (const f of fs.readdirSync(cpDir)) {
+        if (!f.endsWith('.md')) continue;
+        const content = readWithCap(
+          path.join(cpDir, f),
+          Math.min(4000, remaining),
+        );
+        if (!content) continue;
+        parts.push(`=== checkpoints/${f} ===\n${content}`);
+        remaining -= content.length;
+        if (remaining < 500) break;
+      }
+    }
+
+    // 2. Last N days of conversation archives, oldest → newest so the most
+    //    recent context lands closest to the live transcript.
+    const conversationsDir = path.join(varDir, 'conversations');
+    if (fs.existsSync(conversationsDir) && remaining > 500) {
+      const days: string[] = [];
+      for (let i = WARM_START_DAYS; i >= 0; i--) {
+        days.push(
+          new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10),
+        );
+      }
+      const archives = fs
+        .readdirSync(conversationsDir)
+        .filter((f) => f.endsWith('.md'));
+      for (const day of days) {
+        const dayArchives = archives
+          .filter((f) => f.startsWith(`${day}-`))
+          .sort();
+        for (const f of dayArchives) {
+          const content = readWithCap(
+            path.join(conversationsDir, f),
+            Math.min(4000, remaining),
+          );
+          if (!content) continue;
+          parts.push(`=== conversations/${f} ===\n${content}`);
+          remaining -= content.length;
+          if (remaining < 500) break;
         }
+        if (remaining < 500) break;
       }
     }
 
@@ -107,7 +145,9 @@ function createSessionStartHook(varDir: string): HookCallback {
     return {
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
-        additionalContext: `Recent daily memory logs:\n\n${parts.join('\n\n')}`,
+        additionalContext: `Warm-start context (recent checkpoint + conversation archives):\n\n${parts.join(
+          '\n\n',
+        )}`,
       },
     };
   };
@@ -198,7 +238,7 @@ export function formatTranscriptMarkdown(
 function buildContextPrompt(agentFolder: string): string {
   const parts: string[] = [];
 
-  for (const file of ['AGENTS.md', 'SOUL.md', 'USER.md', 'MEMORY.md']) {
+  for (const file of ['AGENTS.md', 'CONTEXT.md', 'SOUL.md', 'USER.md']) {
     const filePath = path.join(CONTEXT_DIR, file);
     if (fs.existsSync(filePath)) {
       const content = fs.readFileSync(filePath, 'utf-8').trim();
@@ -316,6 +356,37 @@ export async function runContainerAgent(
           'WebFetch',
           'Skill',
           'mcp__*',
+        ],
+        // Treat the gbrain MCP as read-only: every mutating/admin op is
+        // explicitly denied here so a hallucinated tool call cannot rewrite
+        // pages, advance sync state, or queue jobs. Read ops (query, get_page,
+        // list_pages, traverse_graph, get_timeline, etc.) remain available
+        // via the `mcp__*` allowlist above.
+        disallowedTools: [
+          'mcp__gbrain__put_page',
+          'mcp__gbrain__delete_page',
+          'mcp__gbrain__restore_page',
+          'mcp__gbrain__purge_deleted_pages',
+          'mcp__gbrain__think',
+          'mcp__gbrain__add_tag',
+          'mcp__gbrain__remove_tag',
+          'mcp__gbrain__add_link',
+          'mcp__gbrain__remove_link',
+          'mcp__gbrain__add_timeline_entry',
+          'mcp__gbrain__revert_version',
+          'mcp__gbrain__sync_brain',
+          'mcp__gbrain__put_raw_data',
+          'mcp__gbrain__log_ingest',
+          'mcp__gbrain__file_upload',
+          'mcp__gbrain__submit_job',
+          'mcp__gbrain__cancel_job',
+          'mcp__gbrain__retry_job',
+          'mcp__gbrain__pause_job',
+          'mcp__gbrain__resume_job',
+          'mcp__gbrain__replay_job',
+          'mcp__gbrain__send_job_message',
+          'mcp__gbrain__sources_add',
+          'mcp__gbrain__sources_remove',
         ],
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
