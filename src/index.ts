@@ -353,11 +353,23 @@ async function processMessage(msg: NewMessage): Promise<void> {
         channel.setTyping?.(msg.chat_jid, true).catch(() => {});
       }, 4000);
       let lastEditTime = 0;
+      let stoppedStreamingEdits = false;
+      // Conservative threshold: raw markdown shorter than this typically
+      // renders to <=4096 HTML chars even with markup expansion. Beyond it,
+      // we hand off to the post-stream final pass to chunk properly. Editing
+      // the placeholder mid-stream after that would emit duplicate chunks
+      // every 800 ms.
+      const STREAM_EDIT_LIMIT = 3500;
       onText = (text: string) => {
         // Stop typing indicator once text starts appearing
         if (typingInterval) {
           clearInterval(typingInterval);
           typingInterval = undefined;
+        }
+        if (stoppedStreamingEdits) return;
+        if (text.length > STREAM_EDIT_LIMIT) {
+          stoppedStreamingEdits = true;
+          return;
         }
         if (Date.now() - lastEditTime >= 800) {
           lastEditTime = Date.now();

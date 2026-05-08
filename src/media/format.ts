@@ -25,11 +25,7 @@ function renderTable(
     .join('\n');
 }
 
-function formatListItem(
-  prefix: string,
-  body: string,
-  indent: string,
-): string {
+function formatListItem(prefix: string, body: string, indent: string): string {
   const trimmed = body.replace(/\n$/, '');
   const lines = trimmed.split('\n');
   const first = lines[0];
@@ -76,8 +72,7 @@ export const TelegramHtmlRenderer: RendererObject = {
       const item = token.items[i];
       const body = this.parser.parse(item.tokens);
       if (token.ordered) {
-        const start =
-          typeof token.start === 'number' ? token.start : 1;
+        const start = typeof token.start === 'number' ? token.start : 1;
         const prefix = start + i + '. ';
         result += formatListItem(prefix, body, '   ');
       } else {
@@ -90,17 +85,19 @@ export const TelegramHtmlRenderer: RendererObject = {
     return this.parser.parseInline(tokens) + '\n';
   },
   link({ href, tokens }) {
-    return '<a href="' + escapeHtml(href) + '">' + this.parser.parseInline(tokens) + '</a>';
+    return (
+      '<a href="' +
+      escapeHtml(href) +
+      '">' +
+      this.parser.parseInline(tokens) +
+      '</a>'
+    );
   },
   image({ href, text }) {
     return escapeHtml(text) + ' (' + href + ')';
   },
   table(token) {
-    const content = renderTable(
-      token.header,
-      token.rows,
-      (c) => c.text,
-    );
+    const content = renderTable(token.header, token.rows, (c) => c.text);
     return '<pre>' + escapeHtml(content) + '</pre>\n';
   },
   text(token) {
@@ -147,10 +144,12 @@ export const WhatsAppRenderer: RendererObject = {
   },
   blockquote({ tokens }) {
     const body = this.parser.parse(tokens).trim();
-    return body
-      .split('\n')
-      .map((line: string) => '> ' + line)
-      .join('\n') + '\n';
+    return (
+      body
+        .split('\n')
+        .map((line: string) => '> ' + line)
+        .join('\n') + '\n'
+    );
   },
   hr() {
     return '\u2014\u2014\u2014\n';
@@ -161,8 +160,7 @@ export const WhatsAppRenderer: RendererObject = {
       const item = token.items[i];
       const body = this.parser.parse(item.tokens);
       if (token.ordered) {
-        const start =
-          typeof token.start === 'number' ? token.start : 1;
+        const start = typeof token.start === 'number' ? token.start : 1;
         const prefix = start + i + '. ';
         result += formatListItem(prefix, body, '   ');
       } else {
@@ -182,10 +180,8 @@ export const WhatsAppRenderer: RendererObject = {
     return text + ' (' + href + ')';
   },
   table(token) {
-    const content = renderTable(
-      token.header,
-      token.rows,
-      (c) => this.parser.parseInline(c.tokens),
+    const content = renderTable(token.header, token.rows, (c) =>
+      this.parser.parseInline(c.tokens),
     );
     return content + '\n';
   },
@@ -213,18 +209,32 @@ export const WhatsAppRenderer: RendererObject = {
 };
 
 export const PlainTextRenderer: RendererObject = {
-  strong({ tokens }) { return this.parser.parseInline(tokens); },
-  em({ tokens }) { return this.parser.parseInline(tokens); },
-  del({ tokens }) { return this.parser.parseInline(tokens); },
-  codespan({ text }) { return text; },
-  code({ text }) { return text + '\n'; },
+  strong({ tokens }) {
+    return this.parser.parseInline(tokens);
+  },
+  em({ tokens }) {
+    return this.parser.parseInline(tokens);
+  },
+  del({ tokens }) {
+    return this.parser.parseInline(tokens);
+  },
+  codespan({ text }) {
+    return text;
+  },
+  code({ text }) {
+    return text + '\n';
+  },
   heading({ tokens, depth }) {
     const text = this.parser.parseInline(tokens);
     const emoji = depth === 1 ? '◆' : depth === 2 ? '▸' : '•';
     return `${emoji} ${text}\n\n`;
   },
-  blockquote({ tokens }) { return this.parser.parse(tokens).trim() + '\n'; },
-  hr() { return '---\n'; },
+  blockquote({ tokens }) {
+    return this.parser.parse(tokens).trim() + '\n';
+  },
+  hr() {
+    return '---\n';
+  },
   list(token) {
     let result = '';
     for (let i = 0; i < token.items.length; i++) {
@@ -239,24 +249,43 @@ export const PlainTextRenderer: RendererObject = {
     }
     return result;
   },
-  paragraph({ tokens }) { return this.parser.parseInline(tokens) + '\n'; },
+  paragraph({ tokens }) {
+    return this.parser.parseInline(tokens) + '\n';
+  },
   link({ href, tokens }) {
     const text = this.parser.parseInline(tokens);
     return text === href ? href : `${text} (${href})`;
   },
-  image({ text }) { return text; },
+  image({ text }) {
+    return text;
+  },
   table(token) {
-    return renderTable(token.header, token.rows, (c) => this.parser.parseInline(c.tokens)) + '\n';
+    return (
+      renderTable(token.header, token.rows, (c) =>
+        this.parser.parseInline(c.tokens),
+      ) + '\n'
+    );
   },
   text(token) {
-    if ('tokens' in token && token.tokens) return this.parser.parseInline(token.tokens) + '\n';
+    if ('tokens' in token && token.tokens)
+      return this.parser.parseInline(token.tokens) + '\n';
     return token.text;
   },
-  br() { return '\n'; },
-  html() { return ''; },
-  space() { return '\n'; },
-  def() { return ''; },
-  checkbox({ checked }) { return checked ? '[x] ' : '[ ] '; },
+  br() {
+    return '\n';
+  },
+  html() {
+    return '';
+  },
+  space() {
+    return '\n';
+  },
+  def() {
+    return '';
+  },
+  checkbox({ checked }) {
+    return checked ? '[x] ' : '[ ] ';
+  },
 };
 
 export function renderMarkdown(
@@ -270,4 +299,76 @@ export function renderMarkdown(
   } catch {
     return markdown.trim();
   }
+}
+
+// Splits markdown into top-level blocks suitable for independent rendering.
+// Blocks are separated by blank lines. Fenced code blocks are kept atomic.
+export function splitMarkdownBlocks(markdown: string): string[] {
+  const lines = markdown.split('\n');
+  const blocks: string[] = [];
+  let cur: string[] = [];
+  let fence: string | null = null;
+  for (const line of lines) {
+    const fm = line.match(/^(```+|~~~+)/);
+    if (fm && !fence) {
+      fence = fm[1];
+      cur.push(line);
+    } else if (fm && fence && line.startsWith(fence)) {
+      fence = null;
+      cur.push(line);
+    } else if (!fence && line.trim() === '') {
+      if (cur.length) {
+        blocks.push(cur.join('\n'));
+        cur = [];
+      }
+    } else {
+      cur.push(line);
+    }
+  }
+  if (cur.length) blocks.push(cur.join('\n'));
+  return blocks;
+}
+
+// Chunks rendered HTML for delivery channels that cap message length but
+// reject malformed entities (e.g. Telegram's 4096-char limit). Renders each
+// markdown block independently so HTML tags never straddle chunk boundaries.
+// Falls back to plain text only for individual blocks that exceed `max` on
+// their own, leaving the rest of the message richly formatted.
+export function chunkMarkdownForChannel(
+  markdown: string,
+  max: number,
+  htmlRenderer: RendererObject,
+  plainRenderer: RendererObject,
+): string[] {
+  const full = renderMarkdown(markdown, htmlRenderer);
+  if (full.length <= max) return [full];
+
+  const chunks: string[] = [];
+  let cur = '';
+  const flush = () => {
+    if (cur) {
+      chunks.push(cur);
+      cur = '';
+    }
+  };
+  for (const block of splitMarkdownBlocks(markdown)) {
+    const rendered = renderMarkdown(block, htmlRenderer);
+    if (rendered.length > max) {
+      flush();
+      const plain = renderMarkdown(block, plainRenderer);
+      for (let i = 0; i < plain.length; i += max) {
+        chunks.push(plain.slice(i, i + max));
+      }
+      continue;
+    }
+    const candidate = cur ? cur + '\n\n' + rendered : rendered;
+    if (candidate.length <= max) {
+      cur = candidate;
+    } else {
+      flush();
+      cur = rendered;
+    }
+  }
+  flush();
+  return chunks;
 }

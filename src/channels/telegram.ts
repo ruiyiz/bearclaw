@@ -7,6 +7,7 @@ import { commands } from '../commands/registry.js';
 import { formatStatus } from '../commands/status.js';
 import { ASSISTANT_NAME, TRIGGER_PATTERN, agentVarDir } from '../config.js';
 import {
+  chunkMarkdownForChannel,
   PlainTextRenderer,
   renderMarkdown,
   TelegramHtmlRenderer,
@@ -425,27 +426,24 @@ export class TelegramChannel implements Channel {
 
     try {
       const numericId = jid.replace(/^tg:/, '');
-      const formatted = renderMarkdown(text, TelegramHtmlRenderer);
       const MAX_LENGTH = 4096;
-      if (formatted.length <= MAX_LENGTH) {
-        await this.bot.api.sendMessage(numericId, formatted, {
+      const chunks = chunkMarkdownForChannel(
+        text,
+        MAX_LENGTH,
+        TelegramHtmlRenderer,
+        PlainTextRenderer,
+      );
+      for (const chunk of chunks) {
+        await this.bot.api.sendMessage(numericId, chunk, {
           parse_mode: 'HTML',
         });
-        logger.info({ jid, length: formatted.length }, 'Telegram message sent');
-        return;
-      }
-      // Naive chunking would split HTML tag pairs (e.g. <pre><code>...</code></pre>)
-      // and Telegram rejects each chunk as malformed entities. Fall back to
-      // plain text — chunks remain renderable, just without inline formatting.
-      const plain = renderMarkdown(text, PlainTextRenderer);
-      for (let i = 0; i < plain.length; i += MAX_LENGTH) {
-        await this.bot.api.sendMessage(
-          numericId,
-          plain.slice(i, i + MAX_LENGTH),
-        );
       }
       logger.info(
-        { jid, length: plain.length, mode: 'plain-chunked' },
+        {
+          jid,
+          chunks: chunks.length,
+          length: chunks.reduce((n, c) => n + c.length, 0),
+        },
         'Telegram message sent',
       );
     } catch (err) {
@@ -464,15 +462,25 @@ export class TelegramChannel implements Channel {
     messageId: number,
     text: string,
   ): Promise<void> {
+    const MAX_LENGTH = 4096;
+    const numericId = jid.replace(/^tg:/, '');
     try {
-      const numericId = jid.replace(/^tg:/, '');
-      const formatted = renderMarkdown(text, TelegramHtmlRenderer).slice(
-        0,
-        4096,
+      const chunks = chunkMarkdownForChannel(
+        text,
+        MAX_LENGTH,
+        TelegramHtmlRenderer,
+        PlainTextRenderer,
       );
-      await this.bot!.api.editMessageText(numericId, messageId, formatted, {
+      // First chunk replaces the streaming placeholder; the rest follow as
+      // new messages so the user sees a continuous reply.
+      await this.bot!.api.editMessageText(numericId, messageId, chunks[0], {
         parse_mode: 'HTML',
       });
+      for (let i = 1; i < chunks.length; i++) {
+        await this.bot!.api.sendMessage(numericId, chunks[i], {
+          parse_mode: 'HTML',
+        });
+      }
     } catch {
       // Ignore "message is not modified" and other transient edit errors
     }
