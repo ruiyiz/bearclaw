@@ -45,7 +45,7 @@ jobs and the operator's CLI retain full write access.
 | `src/db.ts`                                    | SQLite operations (messages, chats, events, handlers)                |
 | `~/.nanoclaw/context/`                         | Shared context: AGENTS.md, CONTEXT.md, SOUL.md, USER.md              |
 | `~/.nanoclaw/agents/{name}/IDENTITY.md`        | Per-agent identity                                                   |
-| `~/.nanoclaw/var/agents/{name}/conversations/` | Session-end conversation archives (`YYYY-MM-DD-name.md`)             |
+| `~/.nanoclaw/var/agents/{name}/conversations/` | Daily conversation archives (`YYYY-MM-DD.md`, written by 1am flush)  |
 | `~/.nanoclaw/var/agents/{name}/checkpoints/`   | Live transcript checkpoint per session (crash safety)                |
 | `~/.nanoclaw/skills/`                          | Skill definitions (SKILL.md per skill)                               |
 | `~/.gbrain/`                                   | gbrain PGLite store + cron wrappers + logs; populated by gbrain sync |
