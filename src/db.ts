@@ -447,7 +447,7 @@ export function cleanupProcessedEvents(): void {
 // ─── Handler matching ──────────────────────────────────────────────────────
 
 export function getMatchingHandlers(event: EventRecord): Handler[] {
-  const handlers = db
+  const allHandlers = db
     .prepare(
       `SELECT * FROM handlers WHERE event_type = ? AND status = 'active'`,
     )
@@ -461,6 +461,13 @@ export function getMatchingHandlers(event: EventRecord): Handler[] {
     payload = {};
   }
 
+  // cron_trigger events target a specific handler by id. Match on the
+  // primary key directly so renames don't silently break dispatch.
+  const handlers =
+    event.type === 'cron_trigger' && typeof payload.handler_id === 'string'
+      ? allHandlers.filter((h) => h.id === payload.handler_id)
+      : allHandlers;
+
   return handlers.filter((h) => {
     // Check cooldown
     if (h.cooldown_ms > 0 && h.last_triggered) {
@@ -473,8 +480,9 @@ export function getMatchingHandlers(event: EventRecord): Handler[] {
       return false;
     }
 
-    // Check filter (all keys must match payload)
-    if (h.filter) {
+    // Check filter (all keys must match payload). Skipped for cron_trigger
+    // since dispatch is already by handler id above.
+    if (h.filter && event.type !== 'cron_trigger') {
       try {
         const filter = JSON.parse(h.filter) as Record<string, unknown>;
         for (const [key, value] of Object.entries(filter)) {
