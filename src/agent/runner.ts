@@ -66,6 +66,69 @@ interface ContainerInput {
   model?: string;
   effort?: EffortLevel;
   onText?: (text: string) => void;
+  onActivity?: (label: string) => void;
+}
+
+function trimLabel(s: string, n = 60): string {
+  const t = s.replace(/\s+/g, ' ').trim();
+  return t.length > n ? t.slice(0, n - 1) + '…' : t;
+}
+
+function describeToolUse(b: {
+  name?: string;
+  input?: Record<string, unknown>;
+}): string {
+  const name = b.name || 'Tool';
+  const input = (b.input || {}) as Record<string, string | undefined>;
+  const baseFile = (p?: string) =>
+    p ? p.split('/').filter(Boolean).pop() || p : '';
+  switch (name) {
+    case 'Bash':
+      return `Bash: ${trimLabel(input.description || input.command || '')}`;
+    case 'Read':
+      return `Read ${baseFile(input.file_path)}`;
+    case 'Write':
+      return `Write ${baseFile(input.file_path)}`;
+    case 'Edit':
+      return `Edit ${baseFile(input.file_path)}`;
+    case 'Glob':
+      return `Glob ${trimLabel(input.pattern || '')}`;
+    case 'Grep':
+      return `Grep ${trimLabel(input.pattern || '')}`;
+    case 'WebSearch':
+      return `Search: ${trimLabel(input.query || '')}`;
+    case 'WebFetch': {
+      try {
+        const u = new URL(input.url || '');
+        return `Fetch ${u.hostname}`;
+      } catch {
+        return 'Fetch';
+      }
+    }
+    case 'Skill':
+      return `Skill: ${trimLabel(input.skill || input.name || '')}`;
+    default:
+      if (name.startsWith('mcp__')) {
+        const parts = name.split('__');
+        return parts.slice(-1)[0];
+      }
+      return name;
+  }
+}
+
+function describeBlock(b: {
+  type?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+}): string | null {
+  if (!b?.type) return null;
+  if (b.type === 'thinking') return 'Thinking';
+  // Skip text blocks: progress mode replaces the placeholder with the full
+  // reply right after the stream ends, so a "Replying" indicator would only
+  // flash for a moment before being overwritten.
+  if (b.type === 'text') return null;
+  if (b.type === 'tool_use') return describeToolUse(b);
+  return null;
 }
 
 interface ContainerOutput {
@@ -584,6 +647,19 @@ export async function runContainerAgent(
         }
       }
 
+      if (input.onActivity && message.type === 'assistant') {
+        const blocks = (message as { message?: { content?: unknown } })?.message
+          ?.content;
+        if (Array.isArray(blocks)) {
+          let label: string | null = null;
+          for (const b of blocks) {
+            const l = describeBlock(b as { type?: string });
+            if (l) label = l;
+          }
+          if (label) input.onActivity(label);
+        }
+      }
+
       if ('result' in message && message.result) {
         result = message.result as string;
       }
@@ -633,13 +709,13 @@ export async function runContainerAgent(
     // Crash safety: dump the current transcript to the session's checkpoint
     // file before the periodic flusher would otherwise tick. A session that
     // ends abruptly here (network blip, kernel signal) still leaves the
-    // latest turn on disk for the daily consolidator to pick up.
+    // latest turn on disk for the daily consolidator to pick up. Run off the
+    // critical path so the user-visible final reply isn't blocked on disk I/O.
     if (newSessionId) {
-      try {
-        await writeTurnCheckpoint(varDir, newSessionId);
-      } catch (err) {
+      const sid = newSessionId;
+      void writeTurnCheckpoint(varDir, sid).catch((err) => {
         logger.warn({ err, group: group.name }, 'Per-turn checkpoint failed');
-      }
+      });
     }
 
     // Emit agent_complete event
@@ -711,40 +787,53 @@ export interface AvailableGroup {
   isRegistered: boolean;
 }
 
+// Per-agent caches of the last-written snapshot JSON. We write only when the
+// content differs, and we hand the actual disk write to fs.promises so the
+// pre-query path doesn't block on it. The next IPC MCP read inside the agent
+// happens hundreds of ms later (after SDK init + first tool dispatch), so a
+// fire-and-forget write lands well before any reader.
+const lastHandlersJson: Record<string, string> = {};
+const lastGroupsJson: Record<string, string> = {};
+
 export function writeHandlersSnapshot(
   agentFolder: string,
   isMain: boolean,
   handlers: Handler[],
 ): void {
-  const agentIpcDir = path.join(RUN_DIR, 'ipc', agentFolder);
-  fs.mkdirSync(agentIpcDir, { recursive: true });
-
   const filteredHandlers = isMain
     ? handlers
     : handlers.filter((h) => h.group_folder === agentFolder);
 
-  const handlersFile = path.join(agentIpcDir, 'current_handlers.json');
-  fs.writeFileSync(
-    handlersFile,
-    JSON.stringify(
-      filteredHandlers.map((h) => ({
-        id: h.id,
-        event_type: h.event_type,
-        filter: h.filter,
-        group_folder: h.group_folder,
-        prompt: h.prompt.slice(0, 100),
-        context_mode: h.context_mode,
-        cron: h.cron,
-        next_run: h.next_run,
-        cooldown_ms: h.cooldown_ms,
-        max_triggers: h.max_triggers,
-        trigger_count: h.trigger_count,
-        status: h.status,
-      })),
-      null,
-      2,
-    ),
+  const json = JSON.stringify(
+    filteredHandlers.map((h) => ({
+      id: h.id,
+      event_type: h.event_type,
+      filter: h.filter,
+      group_folder: h.group_folder,
+      prompt: h.prompt.slice(0, 100),
+      context_mode: h.context_mode,
+      cron: h.cron,
+      next_run: h.next_run,
+      cooldown_ms: h.cooldown_ms,
+      max_triggers: h.max_triggers,
+      trigger_count: h.trigger_count,
+      status: h.status,
+    })),
+    null,
+    2,
   );
+  if (lastHandlersJson[agentFolder] === json) return;
+  lastHandlersJson[agentFolder] = json;
+
+  const agentIpcDir = path.join(RUN_DIR, 'ipc', agentFolder);
+  const handlersFile = path.join(agentIpcDir, 'current_handlers.json');
+  void fs.promises
+    .mkdir(agentIpcDir, { recursive: true })
+    .then(() => fs.promises.writeFile(handlersFile, json))
+    .catch((err) => {
+      delete lastHandlersJson[agentFolder];
+      logger.warn({ err, agentFolder }, 'Handlers snapshot write failed');
+    });
 }
 
 export function writeAgentsSnapshot(
@@ -753,21 +842,25 @@ export function writeAgentsSnapshot(
   groups: AvailableGroup[],
   registeredJids: Set<string>,
 ): void {
-  const agentIpcDir = path.join(RUN_DIR, 'ipc', agentFolder);
-  fs.mkdirSync(agentIpcDir, { recursive: true });
-
   const visibleGroups = isMain ? groups : [];
+  // lastSync intentionally omitted from the diff key so a timestamp-only
+  // change doesn't trigger a write every turn.
+  const payloadJson = JSON.stringify(visibleGroups);
+  if (lastGroupsJson[agentFolder] === payloadJson) return;
+  lastGroupsJson[agentFolder] = payloadJson;
 
+  const agentIpcDir = path.join(RUN_DIR, 'ipc', agentFolder);
   const groupsFile = path.join(agentIpcDir, 'available_groups.json');
-  fs.writeFileSync(
-    groupsFile,
-    JSON.stringify(
-      {
-        groups: visibleGroups,
-        lastSync: new Date().toISOString(),
-      },
-      null,
-      2,
-    ),
+  const fullJson = JSON.stringify(
+    { groups: visibleGroups, lastSync: new Date().toISOString() },
+    null,
+    2,
   );
+  void fs.promises
+    .mkdir(agentIpcDir, { recursive: true })
+    .then(() => fs.promises.writeFile(groupsFile, fullJson))
+    .catch((err) => {
+      delete lastGroupsJson[agentFolder];
+      logger.warn({ err, agentFolder }, 'Groups snapshot write failed');
+    });
 }

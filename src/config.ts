@@ -64,6 +64,17 @@ export const TRIGGER_PATTERN = new RegExp(
 
 export const STT_ECHO_ENABLED = process.env.STT_ECHO_ENABLED !== 'false';
 
+// Streaming UI mode for Telegram (the only channel that supports
+// edit-in-place today).
+//   'live'     — stream the assistant's text into the placeholder live as
+//                tokens arrive. No progress indicator.
+//   'progress' — show a live activity indicator (current tool / thinking +
+//                elapsed seconds) and replace with the full reply at the
+//                end. No mid-stream text.
+// Defaults to 'live'.
+export const TELEGRAM_STREAM_MODE: 'live' | 'progress' =
+  process.env.TELEGRAM_STREAM_MODE === 'progress' ? 'progress' : 'live';
+
 export const EMAIL_DEFAULT_INTERVAL = '1h';
 export const EMAIL_HANDLER_PREFIX = 'email-';
 

@@ -26,6 +26,7 @@ import {
   TMP_DIR,
   VAR_DIR,
   STT_ECHO_ENABLED,
+  TELEGRAM_STREAM_MODE,
   agentVarDir,
 } from './config.js';
 import {
@@ -337,28 +338,94 @@ async function processMessage(msg: NewMessage): Promise<void> {
     }
   }
 
-  // Set up streaming if the channel supports it (Telegram)
+  // Set up streaming if the channel supports it (Telegram). Kick off the
+  // placeholder send and the agent in parallel so the SDK doesn't wait on a
+  // Telegram round-trip before producing tokens. onText holds edits until the
+  // placeholder id resolves.
   let streamingMsgId: number | undefined;
+  let streamingMsgIdPromise: Promise<number | undefined> | undefined;
   let onText: ((text: string) => void) | undefined;
+  let onActivity: ((label: string) => void) | undefined;
   let typingInterval: ReturnType<typeof setInterval> | undefined;
+  let progressTimer: ReturnType<typeof setInterval> | undefined;
+  let lastStreamedText = '';
+  let stoppedStreamingEdits = false;
+  let activity = 'Thinking';
+  let lastProgressBody = '';
+  const stopProgressDots = () => {
+    if (progressTimer) {
+      clearInterval(progressTimer);
+      progressTimer = undefined;
+    }
+  };
   if (channel?.sendMessageWithId && channel?.editMessage) {
-    try {
-      streamingMsgId = await channel.sendMessageWithId(
-        msg.chat_jid,
-        '💬⏳\u200B',
-      );
-      // Animated typing indicator in the chat header, refreshed every 4s
+    // Initial placeholder body. Live mode shows a chat+hourglass with a
+    // trailing zero-width space (U+200B) so the body never matches a later
+    // edit byte-for-byte, sidestepping Telegram's "message is not modified"
+    // 400 on the first edit. Progress mode uses the activity indicator
+    // directly so the dialog/hourglass don't flash before the first tick.
+    const initialPlaceholder =
+      TELEGRAM_STREAM_MODE === 'progress' ? `🔄 ${activity}… 0s` : '💬⏳​';
+    streamingMsgIdPromise = channel
+      .sendMessageWithId(msg.chat_jid, initialPlaceholder)
+      .then((id) => {
+        streamingMsgId = id;
+        return id;
+      })
+      .catch((err) => {
+        logger.debug({ err }, 'Failed to send streaming placeholder');
+        return undefined;
+      });
+    // Wait for the placeholder to land before firing the typing chat-action,
+    // otherwise Telegram cancels the action when the bot's message arrives
+    // and the user never sees the indicator.
+    streamingMsgIdPromise.then((id) => {
+      if (id === undefined) return;
       channel.setTyping?.(msg.chat_jid, true).catch(() => {});
-      typingInterval = setInterval(() => {
-        channel.setTyping?.(msg.chat_jid, true).catch(() => {});
-      }, 4000);
+    });
+    typingInterval = setInterval(() => {
+      channel.setTyping?.(msg.chat_jid, true).catch(() => {});
+    }, 4000);
+
+    if (TELEGRAM_STREAM_MODE === 'progress') {
+      // Progress-bar mode: live-update an activity indicator
+      //   <emoji> <current activity>… <elapsed>s
+      // every tick until the agent finishes. The activity label tracks the
+      // most recent assistant block (Thinking / Tool: arg / Replying); the
+      // elapsed counter advances every tick so the user can tell whether
+      // work is happening even when no text is streaming. The full reply
+      // replaces the placeholder once runAgent returns.
+      const PROGRESS_TICK_MS = 1000;
+      const turnStart = Date.now();
+      activity = 'Thinking';
+      const renderProgress = () => {
+        const sec = Math.max(1, Math.floor((Date.now() - turnStart) / 1000));
+        return `🔄 ${activity}… ${sec}s`;
+      };
+      const tick = () => {
+        const body = renderProgress();
+        if (body === lastProgressBody) return;
+        lastProgressBody = body;
+        streamingMsgIdPromise!.then((id) => {
+          if (id === undefined || progressTimer === undefined) return;
+          channel.editMessage!(msg.chat_jid, id, body).catch(() => {});
+        });
+      };
+      progressTimer = setInterval(tick, PROGRESS_TICK_MS);
+      setTimeout(() => {
+        if (progressTimer !== undefined) tick();
+      }, 250);
+      onActivity = (label: string) => {
+        activity = label;
+        // Edit immediately on activity change so the indicator stays current
+        // even between ticks.
+        tick();
+      };
+    } else {
+      // Live mode: stream the assistant's text into the placeholder as
+      // deltas arrive. Throttle edits and gate past STREAM_EDIT_LIMIT so
+      // the final chunked pass handles long replies.
       let lastEditTime = 0;
-      let stoppedStreamingEdits = false;
-      // Conservative threshold: raw markdown shorter than this typically
-      // renders to <=4096 HTML chars even with markup expansion. Beyond it,
-      // we hand off to the post-stream final pass to chunk properly. Editing
-      // the placeholder mid-stream after that would emit duplicate chunks
-      // every 800 ms.
       const STREAM_EDIT_LIMIT = 3500;
       onText = (text: string) => {
         // Stop typing indicator once text starts appearing
@@ -371,30 +438,33 @@ async function processMessage(msg: NewMessage): Promise<void> {
           stoppedStreamingEdits = true;
           return;
         }
-        if (Date.now() - lastEditTime >= 800) {
-          lastEditTime = Date.now();
-          channel.editMessage!(msg.chat_jid, streamingMsgId!, text).catch(
-            () => {},
-          );
-        }
+        if (Date.now() - lastEditTime < 600) return;
+        lastEditTime = Date.now();
+        lastStreamedText = text;
+        streamingMsgIdPromise!.then((id) => {
+          if (id === undefined) return;
+          channel.editMessage!(msg.chat_jid, id, text).catch(() => {});
+        });
       };
-    } catch (err) {
-      logger.debug({ err }, 'Failed to send streaming placeholder');
     }
   }
 
-  if (!streamingMsgId && channel) await channel.setTyping?.(msg.chat_jid, true);
+  if (!streamingMsgIdPromise && channel)
+    await channel.setTyping?.(msg.chat_jid, true);
   const { text: response, sentMediaViaIpc } = await runAgent(
     agent,
     prompt,
     msg.chat_jid,
     onText,
+    onActivity,
   );
   if (typingInterval) {
     clearInterval(typingInterval);
     typingInterval = undefined;
   }
-  if (!streamingMsgId && channel)
+  stopProgressDots();
+  if (streamingMsgIdPromise) await streamingMsgIdPromise;
+  if (!streamingMsgIdPromise && channel)
     await channel.setTyping?.(msg.chat_jid, false);
 
   if (channel) {
@@ -413,7 +483,13 @@ async function processMessage(msg: NewMessage): Promise<void> {
     } else if (cleaned && !isNonResponse(cleaned)) {
       lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
       if (streamingMsgId && channel.editMessage) {
-        await channel.editMessage(msg.chat_jid, streamingMsgId, cleaned);
+        // Skip the final edit if the last streamed tick already pushed the
+        // identical text — avoids a redundant marked re-parse + Telegram API
+        // call. Always run when the stream gate stopped mid-reply, since the
+        // partial preview was suppressed past STREAM_EDIT_LIMIT.
+        if (stoppedStreamingEdits || cleaned !== lastStreamedText) {
+          await channel.editMessage(msg.chat_jid, streamingMsgId, cleaned);
+        }
       } else {
         await channel.sendMessage(msg.chat_jid, cleaned);
       }
@@ -457,6 +533,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onText?: (text: string) => void,
+  onActivity?: (label: string) => void,
 ): Promise<{ text: string | null; sentMediaViaIpc: boolean }> {
   const isMain = agent.folder === MAIN_AGENT_FOLDER;
   const sessionId = sessions[agent.folder];
@@ -488,6 +565,7 @@ async function runAgent(
         | 'max'
         | undefined,
       onText,
+      onActivity,
     });
 
     if (output.newSessionId) {
