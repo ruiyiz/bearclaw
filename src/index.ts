@@ -273,6 +273,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
           saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
           logger.info({ agent: agent.name }, 'Session cleared by user');
         },
+        getSessionId: () => sessions[agent.folder],
         getModel: () => agentModels[agent.folder],
         setModel: (model: string) => {
           agentModels[agent.folder] = model;

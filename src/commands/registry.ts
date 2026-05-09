@@ -1,3 +1,4 @@
+import { contextCommand } from './context.js';
 import { effortCommand } from './effort.js';
 import { jobsCommand } from './jobs.js';
 import { modelCommand } from './model.js';
@@ -15,6 +16,7 @@ const helpCommand: SlashCommand = {
 };
 
 export const commands: SlashCommand[] = [
+  contextCommand,
   effortCommand,
   helpCommand,
   jobsCommand,
