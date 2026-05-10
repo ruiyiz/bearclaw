@@ -1,3 +1,4 @@
+import { STREAMING_INPUT_ENABLED } from '../config.js';
 import { DEFAULT_EFFORT, EFFORT_LEVELS, EffortLevel } from '../agent/runner.js';
 import { SlashCommand } from './types.js';
 
@@ -19,7 +20,7 @@ function normalize(input: string): EffortLevel | undefined {
 export const effortCommand: SlashCommand = {
   name: 'effort',
   description:
-    'Show or set thinking effort. Usage: `/effort` or `/effort low|medium|high|xhigh|max`. Per-turn bump: include `think hard`, `think harder`, or `ultrathink` in your message.',
+    'Show or set thinking effort. Usage: `/effort` or `/effort low|medium|high|xhigh|max`.',
   handler: async ({ args, getEffort, setEffort, reply }) => {
     const arg = args.trim();
     if (!arg) {
@@ -37,9 +38,11 @@ export const effortCommand: SlashCommand = {
       return;
     }
     setEffort(target);
+    const tail = STREAMING_INPUT_ENABLED
+      ? ''
+      : ' Bump per-turn with `think hard` / `think harder` / `ultrathink`.';
     await reply(
-      `Effort set to \`${target}\`. Takes effect next message. ` +
-        `Bump per-turn with \`think hard\` / \`think harder\` / \`ultrathink\`.`,
+      `Effort set to \`${target}\`. Takes effect next message.${tail}`,
     );
   },
 };
