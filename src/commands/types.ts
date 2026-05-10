@@ -13,6 +13,7 @@ export interface SlashContext {
   getEffort: () => string | undefined;
   setEffort: (effort: string) => void;
   runInBackground: (prompt: string) => void;
+  interruptCurrent: () => Promise<boolean>;
 }
 
 export interface SlashResult {

@@ -50,6 +50,7 @@ export interface TurnResult {
   result: string | null;
   error?: string;
   timedOut?: boolean;
+  interrupted?: boolean;
   sentMediaViaIpc: boolean;
   newSessionId?: string;
 }
@@ -62,6 +63,7 @@ interface PendingTurn {
   sentMediaViaIpc: boolean;
   timeoutHandle: ReturnType<typeof setTimeout>;
   timedOut: boolean;
+  interrupted: boolean;
 }
 
 class InputController {
@@ -145,6 +147,7 @@ export class AgentSession {
   private sessionId: string | undefined;
   private closed = false;
   private consumerError: Error | null = null;
+  private lastInterruptedAt: number | null = null;
 
   constructor(opts: SessionOptions) {
     this.agent = opts.agent;
@@ -158,6 +161,10 @@ export class AgentSession {
 
   isClosed(): boolean {
     return this.closed;
+  }
+
+  hasPendingTurns(): boolean {
+    return this.turnQueue.length > 0;
   }
 
   getSessionId(): string | undefined {
@@ -300,6 +307,7 @@ export class AgentSession {
         startedAt: Date.now(),
         sentMediaViaIpc: false,
         timedOut: false,
+        interrupted: false,
         timeoutHandle: setTimeout(() => {
           turn.timedOut = true;
           logger.error(
@@ -329,16 +337,31 @@ export class AgentSession {
     });
   }
 
-  async interrupt(): Promise<void> {
-    if (!this.query) return;
+  async interrupt(): Promise<boolean> {
+    if (!this.query) return false;
+    const head = this.turnQueue[0];
+    if (!head) return false;
+    head.interrupted = true;
+    this.lastInterruptedAt = Date.now();
     try {
       await this.query.interrupt();
+      logger.info({ group: this.agent.name }, 'AgentSession.interrupt invoked');
+      return true;
     } catch (err) {
       logger.warn(
         { err, group: this.agent.name },
         'AgentSession.interrupt failed',
       );
+      return false;
     }
+  }
+
+  // True if interrupt() fired in the recent window. Lets callers report
+  // "interrupted" even if the SDK already finished tearing down by the
+  // time the slash command runs.
+  recentlyInterrupted(windowMs = 30_000): boolean {
+    if (this.lastInterruptedAt === null) return false;
+    return Date.now() - this.lastInterruptedAt < windowMs;
   }
 
   async close(): Promise<void> {
@@ -361,6 +384,7 @@ export class AgentSession {
         result: null,
         error: 'Session closed',
         sentMediaViaIpc: t.sentMediaViaIpc,
+        interrupted: t.interrupted,
       });
     }
   }
@@ -390,6 +414,7 @@ export class AgentSession {
           error: errMsg,
           sentMediaViaIpc: t.sentMediaViaIpc,
           timedOut: t.timedOut,
+          interrupted: t.interrupted,
         });
       }
       this.closed = true;
@@ -484,6 +509,7 @@ export class AgentSession {
         result,
         sentMediaViaIpc: turn.sentMediaViaIpc,
         timedOut: turn.timedOut,
+        interrupted: turn.interrupted,
         newSessionId: this.sessionId,
       });
     }

@@ -570,6 +570,27 @@ export class TelegramChannel implements Channel {
     }
   }
 
+  async reactToMessage(
+    jid: string,
+    msgId: string,
+    emoji: string,
+  ): Promise<void> {
+    if (!this.bot) return;
+    try {
+      const numericChatId = jid.replace(/^tg:/, '');
+      const numericMsgId = parseInt(msgId, 10);
+      if (isNaN(numericMsgId)) return;
+      await this.bot.api.setMessageReaction(numericChatId, numericMsgId, [
+        // grammy types this as the canonical Telegram reaction emoji union;
+        // we accept any string at the channel boundary and trust callers.
+        { type: 'emoji', emoji: emoji as never },
+      ]);
+      logger.debug({ jid, msgId, emoji }, 'Telegram reaction set');
+    } catch (err) {
+      logger.warn({ jid, msgId, emoji, err }, 'Telegram reaction failed');
+    }
+  }
+
   async sendAsAgent(
     jid: string,
     text: string,

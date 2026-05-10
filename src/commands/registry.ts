@@ -1,4 +1,5 @@
 import { bgCommand } from './bg.js';
+import { cancelCommand } from './cancel.js';
 import { contextCommand } from './context.js';
 import { effortCommand } from './effort.js';
 import { jobsCommand } from './jobs.js';
@@ -20,6 +21,7 @@ const helpCommand: SlashCommand = {
 
 export const commands: SlashCommand[] = [
   bgCommand,
+  cancelCommand,
   contextCommand,
   effortCommand,
   helpCommand,

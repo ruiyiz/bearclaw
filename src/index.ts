@@ -301,6 +301,15 @@ async function processMessage(msg: NewMessage): Promise<void> {
             ),
           );
         },
+        interruptCurrent: async () => {
+          const session = streamingSessions.get(agent.folder);
+          if (!session || session.isClosed()) return false;
+          if (session.hasPendingTurns()) return session.interrupt();
+          // Auto-interrupt path may have already fired in dispatchMessage
+          // before this slash handler ran. Report success so the user
+          // sees consistent feedback.
+          return session.recentlyInterrupted();
+        },
       });
       if (result?.continueAs) {
         content = result.continueAs;
@@ -610,10 +619,20 @@ async function runAgent(
       }
 
       if (turn.status === 'error') {
-        logger.error(
-          { agent: agent.name, error: turn.error, timedOut: turn.timedOut },
-          'Streaming turn error',
+        logger.warn(
+          {
+            agent: agent.name,
+            error: turn.error,
+            timedOut: turn.timedOut,
+            interrupted: turn.interrupted,
+          },
+          'Streaming turn ended in error',
         );
+        if (turn.interrupted) {
+          // Interrupted turns suppress reply — the new message that caused
+          // the interrupt will produce its own reply.
+          return { text: null, sentMediaViaIpc: turn.sentMediaViaIpc };
+        }
         if (turn.timedOut) {
           return {
             text: 'Sorry, I ran out of time on that one. Try again?',
@@ -1274,6 +1293,39 @@ function dispatchMessage(msg: NewMessage): void {
       ? [DISPLAY_NAME, ASSISTANT_NAME]
       : [ASSISTANT_NAME];
   if (botPrefixes.some((p) => msg.content.startsWith(`${p}:`))) return;
+
+  // Phase 2 (streaming-input mode):
+  //   /cancel      → preempt the in-flight turn here, before chaining
+  //   other msgs   → don't interrupt; folderQueues serializes processMessage
+  //                  so the new message lands in the next turn after the
+  //                  current one finishes (matches Claude Code's
+  //                  queue-and-wait semantics, preserves prior work). When
+  //                  a turn is in flight we acknowledge with a 👀 reaction
+  //                  so the user sees that the message landed.
+  if (STREAMING_INPUT_ENABLED) {
+    const session = streamingSessions.get(agent.folder);
+    const inFlight =
+      session && !session.isClosed() && session.hasPendingTurns();
+    if (inFlight) {
+      const trimmed = msg.content.trim();
+      if (/^\/cancel\b/.test(trimmed)) {
+        logger.info(
+          { agent: agent.name, msgId: msg.id },
+          '/cancel preempting in-flight turn',
+        );
+        void session.interrupt();
+      } else {
+        const channel = findChannel(channels, msg.chat_jid);
+        if (channel?.reactToMessage) {
+          logger.info(
+            { agent: agent.name, msgId: msg.id, channel: channel.name },
+            'Mid-turn message — acking with reaction',
+          );
+          void channel.reactToMessage(msg.chat_jid, msg.id, '👀');
+        }
+      }
+    }
+  }
 
   lastTimestamp = msg.timestamp;
   saveState();
