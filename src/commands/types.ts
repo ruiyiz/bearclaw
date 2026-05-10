@@ -12,6 +12,7 @@ export interface SlashContext {
   setModel: (model: string) => void;
   getEffort: () => string | undefined;
   setEffort: (effort: string) => void;
+  runInBackground: (prompt: string) => void;
 }
 
 export interface SlashResult {

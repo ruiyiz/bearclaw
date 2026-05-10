@@ -289,6 +289,14 @@ async function processMessage(msg: NewMessage): Promise<void> {
             'Agent effort set by user',
           );
         },
+        runInBackground: (bgPrompt: string) => {
+          void runBgAgent(agent, bgPrompt, msg.chat_jid).catch((err) =>
+            logger.error(
+              { err, agent: agent.name },
+              'Background agent run failed',
+            ),
+          );
+        },
       });
       if (result?.continueAs) {
         content = result.continueAs;
@@ -592,6 +600,87 @@ async function runAgent(
   } catch (err) {
     logger.error({ agent: agent.name, err }, 'Agent error');
     return { text: null, sentMediaViaIpc: false };
+  }
+}
+
+// Fire-and-forget background turn. Runs in a fresh session so it never
+// collides with the agent's main session resume. Posts result back to the
+// originating chat when done. Used by the /bg slash command.
+async function runBgAgent(
+  agent: RegisteredAgent,
+  prompt: string,
+  chatJid: string,
+): Promise<void> {
+  const isMain = agent.folder === MAIN_AGENT_FOLDER;
+  const startedAt = Date.now();
+
+  const availableGroups = getAvailableGroups();
+  writeAgentsSnapshot(
+    agent.folder,
+    isMain,
+    availableGroups,
+    new Set(Object.keys(registeredAgents)),
+  );
+  writeHandlersSnapshot(agent.folder, isMain, getAllHandlers());
+
+  logger.info(
+    { agent: agent.name, chatJid, promptLen: prompt.length },
+    'Starting background agent run',
+  );
+
+  const output = await runContainerAgent(agent, {
+    prompt,
+    sessionId: undefined,
+    agentFolder: agent.folder,
+    chatJid,
+    isMain,
+    model: agentModels[agent.folder],
+    effort: agentEfforts[agent.folder] as
+      | 'low'
+      | 'medium'
+      | 'high'
+      | 'xhigh'
+      | 'max'
+      | undefined,
+  });
+
+  const channel = findChannel(channels, chatJid);
+  const durationMs = Date.now() - startedAt;
+
+  if (output.status === 'error') {
+    logger.error(
+      {
+        agent: agent.name,
+        durationMs,
+        error: output.error,
+        timedOut: output.timedOut,
+      },
+      'Background agent run error',
+    );
+    if (channel) {
+      const text = output.timedOut
+        ? '🌀❌ Background task timed out.'
+        : `🌀❌ Background task failed: ${output.error || 'unknown error'}`;
+      await channel.sendMessage(chatJid, text);
+    }
+    return;
+  }
+
+  logger.info(
+    {
+      agent: agent.name,
+      durationMs,
+      hasResult: !!output.result,
+      sentMediaViaIpc: !!output.sentMediaViaIpc,
+    },
+    'Background agent run complete',
+  );
+
+  if (!channel) return;
+  if (output.result) {
+    await channel.sendMessage(chatJid, output.result);
+  } else if (!output.sentMediaViaIpc) {
+    await channel.sendMessage(chatJid, '🌀 Background task done (no reply).');
   }
 }
 
