@@ -337,6 +337,38 @@ export class AgentSession {
     });
   }
 
+  async setModel(model: string): Promise<void> {
+    if (this.closed || !this.query) return;
+    try {
+      await this.query.setModel(model);
+      logger.info(
+        { group: this.agent.name, model },
+        'AgentSession.setModel applied',
+      );
+    } catch (err) {
+      logger.warn(
+        { err, group: this.agent.name, model },
+        'AgentSession.setModel failed',
+      );
+    }
+  }
+
+  async setEffort(effort: EffortLevel): Promise<void> {
+    if (this.closed || !this.query) return;
+    try {
+      await this.query.applyFlagSettings({ effort });
+      logger.info(
+        { group: this.agent.name, effort },
+        'AgentSession.setEffort applied',
+      );
+    } catch (err) {
+      logger.warn(
+        { err, group: this.agent.name, effort },
+        'AgentSession.setEffort failed',
+      );
+    }
+  }
+
   async interrupt(): Promise<boolean> {
     if (!this.query) return false;
     const head = this.turnQueue[0];

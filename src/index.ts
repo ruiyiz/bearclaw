@@ -37,6 +37,7 @@ import {
   writeHandlersSnapshot,
 } from './agent/runner.js';
 import { AgentSession } from './agent/session.js';
+import type { EffortLevel } from './agent/runner.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { initBotPool, TelegramChannel } from './channels/telegram.js';
 import { IMessageChannel } from './channels/imessage.js';
@@ -283,6 +284,12 @@ async function processMessage(msg: NewMessage): Promise<void> {
           agentModels[agent.folder] = model;
           saveJson(path.join(DATA_DIR, 'models.json'), agentModels);
           logger.info({ agent: agent.name, model }, 'Agent model set by user');
+          // Push to in-flight streaming Query if one exists, so the change
+          // takes effect on the next turn without recreating the session.
+          const session = streamingSessions.get(agent.folder);
+          if (session && !session.isClosed()) {
+            void session.setModel(model);
+          }
         },
         getEffort: () => agentEfforts[agent.folder],
         setEffort: (effort: string) => {
@@ -292,6 +299,10 @@ async function processMessage(msg: NewMessage): Promise<void> {
             { agent: agent.name, effort },
             'Agent effort set by user',
           );
+          const session = streamingSessions.get(agent.folder);
+          if (session && !session.isClosed()) {
+            void session.setEffort(effort as EffortLevel);
+          }
         },
         runInBackground: (bgPrompt: string) => {
           void runBgAgent(agent, bgPrompt, msg.chat_jid).catch((err) =>
