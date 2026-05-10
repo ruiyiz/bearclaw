@@ -19,7 +19,6 @@ import {
   POLL_INTERVAL,
   RUN_DIR,
   SKILLS_DIR,
-  STREAMING_INPUT_ENABLED,
   TELEGRAM_BOT_POOL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
@@ -606,7 +605,6 @@ async function runAgent(
   onActivity?: (label: string) => void,
 ): Promise<{ text: string | null; sentMediaViaIpc: boolean }> {
   const isMain = agent.folder === MAIN_AGENT_FOLDER;
-  const sessionId = sessions[agent.folder];
 
   const availableGroups = getAvailableGroups();
   writeAgentsSnapshot(
@@ -620,79 +618,38 @@ async function runAgent(
   writeHandlersSnapshot(agent.folder, isMain, handlers);
 
   try {
-    if (STREAMING_INPUT_ENABLED) {
-      const session = getOrCreateStreamingSession(agent, chatJid);
-      const turn = await session.runTurn(prompt, { onText, onActivity });
+    const session = getOrCreateStreamingSession(agent, chatJid);
+    const turn = await session.runTurn(prompt, { onText, onActivity });
 
-      if (turn.newSessionId) {
-        sessions[agent.folder] = turn.newSessionId;
-        saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
-      }
-
-      if (turn.status === 'error') {
-        logger.warn(
-          {
-            agent: agent.name,
-            error: turn.error,
-            timedOut: turn.timedOut,
-            interrupted: turn.interrupted,
-          },
-          'Streaming turn ended in error',
-        );
-        if (turn.interrupted) {
-          // Interrupted turns suppress reply — the new message that caused
-          // the interrupt will produce its own reply.
-          return { text: null, sentMediaViaIpc: turn.sentMediaViaIpc };
-        }
-        if (turn.timedOut) {
-          return {
-            text: 'Sorry, I ran out of time on that one. Try again?',
-            sentMediaViaIpc: false,
-          };
-        }
-        return { text: null, sentMediaViaIpc: turn.sentMediaViaIpc };
-      }
-      return { text: turn.result, sentMediaViaIpc: turn.sentMediaViaIpc };
-    }
-
-    const output = await runContainerAgent(agent, {
-      prompt,
-      sessionId,
-      agentFolder: agent.folder,
-      chatJid,
-      isMain,
-      model: agentModels[agent.folder],
-      effort: agentEfforts[agent.folder] as
-        | 'low'
-        | 'medium'
-        | 'high'
-        | 'xhigh'
-        | 'max'
-        | undefined,
-      onText,
-      onActivity,
-    });
-
-    if (output.newSessionId) {
-      sessions[agent.folder] = output.newSessionId;
+    if (turn.newSessionId) {
+      sessions[agent.folder] = turn.newSessionId;
       saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
     }
 
-    if (output.status === 'error') {
-      logger.error(
-        { agent: agent.name, error: output.error },
-        'Container agent error',
+    if (turn.status === 'error') {
+      logger.warn(
+        {
+          agent: agent.name,
+          error: turn.error,
+          timedOut: turn.timedOut,
+          interrupted: turn.interrupted,
+        },
+        'Streaming turn ended in error',
       );
-      if (output.timedOut) {
+      if (turn.interrupted) {
+        // Interrupted turns suppress reply — the new message that caused
+        // the interrupt will produce its own reply.
+        return { text: null, sentMediaViaIpc: turn.sentMediaViaIpc };
+      }
+      if (turn.timedOut) {
         return {
           text: 'Sorry, I ran out of time on that one. Try again?',
           sentMediaViaIpc: false,
         };
       }
-      return { text: null, sentMediaViaIpc: !!output.sentMediaViaIpc };
+      return { text: null, sentMediaViaIpc: turn.sentMediaViaIpc };
     }
-
-    return { text: output.result, sentMediaViaIpc: !!output.sentMediaViaIpc };
+    return { text: turn.result, sentMediaViaIpc: turn.sentMediaViaIpc };
   } catch (err) {
     logger.error({ agent: agent.name, err }, 'Agent error');
     return { text: null, sentMediaViaIpc: false };
@@ -1305,35 +1262,30 @@ function dispatchMessage(msg: NewMessage): void {
       : [ASSISTANT_NAME];
   if (botPrefixes.some((p) => msg.content.startsWith(`${p}:`))) return;
 
-  // Phase 2 (streaming-input mode):
-  //   /cancel      → preempt the in-flight turn here, before chaining
-  //   other msgs   → don't interrupt; folderQueues serializes processMessage
-  //                  so the new message lands in the next turn after the
-  //                  current one finishes (matches Claude Code's
-  //                  queue-and-wait semantics, preserves prior work). When
-  //                  a turn is in flight we acknowledge with a 👀 reaction
-  //                  so the user sees that the message landed.
-  if (STREAMING_INPUT_ENABLED) {
-    const session = streamingSessions.get(agent.folder);
-    const inFlight =
-      session && !session.isClosed() && session.hasPendingTurns();
-    if (inFlight) {
-      const trimmed = msg.content.trim();
-      if (/^\/cancel\b/.test(trimmed)) {
+  // /cancel  → preempt the in-flight turn here, before chaining.
+  // other    → don't interrupt; folderQueues serializes processMessage so
+  //            the new message lands in the next turn after the current one
+  //            finishes (queue-and-wait, preserves prior work). When a turn
+  //            is in flight, ack with a 👀 reaction so the user sees the
+  //            message landed.
+  const session = streamingSessions.get(agent.folder);
+  const inFlight = session && !session.isClosed() && session.hasPendingTurns();
+  if (inFlight) {
+    const trimmed = msg.content.trim();
+    if (/^\/cancel\b/.test(trimmed)) {
+      logger.info(
+        { agent: agent.name, msgId: msg.id },
+        '/cancel preempting in-flight turn',
+      );
+      void session.interrupt();
+    } else {
+      const channel = findChannel(channels, msg.chat_jid);
+      if (channel?.reactToMessage) {
         logger.info(
-          { agent: agent.name, msgId: msg.id },
-          '/cancel preempting in-flight turn',
+          { agent: agent.name, msgId: msg.id, channel: channel.name },
+          'Mid-turn message — acking with reaction',
         );
-        void session.interrupt();
-      } else {
-        const channel = findChannel(channels, msg.chat_jid);
-        if (channel?.reactToMessage) {
-          logger.info(
-            { agent: agent.name, msgId: msg.id, channel: channel.name },
-            'Mid-turn message — acking with reaction',
-          );
-          void channel.reactToMessage(msg.chat_jid, msg.id, '👀');
-        }
+        void channel.reactToMessage(msg.chat_jid, msg.id, '👀');
       }
     }
   }

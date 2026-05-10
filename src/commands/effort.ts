@@ -1,4 +1,3 @@
-import { STREAMING_INPUT_ENABLED } from '../config.js';
 import { DEFAULT_EFFORT, EFFORT_LEVELS, EffortLevel } from '../agent/runner.js';
 import { SlashCommand } from './types.js';
 
@@ -38,11 +37,6 @@ export const effortCommand: SlashCommand = {
       return;
     }
     setEffort(target);
-    const tail = STREAMING_INPUT_ENABLED
-      ? ''
-      : ' Bump per-turn with `think hard` / `think harder` / `ultrathink`.';
-    await reply(
-      `Effort set to \`${target}\`. Takes effect next message.${tail}`,
-    );
+    await reply(`Effort set to \`${target}\`. Takes effect next message.`);
   },
 };

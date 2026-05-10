@@ -50,12 +50,6 @@ export const AGENT_TIMEOUT = parseInt(
   process.env.AGENT_TIMEOUT || '300000',
   10,
 );
-// Per-agent persistent SDK Query using streaming-input mode. When enabled,
-// the main chat path uses one long-lived query() per agent instead of a
-// fresh query() per user message. Unblocks mid-turn interrupt support.
-// Default off; flip via STREAMING_INPUT=1 in env.
-export const STREAMING_INPUT_ENABLED =
-  process.env.STREAMING_INPUT === '1' || process.env.STREAMING_INPUT === 'true';
 export const IPC_POLL_INTERVAL = 1000;
 export const MEMORY_FLUSH_INTERVAL = 10 * 60 * 1000; // 10 minutes
 
