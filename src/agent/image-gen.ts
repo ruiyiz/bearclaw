@@ -55,7 +55,7 @@ function resolveModel(model: string | undefined): {
 }
 
 function getGenTimeoutMs(): number {
-  return parseInt(process.env.IMAGE_GEN_TIMEOUT_MS ?? '180000', 10);
+  return parseInt(process.env.IMAGE_GEN_TIMEOUT_MS ?? '300000', 10);
 }
 
 function writeImage(
