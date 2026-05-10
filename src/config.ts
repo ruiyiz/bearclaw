@@ -84,7 +84,7 @@ export const HEARTBEAT_HANDLER_PREFIX = 'heartbeat-';
 // Warm-start: today's checkpoint + last N days of conversation archives.
 export const WARM_START_DAYS = parseInt(process.env.WARM_START_DAYS ?? '2', 10);
 export const WARM_START_BUDGET_BYTES = parseInt(
-  process.env.WARM_START_BUDGET_BYTES ?? '16384',
+  process.env.WARM_START_BUDGET_BYTES ?? '32768',
   10,
 );
 

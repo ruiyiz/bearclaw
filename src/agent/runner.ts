@@ -178,74 +178,102 @@ export function getSessionSummary(
   return null;
 }
 
-function readWithCap(filePath: string, cap: number): string | null {
-  if (!fs.existsSync(filePath)) return null;
-  const raw = fs.readFileSync(filePath, 'utf-8').trim();
-  if (!raw) return null;
-  if (raw.length <= cap) return raw;
-  return raw.slice(0, cap) + '\n[...truncated]';
+/**
+ * Build warm-start text from recent conversation archives + checkpoints.
+ * Archives sorted by date ascending; checkpoints by mtime ascending. By
+ * construction (archives are the daily-flush product of checkpoints) every
+ * archive is older than every checkpoint, so the simple two-stage append
+ * yields a chronologically correct stream. Tail-capped at
+ * WARM_START_BUDGET_BYTES so the most recent context survives truncation.
+ */
+export function buildWarmStartContext(varDir: string): string | null {
+  const sections: string[] = [];
+
+  const conversationsDir = path.join(varDir, 'conversations');
+  if (fs.existsSync(conversationsDir)) {
+    const cutoffMs = Date.now() - (WARM_START_DAYS + 1) * 86_400_000;
+    const archives = fs
+      .readdirSync(conversationsDir)
+      .filter((f) => f.endsWith('.md'))
+      .map((f) => {
+        const m = f.match(/^(\d{4}-\d{2}-\d{2})/);
+        const ts = m ? Date.parse(`${m[1]}T00:00:00Z`) : NaN;
+        return { f, ts };
+      })
+      .filter((x) => !Number.isNaN(x.ts) && x.ts >= cutoffMs)
+      .sort((a, b) => a.ts - b.ts);
+    for (const { f } of archives) {
+      try {
+        const raw = fs
+          .readFileSync(path.join(conversationsDir, f), 'utf-8')
+          .trim();
+        if (!raw) continue;
+        sections.push(`=== conversations/${f} ===\n${raw}`);
+      } catch {
+        // skip
+      }
+    }
+  }
+
+  const cpDir = path.join(varDir, 'checkpoints');
+  if (fs.existsSync(cpDir)) {
+    const checkpoints = fs
+      .readdirSync(cpDir)
+      .filter((f) => f.endsWith('.md'))
+      .map((f) => {
+        const fp = path.join(cpDir, f);
+        let mtime = 0;
+        try {
+          mtime = fs.statSync(fp).mtimeMs;
+        } catch {
+          mtime = -1;
+        }
+        return { f, fp, mtime };
+      })
+      .filter((x) => x.mtime >= 0)
+      .sort((a, b) => a.mtime - b.mtime);
+    for (const { f, fp } of checkpoints) {
+      try {
+        const raw = fs.readFileSync(fp, 'utf-8').trim();
+        if (!raw) continue;
+        sections.push(`=== checkpoints/${f} ===\n${raw}`);
+      } catch {
+        // skip
+      }
+    }
+  }
+
+  if (sections.length === 0) return null;
+
+  const merged = sections.join('\n\n');
+  const tail =
+    merged.length <= WARM_START_BUDGET_BYTES
+      ? merged
+      : '[...truncated]\n' + merged.slice(-WARM_START_BUDGET_BYTES);
+
+  logger.info(
+    {
+      varDir,
+      sections: sections.length,
+      mergedBytes: merged.length,
+      injectedBytes: tail.length,
+      truncated: merged.length > WARM_START_BUDGET_BYTES,
+    },
+    'Warm-start context built',
+  );
+
+  return tail;
 }
 
 export function createSessionStartHook(varDir: string): HookCallback {
   return async (_input, _toolUseId, _context) => {
-    const parts: string[] = [];
-    let remaining = WARM_START_BUDGET_BYTES;
-
-    // 1. Today's checkpoint (if a session crashed earlier today).
-    const cpDir = path.join(varDir, 'checkpoints');
-    if (fs.existsSync(cpDir) && remaining > 500) {
-      for (const f of fs.readdirSync(cpDir)) {
-        if (!f.endsWith('.md')) continue;
-        const content = readWithCap(
-          path.join(cpDir, f),
-          Math.min(4000, remaining),
-        );
-        if (!content) continue;
-        parts.push(`=== checkpoints/${f} ===\n${content}`);
-        remaining -= content.length;
-        if (remaining < 500) break;
-      }
-    }
-
-    // 2. Last N days of conversation archives, oldest → newest so the most
-    //    recent context lands closest to the live transcript.
-    const conversationsDir = path.join(varDir, 'conversations');
-    if (fs.existsSync(conversationsDir) && remaining > 500) {
-      const days: string[] = [];
-      for (let i = WARM_START_DAYS; i >= 0; i--) {
-        days.push(
-          new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10),
-        );
-      }
-      const archives = fs
-        .readdirSync(conversationsDir)
-        .filter((f) => f.endsWith('.md'));
-      for (const day of days) {
-        const dayArchives = archives
-          .filter((f) => f.startsWith(`${day}-`))
-          .sort();
-        for (const f of dayArchives) {
-          const content = readWithCap(
-            path.join(conversationsDir, f),
-            Math.min(4000, remaining),
-          );
-          if (!content) continue;
-          parts.push(`=== conversations/${f} ===\n${content}`);
-          remaining -= content.length;
-          if (remaining < 500) break;
-        }
-        if (remaining < 500) break;
-      }
-    }
-
-    if (parts.length === 0) return {};
+    const tail = buildWarmStartContext(varDir);
+    if (!tail) return {};
 
     return {
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
-        additionalContext: `Warm-start context (recent checkpoint + conversation archives):\n\n${parts.join(
-          '\n\n',
-        )}`,
+        additionalContext: `Warm-start context (recent checkpoint + conversation archives):\n\n${tail}`,
       },
     };
   };

@@ -35,14 +35,32 @@ const MEMORY = `
 
 This session has:
 - Live transcript (this session, in your context).
-- Today's checkpoint (if a session crashed earlier today).
-- Last 2 days of your conversation archives, injected at warm-start.
 - Cross-session shared context: AGENTS.md, SOUL.md, USER.md, IDENTITY.md.
 
-If long-term memory tools are present (mcp__gbrain__query, mcp__gbrain__get_page,
-mcp__gbrain__graph_query), use them BEFORE answering questions about people,
-companies, prior decisions, or recurring topics. The brain has structured pages
-with timelines and provenance — search it instead of guessing.
+For older context not in this session's transcript:
+- mcp__nanoclaw__recall_history(query) — BM25-ranked FTS5 search over the
+  current agent's daily conversation archives + crash-recovery checkpoints.
+  Use whenever the user references a past conversation, a topic from
+  "yesterday", a deep dive you did before, etc. Returns excerpts with file
+  path + line numbers.
+
+  Query expansion: the user's wording rarely matches transcript wording
+  exactly. Before giving up, retry with 3-5 paraphrases / synonyms / related
+  entities joined by uppercase OR.
+    - "xAI deep dive"        → \`xai OR grok OR colossus OR memphis\`
+    - "the chip war thread"  → \`tsmc OR nvidia OR "chip ban" OR sanctions\`
+    - "what we said about Z" → \`Z OR <Z's aliases> OR <Z's product names>\`
+  If first call returns 0 hits, automatically retry once with an expanded
+  query before telling the user you can't find it.
+
+- If long-term memory tools are present (mcp__gbrain__query, mcp__gbrain__get_page,
+  mcp__gbrain__graph_query), use them BEFORE answering about people, companies,
+  prior decisions, or recurring topics. The brain has structured pages with
+  timelines and provenance.
+
+When the user asks about something you don't see in the live transcript, search
+recall_history (recent dialogue) and gbrain (curated facts) before saying you
+don't remember.
 `;
 
 const VOICE = `

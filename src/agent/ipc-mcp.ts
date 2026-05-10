@@ -19,6 +19,8 @@ import {
   listSubprocesses,
 } from './subprocess-manager.js';
 import { generateImage } from './image-gen.js';
+import { queryRecall, syncRecallIndex } from './recall-index.js';
+import { logger } from '../logger.js';
 
 interface IpcMcpContext {
   chatJid: string;
@@ -929,6 +931,101 @@ Returns sessionId. Use subprocess_read/write/poll/kill to interact.`,
               },
             ],
             isError: !ok,
+          };
+        },
+      ),
+
+      tool(
+        'recall_history',
+        `Search past conversations and crash-recovery checkpoints for this agent.
+
+Backed by SQLite FTS5 with BM25 ranking. Each agent's daily archives
+(\`conversations/*.md\`) and live checkpoints (\`checkpoints/*.md\`) are chunked
+and indexed lazily; stale chunks reindex on first call after a file changes.
+
+Query syntax (FTS5):
+- Bare terms are AND-joined: \`xai chip\` matches chunks containing both.
+- Use \`OR\`: \`xai OR grok OR colossus\` (uppercase OR required).
+- Phrases: \`"chip war"\`.
+- Prefix: \`musk*\`. NEAR: \`NEAR(xai gpu, 5)\`.
+
+When unsure of vocabulary, expand with synonyms / aliases / related entities
+joined by \`OR\`. Excerpts are returned newest-relevant first with file path
+and line range so follow-up Read calls can pull more context.`,
+        {
+          query: z
+            .string()
+            .min(1)
+            .describe(
+              'FTS5 query. Uppercase OR for disjunction. Quote phrases. Use synonyms when first call returns nothing.',
+            ),
+          limit: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe('Max excerpts to return (default 20).'),
+        },
+        async (args) => {
+          const limit = args.limit ?? 20;
+          let stats;
+          try {
+            stats = syncRecallIndex(agentFolder);
+          } catch (err) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Index sync failed: ${(err as Error).message}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          const t0 = Date.now();
+          const hits = queryRecall(agentFolder, args.query, limit);
+          const elapsedMs = Date.now() - t0;
+          logger.info(
+            {
+              agent: agentFolder,
+              query: args.query,
+              limit,
+              hits: hits.length,
+              elapsedMs,
+              indexScanned: stats.scanned,
+              indexReindexed: stats.reindexed,
+              indexDeleted: stats.deleted,
+              topHit: hits[0]
+                ? `${hits[0].source}/${hits[0].filename}:${hits[0].lineStart}-${hits[0].lineEnd}`
+                : null,
+              topScore: hits[0]?.score ?? null,
+            },
+            'recall_history',
+          );
+          if (hits.length === 0) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text:
+                    `No matches for ${JSON.stringify(args.query)}. ` +
+                    `Indexed ${stats.scanned} files (${stats.reindexed} reindexed). ` +
+                    `Try synonyms joined by OR (e.g. "xai OR grok OR colossus").`,
+                },
+              ],
+            };
+          }
+
+          const blocks = hits.map(
+            (h) =>
+              `=== ${h.source}/${h.filename}:${h.lineStart}-${h.lineEnd} (bm25=${h.score.toFixed(2)}) ===\n${h.text}`,
+          );
+          const header = `Found ${hits.length} excerpt${hits.length === 1 ? '' : 's'} for ${JSON.stringify(args.query)} (best match first):\n`;
+          return {
+            content: [
+              { type: 'text', text: header + '\n' + blocks.join('\n\n') },
+            ],
           };
         },
       ),

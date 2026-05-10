@@ -92,6 +92,39 @@ export function initDatabase(): void {
       FOREIGN KEY (event_id) REFERENCES events(id)
     );
     CREATE INDEX IF NOT EXISTS idx_handler_logs ON handler_logs(handler_id, run_at);
+
+    CREATE TABLE IF NOT EXISTS recall_chunks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_folder TEXT NOT NULL,
+      source TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      line_start INTEGER NOT NULL,
+      line_end INTEGER NOT NULL,
+      content TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_recall_file ON recall_chunks(agent_folder, source, filename);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS recall_fts USING fts5(
+      content,
+      content=recall_chunks,
+      content_rowid=id,
+      tokenize='porter unicode61'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS recall_chunks_ai AFTER INSERT ON recall_chunks BEGIN
+      INSERT INTO recall_fts(rowid, content) VALUES (new.id, new.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS recall_chunks_ad AFTER DELETE ON recall_chunks BEGIN
+      INSERT INTO recall_fts(recall_fts, rowid, content) VALUES('delete', old.id, old.content);
+    END;
+
+    CREATE TABLE IF NOT EXISTS recall_files (
+      agent_folder TEXT NOT NULL,
+      source TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      mtime REAL NOT NULL,
+      PRIMARY KEY (agent_folder, source, filename)
+    );
   `);
 
   // Add sender_name column if it doesn't exist (migration for existing DBs)
