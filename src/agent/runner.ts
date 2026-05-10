@@ -51,7 +51,7 @@ export function detectEffortKeyword(prompt: string): EffortLevel | undefined {
   return undefined;
 }
 
-function maxEffort(a: EffortLevel, b?: EffortLevel): EffortLevel {
+export function maxEffort(a: EffortLevel, b?: EffortLevel): EffortLevel {
   if (!b) return a;
   return EFFORT_LEVELS.indexOf(a) >= EFFORT_LEVELS.indexOf(b) ? a : b;
 }
@@ -116,7 +116,7 @@ function describeToolUse(b: {
   }
 }
 
-function describeBlock(b: {
+export function describeBlock(b: {
   type?: string;
   name?: string;
   input?: Record<string, unknown>;
@@ -186,7 +186,7 @@ function readWithCap(filePath: string, cap: number): string | null {
   return raw.slice(0, cap) + '\n[...truncated]';
 }
 
-function createSessionStartHook(varDir: string): HookCallback {
+export function createSessionStartHook(varDir: string): HookCallback {
   return async (_input, _toolUseId, _context) => {
     const parts: string[] = [];
     let remaining = WARM_START_BUDGET_BYTES;
@@ -440,7 +440,7 @@ export function formatTranscriptMarkdown(
   return lines.join('\n');
 }
 
-async function writeTurnCheckpoint(
+export async function writeTurnCheckpoint(
   varDir: string,
   sessionId: string,
 ): Promise<void> {
@@ -456,7 +456,7 @@ async function writeTurnCheckpoint(
   fs.renameSync(tmp, cpPath);
 }
 
-function buildContextPrompt(agentFolder: string): string {
+export function buildContextPrompt(agentFolder: string): string {
   const parts: string[] = [];
 
   for (const file of ['AGENTS.md', 'CONTEXT.md', 'SOUL.md', 'USER.md']) {

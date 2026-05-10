@@ -19,6 +19,7 @@ import {
   POLL_INTERVAL,
   RUN_DIR,
   SKILLS_DIR,
+  STREAMING_INPUT_ENABLED,
   TELEGRAM_BOT_POOL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
@@ -35,6 +36,7 @@ import {
   writeAgentsSnapshot,
   writeHandlersSnapshot,
 } from './agent/runner.js';
+import { AgentSession } from './agent/session.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { initBotPool, TelegramChannel } from './channels/telegram.js';
 import { IMessageChannel } from './channels/imessage.js';
@@ -97,6 +99,7 @@ let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 let ipcWatcherRunning = false;
 const folderQueues = new Map<string, Promise<void>>();
+const streamingSessions = new Map<string, AgentSession>();
 const lastAutoReply: Record<string, string> = {}; // chat_jid → ISO timestamp of last off-hours reply
 
 const channels: Channel[] = [];
@@ -271,6 +274,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
           }
           delete sessions[agent.folder];
           saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
+          closeStreamingSession(agent.folder);
           logger.info({ agent: agent.name }, 'Session cleared by user');
         },
         getSessionId: () => sessions[agent.folder],
@@ -537,6 +541,43 @@ function isNonResponse(text: string): boolean {
   return suppressPatterns.includes(normalized);
 }
 
+function getOrCreateStreamingSession(
+  agent: RegisteredAgent,
+  chatJid: string,
+): AgentSession {
+  let session = streamingSessions.get(agent.folder);
+  if (session && session.isClosed()) {
+    streamingSessions.delete(agent.folder);
+    session = undefined;
+  }
+  if (!session) {
+    session = new AgentSession({
+      agent,
+      chatJid,
+      isMain: agent.folder === MAIN_AGENT_FOLDER,
+      resumeSessionId: sessions[agent.folder],
+      model: agentModels[agent.folder],
+      effort: agentEfforts[agent.folder] as
+        | 'low'
+        | 'medium'
+        | 'high'
+        | 'xhigh'
+        | 'max'
+        | undefined,
+    });
+    streamingSessions.set(agent.folder, session);
+  }
+  return session;
+}
+
+function closeStreamingSession(folder: string): void {
+  const session = streamingSessions.get(folder);
+  if (session) {
+    void session.close();
+    streamingSessions.delete(folder);
+  }
+}
+
 async function runAgent(
   agent: RegisteredAgent,
   prompt: string,
@@ -559,6 +600,31 @@ async function runAgent(
   writeHandlersSnapshot(agent.folder, isMain, handlers);
 
   try {
+    if (STREAMING_INPUT_ENABLED) {
+      const session = getOrCreateStreamingSession(agent, chatJid);
+      const turn = await session.runTurn(prompt, { onText, onActivity });
+
+      if (turn.newSessionId) {
+        sessions[agent.folder] = turn.newSessionId;
+        saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
+      }
+
+      if (turn.status === 'error') {
+        logger.error(
+          { agent: agent.name, error: turn.error, timedOut: turn.timedOut },
+          'Streaming turn error',
+        );
+        if (turn.timedOut) {
+          return {
+            text: 'Sorry, I ran out of time on that one. Try again?',
+            sentMediaViaIpc: false,
+          };
+        }
+        return { text: null, sentMediaViaIpc: turn.sentMediaViaIpc };
+      }
+      return { text: turn.result, sentMediaViaIpc: turn.sentMediaViaIpc };
+    }
+
     const output = await runContainerAgent(agent, {
       prompt,
       sessionId,
