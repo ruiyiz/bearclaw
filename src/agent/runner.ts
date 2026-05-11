@@ -14,7 +14,6 @@ import {
 
 import {
   AGENT_TIMEOUT,
-  CONFIG_DIR,
   CONTEXT_DIR,
   RUN_DIR,
   TIMEZONE,
@@ -27,6 +26,7 @@ import { createIpcMcp } from './ipc-mcp.js';
 import { emitEvent } from '../db.js';
 import { logger } from '../logger.js';
 import { Handler, RegisteredAgent } from '../types.js';
+import { loadUserMcpServers } from './mcp-config.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 
 export const DEFAULT_MODEL = 'claude-opus-4-7';
@@ -546,14 +546,7 @@ export async function runContainerAgent(
   });
 
   // Load user-configured MCP servers from ~/.nanoclaw/config/mcp.json
-  let userMcpServers: Record<string, unknown> = {};
-  try {
-    const mcpConfigPath = path.join(CONFIG_DIR, 'mcp.json');
-    const raw = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
-    userMcpServers = raw.mcpServers || {};
-  } catch {
-    // No mcp.json or invalid — skip
-  }
+  const userMcpServers = loadUserMcpServers();
 
   let result: string | null = null;
   let newSessionId: string | undefined;

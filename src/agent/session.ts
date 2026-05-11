@@ -20,7 +20,6 @@ import {
 
 import {
   AGENT_TIMEOUT,
-  CONFIG_DIR,
   RUN_DIR,
   agentDir as agentPersistentDir,
   agentVarDir,
@@ -28,6 +27,7 @@ import {
 import { logger } from '../logger.js';
 import { RegisteredAgent } from '../types.js';
 import { createIpcMcp } from './ipc-mcp.js';
+import { loadUserMcpServers } from './mcp-config.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 import {
   DEFAULT_EFFORT,
@@ -193,14 +193,7 @@ export class AgentSession {
       },
     });
 
-    let userMcpServers: Record<string, unknown> = {};
-    try {
-      const mcpConfigPath = path.join(CONFIG_DIR, 'mcp.json');
-      const raw = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
-      userMcpServers = raw.mcpServers || {};
-    } catch {
-      // No mcp.json or invalid — skip
-    }
+    const userMcpServers = loadUserMcpServers();
 
     const contextPrompt = buildContextPrompt(this.agent.folder);
     const fullSystemPrompt = [contextPrompt, SYSTEM_PROMPT]
