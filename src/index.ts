@@ -40,6 +40,11 @@ import type { EffortLevel } from './agent/runner.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { initBotPool, TelegramChannel } from './channels/telegram.js';
 import { IMessageChannel } from './channels/imessage.js';
+import { WebChannel } from './channels/web.js';
+import {
+  persistRegisteredAgentsHelper,
+  startHttpServer,
+} from './server/http.js';
 import { guessMimetype, resolveMediaSource } from './media/source.js';
 import {
   createHandler,
@@ -1401,6 +1406,36 @@ async function main(): Promise<void> {
     });
     channels.push(imessage);
     await imessage.connect();
+  }
+
+  // Web channel — backs the Next.js app. Always on; bound to a local HTTP
+  // server (127.0.0.1) so the PWA can chat, watch events, and run admin ops.
+  const webChannel = new WebChannel({
+    onMessage: (_chatJid, msg) => {
+      storeMessage(msg);
+      dispatchMessage(msg);
+    },
+    onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
+    registeredAgents: () => registeredAgents,
+  });
+  channels.push(webChannel);
+  await webChannel.connect();
+
+  const { ensureWebAgent } = persistRegisteredAgentsHelper();
+  startHttpServer({
+    webChannel,
+    registeredAgents: () => registeredAgents,
+    registerWebAgent: (folder: string) => {
+      const jid = `web:${folder}`;
+      if (registeredAgents[jid]) return;
+      const agent = ensureWebAgent(folder);
+      registerAgent(jid, agent);
+    },
+  });
+  // Auto-wire the main agent so first-load chat works without manual setup.
+  if (!registeredAgents[`web:${MAIN_AGENT_FOLDER}`]) {
+    const agent = ensureWebAgent(MAIN_AGENT_FOLDER);
+    registerAgent(`web:${MAIN_AGENT_FOLDER}`, agent);
   }
 
   // Start all subsystems unconditionally
