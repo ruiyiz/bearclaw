@@ -6,6 +6,7 @@ import {
   api,
   type ChatSession,
   type ChatStreamEvent,
+  type SlashCommand,
   type UserAgent,
 } from '@/lib/api';
 
@@ -39,6 +40,8 @@ export function ChatView() {
   const recordedChunksRef = useRef<Blob[]>([]);
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [commands, setCommands] = useState<SlashCommand[]>([]);
+  const [pickerIndex, setPickerIndex] = useState(0);
 
   const latestSessionId = sessions[0]?.sessionId ?? null;
   const viewingLatest = sessionId !== null && sessionId === latestSessionId;
@@ -55,6 +58,10 @@ export function ChatView() {
           );
         }
       })
+      .catch(() => {});
+    api
+      .commands()
+      .then((d) => setCommands(d.commands))
       .catch(() => {});
   }, []);
 
@@ -397,6 +404,31 @@ export function ChatView() {
     }));
   }, [sessions]);
 
+  // Slash-command picker: active only when input starts with `/` and the user
+  // is still typing the command token (no whitespace yet).
+  const slashMatch = useMemo(() => {
+    if (!input.startsWith('/')) return null;
+    const token = input.slice(1);
+    if (/\s/.test(token)) return null;
+    return token.toLowerCase();
+  }, [input]);
+
+  const pickerOptions = useMemo(() => {
+    if (slashMatch === null) return [];
+    return commands.filter((c) => c.name.toLowerCase().startsWith(slashMatch));
+  }, [commands, slashMatch]);
+
+  const pickerVisible = pickerOptions.length > 0;
+
+  useEffect(() => {
+    setPickerIndex(0);
+  }, [slashMatch]);
+
+  function applyCommand(name: string) {
+    setInput(`/${name} `);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="border-b border-[color:var(--border)] px-3 py-2 flex flex-wrap items-center gap-2">
@@ -519,20 +551,74 @@ export function ChatView() {
         >
           {recording ? '⏹' : '🎙'}
         </button>
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-          rows={1}
-          placeholder={folder ? `Message ${folder}…` : 'Pick an agent'}
-          className="flex-1 resize-none overflow-y-auto bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-2 text-sm focus:outline-none focus:border-[color:var(--accent)] leading-5"
-        />
+        <div className="relative flex-1">
+          {pickerVisible && (
+            <div className="absolute bottom-full left-0 right-0 mb-1 max-h-60 overflow-y-auto rounded-md border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-10">
+              {pickerOptions.map((c, i) => (
+                <button
+                  type="button"
+                  key={c.name}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    applyCommand(c.name);
+                  }}
+                  onMouseEnter={() => setPickerIndex(i)}
+                  className={
+                    'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline ' +
+                    (i === pickerIndex
+                      ? 'bg-[color:var(--accent)]/20'
+                      : 'hover:bg-white/5')
+                  }
+                >
+                  <span className="font-mono">/{c.name}</span>
+                  <span className="text-xs text-[color:var(--muted)] truncate">
+                    {c.description}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (pickerVisible) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setPickerIndex((i) => (i + 1) % pickerOptions.length);
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setPickerIndex(
+                    (i) =>
+                      (i - 1 + pickerOptions.length) % pickerOptions.length,
+                  );
+                  return;
+                }
+                if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                  e.preventDefault();
+                  const pick = pickerOptions[pickerIndex];
+                  if (pick) applyCommand(pick.name);
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setInput('');
+                  return;
+                }
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            rows={1}
+            placeholder={folder ? `Message ${folder}…` : 'Pick an agent'}
+            className="w-full resize-none overflow-y-auto bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-2 text-sm focus:outline-none focus:border-[color:var(--accent)] leading-5"
+          />
+        </div>
         <button
           type="submit"
           disabled={!folder || !input.trim() || sending}

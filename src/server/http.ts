@@ -16,6 +16,7 @@ import { logger } from '../logger.js';
 import { webBroker, type WebOutboundEvent } from './broker.js';
 import { authenticate, handleLogin, handleLogout, initAuth } from './auth.js';
 import { loadParsedTranscript } from '../agent/runner.js';
+import { commands as slashCommands } from '../commands/registry.js';
 import { transcribeAudio } from '../media/transcribe.js';
 import type { WebChannel } from '../channels/web.js';
 import {
@@ -430,6 +431,15 @@ add('GET', /^\/api\/user\/chat\/history$/, async (_req, res, url) => {
     logger.error({ err, folder, sessionId }, 'loadParsedTranscript failed');
     json(res, 500, { error: String(err) });
   }
+});
+
+add('GET', /^\/api\/user\/commands$/, (_req, res) => {
+  json(res, 200, {
+    commands: slashCommands.map((c) => ({
+      name: c.name,
+      description: c.description,
+    })),
+  });
 });
 
 add('GET', /^\/api\/user\/events$/, (_req, res, url) => {

@@ -61,6 +61,11 @@ export interface UserAgent {
   webJid: string;
 }
 
+export interface SlashCommand {
+  name: string;
+  description: string;
+}
+
 export interface ChatSession {
   sessionId: string;
   summary: string;
@@ -141,6 +146,7 @@ export const api = {
     get<{ messages: HistoryMessage[] }>(
       `/api/user/chat/history?folder=${encodeURIComponent(folder)}&sessionId=${encodeURIComponent(sessionId)}`,
     ),
+  commands: () => get<{ commands: SlashCommand[] }>('/api/user/commands'),
   agentMediaUrl: (folder: string, absPath: string) =>
     `/api/user/agent-media?folder=${encodeURIComponent(folder)}&path=${encodeURIComponent(absPath)}`,
   chatUpload: (payload: {
