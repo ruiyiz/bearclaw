@@ -42,6 +42,7 @@ export function ChatView() {
   const [uploading, setUploading] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [pickerIndex, setPickerIndex] = useState(0);
+  const pickerItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const latestSessionId = sessions[0]?.sessionId ?? null;
   const viewingLatest = sessionId !== null && sessionId === latestSessionId;
@@ -424,6 +425,11 @@ export function ChatView() {
     setPickerIndex(0);
   }, [slashMatch]);
 
+  useEffect(() => {
+    const el = pickerItemRefs.current[pickerIndex];
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [pickerIndex]);
+
   function applyCommand(name: string) {
     setInput(`/${name} `);
     requestAnimationFrame(() => textareaRef.current?.focus());
@@ -558,6 +564,9 @@ export function ChatView() {
                 <button
                   type="button"
                   key={c.name}
+                  ref={(el) => {
+                    pickerItemRefs.current[i] = el;
+                  }}
                   onMouseDown={(e) => {
                     e.preventDefault();
                     applyCommand(c.name);
