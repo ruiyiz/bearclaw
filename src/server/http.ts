@@ -17,6 +17,7 @@ import { webBroker, type WebOutboundEvent } from './broker.js';
 import { authenticate, handleLogin, handleLogout, initAuth } from './auth.js';
 import { loadParsedTranscript } from '../agent/runner.js';
 import { commands as slashCommands } from '../commands/registry.js';
+import { getMessagesByJid, getMessagesByJids } from '../db.js';
 import { transcribeAudio } from '../media/transcribe.js';
 import type { WebChannel } from '../channels/web.js';
 import {
@@ -392,7 +393,47 @@ add('GET', /^\/api\/user\/chat\/stream$/, (_req, res, url) => {
   res.on('error', cleanup);
 });
 
-add('GET', /^\/api\/user\/chat\/sessions$/, async (_req, res, url) => {
+add('GET', /^\/api\/user\/chat\/messages$/, (_req, res, url, opts) => {
+  const folder = url.searchParams.get('folder');
+  if (!folder) return json(res, 400, { error: 'missing folder' });
+  const before = url.searchParams.get('before');
+  const limit = Math.min(
+    Math.max(parseInt(url.searchParams.get('limit') || '200', 10), 1),
+    1000,
+  );
+  const allChannels = url.searchParams.get('allChannels') === '1';
+  let rows;
+  if (allChannels) {
+    // Every registered JID whose folder matches — covers tg:, imsg:, whatsapp,
+    // and web alike. Other channels register lazily, so reload after the user
+    // adds a new channel to see its history.
+    const regs = opts.registeredAgents();
+    const jids = Object.entries(regs)
+      .filter(([, a]) => a.folder === folder)
+      .map(([jid]) => jid);
+    rows = getMessagesByJids(jids, before, limit);
+  } else {
+    rows = getMessagesByJid(`web:${folder}`, before, limit);
+  }
+  // Returned in DB order (newest first); client reverses for render. Map to
+  // the shape the web client expects.
+  json(res, 200, {
+    messages: rows.map((m) => ({
+      id: m.id,
+      chatJid: m.chat_jid,
+      sender: m.sender,
+      senderName: m.sender_name,
+      content: m.content,
+      timestamp: m.timestamp,
+      isFromMe: m.is_from_me === 1,
+    })),
+  });
+});
+
+// Read-only JSONL transcript inspection lives under /admin so the user-facing
+// chat surface stays focused on the live conversation. Same handlers, admin
+// route prefix.
+add('GET', /^\/api\/admin\/transcripts\/sessions$/, async (_req, res, url) => {
   const folder = url.searchParams.get('folder');
   if (!folder) return json(res, 400, { error: 'missing folder' });
   const limit = parseInt(url.searchParams.get('limit') || '50', 10);
@@ -417,7 +458,7 @@ add('GET', /^\/api\/user\/chat\/sessions$/, async (_req, res, url) => {
   }
 });
 
-add('GET', /^\/api\/user\/chat\/history$/, async (_req, res, url) => {
+add('GET', /^\/api\/admin\/transcripts\/messages$/, async (_req, res, url) => {
   const folder = url.searchParams.get('folder');
   const sessionId = url.searchParams.get('sessionId');
   if (!folder || !sessionId)

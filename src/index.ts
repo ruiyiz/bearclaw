@@ -41,6 +41,7 @@ import { WhatsAppChannel } from './channels/whatsapp.js';
 import { initBotPool, TelegramChannel } from './channels/telegram.js';
 import { IMessageChannel } from './channels/imessage.js';
 import { WebChannel } from './channels/web.js';
+import { attachOutboundPersistence } from './channels/outbound-persist.js';
 import {
   persistRegisteredAgentsHelper,
   startHttpServer,
@@ -52,6 +53,7 @@ import {
   emitEvent,
   getAllChats,
   getAllHandlers,
+  deleteMessageById,
   getHandlerById,
   getMessagesSince,
   getNewMessages,
@@ -59,6 +61,7 @@ import {
   storeChatMetadata,
   storeMessage,
   updateHandler,
+  updateMessageContent,
 } from './db.js';
 import {
   registerEmailHandlers,
@@ -337,15 +340,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
   }
 
   const sinceTimestamp = lastAgentTimestamp[msg.chat_jid] || '';
-  const botPrefixes =
-    DISPLAY_NAME !== ASSISTANT_NAME
-      ? [DISPLAY_NAME, ASSISTANT_NAME]
-      : [ASSISTANT_NAME];
-  const missedMessages = getMessagesSince(
-    msg.chat_jid,
-    sinceTimestamp,
-    botPrefixes,
-  );
+  const missedMessages = getMessagesSince(msg.chat_jid, sinceTimestamp);
 
   const lines = missedMessages.map((m) => {
     const escapeXml = (s: string) =>
@@ -1318,11 +1313,7 @@ async function startMessageLoop(): Promise<void> {
     try {
       // Recovery sweep: catches messages missed during channel disconnects or restarts
       const jids = Object.keys(registeredAgents);
-      const botPrefixes =
-        DISPLAY_NAME !== ASSISTANT_NAME
-          ? [DISPLAY_NAME, ASSISTANT_NAME]
-          : [ASSISTANT_NAME];
-      const { messages } = getNewMessages(jids, lastTimestamp, botPrefixes);
+      const { messages } = getNewMessages(jids, lastTimestamp);
       if (messages.length > 0) {
         logger.info(
           { count: messages.length },
@@ -1373,6 +1364,7 @@ async function main(): Promise<void> {
         storeChatMetadata(chatJid, ts, name),
       registeredAgents: () => registeredAgents,
     });
+    attachOutboundPersistence(whatsapp, () => registeredAgents);
     channels.push(whatsapp);
     whatsapp.connect(); // fire-and-forget, internal reconnection
   }
@@ -1387,6 +1379,7 @@ async function main(): Promise<void> {
         storeChatMetadata(chatJid, timestamp, name),
       registeredAgents: () => registeredAgents,
     });
+    attachOutboundPersistence(telegram, () => registeredAgents);
     channels.push(telegram);
     await telegram.connect();
     if (TELEGRAM_BOT_POOL.length > 0) {
@@ -1404,6 +1397,7 @@ async function main(): Promise<void> {
         storeChatMetadata(chatJid, ts, name),
       registeredAgents: () => registeredAgents,
     });
+    attachOutboundPersistence(imessage, () => registeredAgents);
     channels.push(imessage);
     await imessage.connect();
   }
@@ -1417,6 +1411,10 @@ async function main(): Promise<void> {
     },
     onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
     registeredAgents: () => registeredAgents,
+    onOutbound: (msg) => storeMessage(msg, 1),
+    onOutboundEdit: (id, jid, content) =>
+      updateMessageContent(id, jid, content),
+    onOutboundDelete: (id, jid) => deleteMessageById(id, jid),
   });
   channels.push(webChannel);
   await webChannel.connect();

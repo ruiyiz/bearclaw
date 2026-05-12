@@ -1,34 +1,44 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import {
   api,
-  type ChatSession,
+  type ChatMessage,
   type ChatStreamEvent,
   type SlashCommand,
   type UserAgent,
 } from '@/lib/api';
-
-interface ChatMessage {
-  id: string;
-  side: 'user' | 'agent';
-  text: string;
-  // ms-epoch; 0 = unknown.
-  ts: number;
-  remoteId?: number;
-  media?: { url: string; mediaType: string; caption?: string };
-}
+import {
+  Bubble,
+  channelLabelFromJid,
+  parseMediaTag,
+  type BubbleData,
+} from '@/components/chat-bubble';
 
 const TEXTAREA_MAX_PX = 240;
+const HISTORY_LIMIT = 200;
+const ALL_CHANNELS_KEY = 'nc.chat.allChannels';
+
+function rowToBubble(
+  m: ChatMessage,
+  folder: string,
+  showChannel: boolean,
+): BubbleData {
+  const parsed = parseMediaTag(m.content, folder);
+  return {
+    id: `db-${m.id}`,
+    side: m.isFromMe ? 'agent' : 'user',
+    text: parsed?.text ?? m.content,
+    ts: m.timestamp ? Date.parse(m.timestamp) || 0 : 0,
+    media: parsed?.media,
+    channelLabel: showChannel ? channelLabelFromJid(m.chatJid) : undefined,
+  };
+}
 
 export function ChatView() {
   const [agents, setAgents] = useState<UserAgent[]>([]);
   const [folder, setFolder] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<BubbleData[]>([]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const [sending, setSending] = useState(false);
@@ -43,9 +53,19 @@ export function ChatView() {
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [pickerIndex, setPickerIndex] = useState(0);
   const pickerItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [allChannels, setAllChannels] = useState(false);
 
-  const latestSessionId = sessions[0]?.sessionId ?? null;
-  const viewingLatest = sessionId !== null && sessionId === latestSessionId;
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setAllChannels(window.localStorage.getItem(ALL_CHANNELS_KEY) === '1');
+  }, []);
+
+  function toggleAllChannels(next: boolean) {
+    setAllChannels(next);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(ALL_CHANNELS_KEY, next ? '1' : '0');
+    }
+  }
 
   useEffect(() => {
     api
@@ -66,56 +86,23 @@ export function ChatView() {
       .catch(() => {});
   }, []);
 
-  // Reload sessions whenever folder changes.
+  // Load message history for the selected agent. The web channel owns its
+  // own persistence (messages table) so this is just the agent's linear
+  // chat history — not split by SDK sessions.
   useEffect(() => {
     if (!folder) {
-      setSessions([]);
-      setSessionId(null);
-      setMessages([]);
-      return;
-    }
-    let cancelled = false;
-    api
-      .chatSessions(folder)
-      .then((d) => {
-        if (cancelled) return;
-        setSessions(d.sessions);
-        setSessionId(d.sessions[0]?.sessionId ?? null);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSessions([]);
-        setSessionId(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [folder]);
-
-  // Load transcript when session changes.
-  useEffect(() => {
-    if (!folder || !sessionId) {
       setMessages([]);
       return;
     }
     let cancelled = false;
     setLoadingHistory(true);
     api
-      .chatHistory(folder, sessionId)
+      .chatMessages(folder, { limit: HISTORY_LIMIT, allChannels })
       .then((d) => {
         if (cancelled) return;
-        setMessages(
-          d.messages.map((m, i) => {
-            const parsed = parseMediaTag(m.content, folder);
-            return {
-              id: `h-${sessionId}-${i}`,
-              side: m.sender === 'Assistant' ? 'agent' : 'user',
-              text: parsed?.text ?? m.content,
-              ts: m.timestamp ? Date.parse(m.timestamp) || 0 : 0,
-              media: parsed?.media,
-            };
-          }),
-        );
+        // DB returns newest-first; reverse for chronological render.
+        const rows = [...d.messages].reverse();
+        setMessages(rows.map((m) => rowToBubble(m, folder, allChannels)));
       })
       .catch(() => {
         if (cancelled) return;
@@ -127,7 +114,7 @@ export function ChatView() {
     return () => {
       cancelled = true;
     };
-  }, [folder, sessionId]);
+  }, [folder, allChannels]);
 
   useEffect(() => {
     if (!folder) return;
@@ -155,7 +142,6 @@ export function ChatView() {
     scrollRef.current?.scrollTo({ top: 1e9, behavior: 'smooth' });
   }, [messages, typing]);
 
-  // Resize textarea to fit content, capped at TEXTAREA_MAX_PX.
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
@@ -165,17 +151,19 @@ export function ChatView() {
 
   function applyStreamEvent(evt: ChatStreamEvent) {
     if (evt.type === 'typing') {
-      // Only show typing for the live session view.
-      if (viewingLatest) setTyping(evt.isTyping);
+      setTyping(evt.isTyping);
       return;
     }
-    // Drop live events when scrolled back to an older session — they belong
-    // to the latest session's transcript, not the one currently displayed.
-    if (!viewingLatest) return;
     setTyping(false);
+    // SSE is web-only; tag bubbles with the web channel label when the
+    // cross-channel view is active so the user sees a consistent chip column.
+    const liveLabel = allChannels ? 'web' : undefined;
     setMessages((prev) => {
       switch (evt.type) {
         case 'message':
+          // De-dupe against the row the server already persisted: if a bubble
+          // with the same remoteId is present, skip; otherwise append.
+          if (prev.some((m) => m.remoteId === evt.id)) return prev;
           return [
             ...prev,
             {
@@ -184,6 +172,7 @@ export function ChatView() {
               text: evt.text,
               ts: evt.ts,
               remoteId: evt.id,
+              channelLabel: liveLabel,
             },
           ];
         case 'edit':
@@ -193,6 +182,7 @@ export function ChatView() {
         case 'delete':
           return prev.filter((m) => m.remoteId !== evt.id);
         case 'media':
+          if (prev.some((m) => m.remoteId === evt.id)) return prev;
           return [
             ...prev,
             {
@@ -208,6 +198,7 @@ export function ChatView() {
                     caption: evt.caption,
                   }
                 : undefined,
+              channelLabel: liveLabel,
             },
           ];
         default:
@@ -238,7 +229,6 @@ export function ChatView() {
 
   async function handleFile(file: File) {
     if (!folder || uploading) return;
-    if (!viewingLatest && latestSessionId) setSessionId(latestSessionId);
     setUploading(true);
     const kind = kindForMime(file.type || '');
     const previewUrl = URL.createObjectURL(file);
@@ -255,6 +245,7 @@ export function ChatView() {
           mediaType: kind,
           caption: file.name,
         },
+        channelLabel: allChannels ? 'web' : undefined,
       },
     ]);
     try {
@@ -298,7 +289,6 @@ export function ChatView() {
         const blob = new Blob(recordedChunksRef.current, { type: mime });
         recordedChunksRef.current = [];
         if (blob.size === 0) return;
-        if (!viewingLatest && latestSessionId) setSessionId(latestSessionId);
         const localId = `v-${Date.now()}`;
         setMessages((prev) => [
           ...prev,
@@ -307,6 +297,7 @@ export function ChatView() {
             side: 'user',
             text: '[Voice message] (uploading…)',
             ts: Date.now(),
+            channelLabel: allChannels ? 'web' : undefined,
           },
         ]);
         setUploading(true);
@@ -369,17 +360,18 @@ export function ChatView() {
 
   async function send() {
     if (!folder || !input.trim() || sending) return;
-    if (!viewingLatest) {
-      // Sending always lands in the agent's live (latest) session — jump
-      // forward so the user sees their bubble in the right view.
-      if (latestSessionId) setSessionId(latestSessionId);
-    }
     const text = input.trim();
     setInput('');
     setSending(true);
     setMessages((prev) => [
       ...prev,
-      { id: `u-${Date.now()}`, side: 'user', text, ts: Date.now() },
+      {
+        id: `u-${Date.now()}`,
+        side: 'user',
+        text,
+        ts: Date.now(),
+        channelLabel: allChannels ? 'web' : undefined,
+      },
     ]);
     try {
       await api.chat(folder, text);
@@ -398,15 +390,6 @@ export function ChatView() {
     }
   }
 
-  const sessionLabels = useMemo(() => {
-    return sessions.map((s) => ({
-      value: s.sessionId,
-      label: formatSessionLabel(s),
-    }));
-  }, [sessions]);
-
-  // Slash-command picker: active only when input starts with `/` and the user
-  // is still typing the command token (no whitespace yet).
   const slashMatch = useMemo(() => {
     if (!input.startsWith('/')) return null;
     const token = input.slice(1);
@@ -450,31 +433,15 @@ export function ChatView() {
             </option>
           ))}
         </select>
-        <label className="text-xs text-[color:var(--muted)] ml-2">
-          Session
+        <label className="text-xs text-[color:var(--muted)] ml-2 inline-flex items-center gap-1 select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={allChannels}
+            onChange={(e) => toggleAllChannels(e.target.checked)}
+            className="accent-[color:var(--accent)]"
+          />
+          all channels
         </label>
-        <select
-          value={sessionId ?? ''}
-          onChange={(e) => setSessionId(e.target.value || null)}
-          disabled={sessions.length === 0}
-          className="bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-2 py-1 text-sm max-w-[60vw] disabled:opacity-50"
-        >
-          {sessionLabels.length === 0 && <option value="">(none)</option>}
-          {sessionLabels.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        {!viewingLatest && sessionId && (
-          <button
-            type="button"
-            onClick={() => latestSessionId && setSessionId(latestSessionId)}
-            className="text-xs text-[color:var(--accent)] underline"
-          >
-            jump to latest
-          </button>
-        )}
         {typing && (
           <span className="text-xs text-[color:var(--muted)]">… typing</span>
         )}
@@ -485,7 +452,7 @@ export function ChatView() {
       >
         {loadingHistory && (
           <div className="text-center text-xs text-[color:var(--muted)]">
-            loading transcript…
+            loading history…
           </div>
         )}
         {!loadingHistory && messages.length === 0 && (
@@ -636,213 +603,6 @@ export function ChatView() {
           Send
         </button>
       </form>
-    </div>
-  );
-}
-
-const MEDIA_TAG_RE = /^\[(Photo|Video|Audio|Document):\s+([^\]]+?)\](.*)$/s;
-
-function parseMediaTag(
-  content: string,
-  folder: string,
-): {
-  text: string;
-  media: { url: string; mediaType: string; caption?: string };
-} | null {
-  const m = content.match(MEDIA_TAG_RE);
-  if (!m) return null;
-  const tag = m[1];
-  const raw = m[2].trim();
-  const trailing = m[3].trim();
-  // [Document: name.pdf] without a path on disk: skip — can't fetch.
-  if (!raw.startsWith('/')) return null;
-  const kindMap: Record<string, string> = {
-    Photo: 'image',
-    Video: 'video',
-    Audio: 'audio',
-    Document: 'document',
-  };
-  const mediaType = kindMap[tag];
-  return {
-    text: trailing,
-    media: {
-      url: api.agentMediaUrl(folder, raw),
-      mediaType,
-      caption: trailing || undefined,
-    },
-  };
-}
-
-function formatSessionLabel(s: ChatSession): string {
-  const when = new Date(s.lastModified).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-  const title = (s.summary || s.firstPrompt || s.sessionId.slice(0, 8)).trim();
-  const short = title.length > 60 ? title.slice(0, 57) + '…' : title;
-  return `${when} — ${short}`;
-}
-
-function formatTimestamp(ts: number): string {
-  if (!ts) return '';
-  const d = new Date(ts);
-  const now = new Date();
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  return d.toLocaleString(undefined, {
-    month: sameDay ? undefined : 'short',
-    day: sameDay ? undefined : 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-function Bubble({ m }: { m: ChatMessage }) {
-  const own = m.side === 'user';
-  const time = formatTimestamp(m.ts);
-  return (
-    <div className={'flex flex-col ' + (own ? 'items-end' : 'items-start')}>
-      <div
-        className={
-          'max-w-[85%] rounded-2xl px-3 py-2 text-sm break-words ' +
-          (own
-            ? 'bg-[color:var(--accent)] text-white rounded-br-md'
-            : 'bg-[color:var(--card)] border border-[color:var(--border)] rounded-bl-md')
-        }
-      >
-        {m.media?.url && <MediaPreview media={m.media} />}
-        {m.text ? (
-          <MarkdownBody text={m.text} dark={own} />
-        ) : m.media ? null : (
-          <span>…</span>
-        )}
-      </div>
-      {time && (
-        <span className="text-[10px] text-[color:var(--muted)] mt-0.5 px-1">
-          {time}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function MediaPreview({
-  media,
-}: {
-  media: { url: string; mediaType: string; caption?: string };
-}) {
-  const t = media.mediaType.toLowerCase();
-  if (t === 'image' || t.startsWith('image/')) {
-    return (
-      <img
-        src={media.url}
-        alt={media.caption || ''}
-        className="rounded-md mb-1 max-h-80 object-contain"
-      />
-    );
-  }
-  if (t === 'video' || t.startsWith('video/')) {
-    return (
-      <video
-        src={media.url}
-        controls
-        className="rounded-md mb-1 max-h-80 w-full"
-      />
-    );
-  }
-  if (t === 'audio' || t.startsWith('audio/')) {
-    return <audio src={media.url} controls className="mb-1 w-full" />;
-  }
-  // document / other
-  const filename = media.url.split('/').pop() || 'file';
-  return (
-    <a
-      href={media.url}
-      target="_blank"
-      rel="noreferrer"
-      className="inline-flex items-center gap-2 underline mb-1"
-      download
-    >
-      📎 {decodeURIComponent(filename)}
-    </a>
-  );
-}
-
-function MarkdownBody({ text, dark }: { text: string; dark: boolean }) {
-  return (
-    <div
-      className={
-        'chat-md ' +
-        (dark
-          ? '[&_a]:text-white [&_a]:underline [&_code]:bg-white/20'
-          : '[&_a]:text-[color:var(--accent)] [&_a]:underline [&_code]:bg-black/10')
-      }
-    >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          p: ({ children }) => (
-            <p className="whitespace-pre-wrap [&:not(:last-child)]:mb-2">
-              {children}
-            </p>
-          ),
-          ul: ({ children }) => (
-            <ul className="list-disc pl-5 [&:not(:last-child)]:mb-2">
-              {children}
-            </ul>
-          ),
-          ol: ({ children }) => (
-            <ol className="list-decimal pl-5 [&:not(:last-child)]:mb-2">
-              {children}
-            </ol>
-          ),
-          li: ({ children }) => <li className="mb-0.5">{children}</li>,
-          code: ({ className, children, ...props }) => {
-            const isBlock = /language-/.test(className || '');
-            if (isBlock) {
-              return (
-                <pre className="bg-black/30 rounded-md p-2 my-2 overflow-x-auto text-xs">
-                  <code {...props}>{children}</code>
-                </pre>
-              );
-            }
-            return (
-              <code
-                className="rounded px-1 py-0.5 text-[0.85em] font-mono"
-                {...props}
-              >
-                {children}
-              </code>
-            );
-          },
-          pre: ({ children }) => <>{children}</>,
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          ),
-          h1: ({ children }) => (
-            <h1 className="text-base font-semibold mt-1 mb-1">{children}</h1>
-          ),
-          h2: ({ children }) => (
-            <h2 className="text-sm font-semibold mt-1 mb-1">{children}</h2>
-          ),
-          h3: ({ children }) => (
-            <h3 className="text-sm font-semibold mt-1 mb-1">{children}</h3>
-          ),
-          blockquote: ({ children }) => (
-            <blockquote className="border-l-2 border-current/40 pl-2 italic opacity-90 my-1">
-              {children}
-            </blockquote>
-          ),
-        }}
-      >
-        {text}
-      </ReactMarkdown>
     </div>
   );
 }

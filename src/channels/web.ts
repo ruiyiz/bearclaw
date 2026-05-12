@@ -2,22 +2,30 @@ import fs from 'fs';
 import path from 'path';
 
 import { webBroker } from '../server/broker.js';
-import { CACHE_DIR } from '../config.js';
+import { agentVarDir } from '../config.js';
 import { logger } from '../logger.js';
 import {
   Channel,
   MediaOptions,
   MediaSource,
   MediaType,
+  NewMessage,
   OnChatMetadata,
   OnInboundMessage,
   RegisteredAgent,
 } from '../types.js';
 
+type OnOutboundMessage = (msg: NewMessage) => void;
+type OnOutboundEdit = (id: string, chatJid: string, content: string) => void;
+type OnOutboundDelete = (id: string, chatJid: string) => void;
+
 interface WebChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredAgents: () => Record<string, RegisteredAgent>;
+  onOutbound?: OnOutboundMessage;
+  onOutboundEdit?: OnOutboundEdit;
+  onOutboundDelete?: OnOutboundDelete;
 }
 
 // JID prefix used by the web channel. Each registered agent gets one JID per
@@ -28,12 +36,26 @@ export function isWebJid(jid: string): boolean {
   return jid.startsWith(WEB_JID_PREFIX);
 }
 
+function folderFromJid(jid: string): string {
+  return jid.slice(WEB_JID_PREFIX.length);
+}
+
+const MEDIA_TYPE_TAG: Record<MediaType, string> = {
+  image: 'Photo',
+  video: 'Video',
+  audio: 'Audio',
+  document: 'Document',
+};
+
 export class WebChannel implements Channel {
   name = 'web';
 
   private opts: WebChannelOpts;
   private connected = false;
   private nextId = 1;
+  // Tag added to persisted DB ids so a process restart with a fresh `nextId`
+  // counter cannot collide with rows from a prior run.
+  private idTag = Math.random().toString(36).slice(2, 8);
 
   constructor(opts: WebChannelOpts) {
     this.opts = opts;
@@ -56,14 +78,45 @@ export class WebChannel implements Channel {
     this.connected = false;
   }
 
+  private dbId(localId: number): string {
+    return `web-out-${this.idTag}-${localId}`;
+  }
+
+  private agentName(jid: string): string {
+    const folder = folderFromJid(jid);
+    const reg = this.opts.registeredAgents()[jid];
+    return reg?.name || folder;
+  }
+
+  private persistOutbound(
+    jid: string,
+    localId: number,
+    content: string,
+    timestamp: string,
+  ): void {
+    if (!this.opts.onOutbound) return;
+    this.opts.onOutbound({
+      id: this.dbId(localId),
+      chat_jid: jid,
+      sender: jid,
+      sender_name: this.agentName(jid),
+      content,
+      timestamp,
+    });
+  }
+
   async sendMessage(jid: string, text: string): Promise<void> {
     const id = this.nextId++;
-    webBroker.publish(jid, { type: 'message', jid, id, text, ts: Date.now() });
+    const ts = Date.now();
+    this.persistOutbound(jid, id, text, new Date(ts).toISOString());
+    webBroker.publish(jid, { type: 'message', jid, id, text, ts });
   }
 
   async sendMessageWithId(jid: string, text: string): Promise<number> {
     const id = this.nextId++;
-    webBroker.publish(jid, { type: 'message', jid, id, text, ts: Date.now() });
+    const ts = Date.now();
+    this.persistOutbound(jid, id, text, new Date(ts).toISOString());
+    webBroker.publish(jid, { type: 'message', jid, id, text, ts });
     return id;
   }
 
@@ -72,6 +125,7 @@ export class WebChannel implements Channel {
     messageId: number,
     text: string,
   ): Promise<void> {
+    this.opts.onOutboundEdit?.(this.dbId(messageId), jid, text);
     webBroker.publish(jid, {
       type: 'edit',
       jid,
@@ -82,6 +136,7 @@ export class WebChannel implements Channel {
   }
 
   async deleteMessage(jid: string, messageId: number): Promise<void> {
+    this.opts.onOutboundDelete?.(this.dbId(messageId), jid);
     webBroker.publish(jid, { type: 'delete', jid, id: messageId });
   }
 
@@ -96,18 +151,36 @@ export class WebChannel implements Channel {
     options?: MediaOptions,
   ): Promise<void> {
     const id = this.nextId++;
-    // Persist to cache dir + emit URL when buffer-backed; pass URL through
-    // unchanged otherwise.
+    const folder = folderFromJid(jid);
+    const ts = Date.now();
+    // Persist buffer-backed media into the agent's media dir so it shows up
+    // for replay alongside inbound uploads. URL-backed sources pass through.
     let url = source.url;
+    let absPath: string | null = null;
     if (source.buffer) {
       const ext = guessExt(type, options?.mimetype);
-      const file = `web-${Date.now()}-${id}${ext}`;
-      const outDir = path.join(CACHE_DIR, 'web-media');
+      const file = `web-out-${ts}-${id}${ext}`;
+      const outDir = path.join(agentVarDir(folder), 'media');
       fs.mkdirSync(outDir, { recursive: true });
       const outPath = path.join(outDir, file);
       fs.writeFileSync(outPath, source.buffer);
-      url = `/api/media/${encodeURIComponent(file)}`;
+      absPath = outPath;
+      url = `/api/user/agent-media?folder=${encodeURIComponent(folder)}&path=${encodeURIComponent(outPath)}`;
+    } else if (
+      source.url &&
+      source.url.startsWith('/') &&
+      fs.existsSync(source.url)
+    ) {
+      absPath = source.url;
     }
+
+    if (absPath) {
+      const captionPart = options?.caption ? ` ${options.caption}` : '';
+      const tag = MEDIA_TYPE_TAG[type];
+      const content = `[${tag}: ${absPath}]${captionPart}`;
+      this.persistOutbound(jid, id, content, new Date(ts).toISOString());
+    }
+
     webBroker.publish(jid, {
       type: 'media',
       jid,
@@ -115,7 +188,7 @@ export class WebChannel implements Channel {
       mediaType: type,
       caption: options?.caption,
       url,
-      ts: Date.now(),
+      ts,
     });
   }
 

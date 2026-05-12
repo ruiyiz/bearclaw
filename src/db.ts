@@ -366,7 +366,7 @@ export function setLastGroupSync(): void {
   ).run(now);
 }
 
-export function storeMessage(msg: NewMessage): void {
+export function storeMessage(msg: NewMessage, isFromMe = 0): void {
   db.prepare(
     `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me) VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
@@ -376,36 +376,90 @@ export function storeMessage(msg: NewMessage): void {
     msg.sender_name,
     msg.content,
     msg.timestamp,
-    0,
+    isFromMe ? 1 : 0,
+  );
+}
+
+export interface StoredMessage extends NewMessage {
+  is_from_me: number;
+}
+
+export function getMessagesByJid(
+  chatJid: string,
+  before: string | null,
+  limit: number,
+): StoredMessage[] {
+  const sql = before
+    ? `SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+       FROM messages
+       WHERE chat_jid = ? AND timestamp < ?
+       ORDER BY timestamp DESC
+       LIMIT ?`
+    : `SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+       FROM messages
+       WHERE chat_jid = ?
+       ORDER BY timestamp DESC
+       LIMIT ?`;
+  const args: unknown[] = before ? [chatJid, before, limit] : [chatJid, limit];
+  return db.prepare(sql).all(...args) as StoredMessage[];
+}
+
+export function getMessagesByJids(
+  chatJids: string[],
+  before: string | null,
+  limit: number,
+): StoredMessage[] {
+  if (chatJids.length === 0) return [];
+  const placeholders = chatJids.map(() => '?').join(',');
+  const sql = before
+    ? `SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+       FROM messages
+       WHERE chat_jid IN (${placeholders}) AND timestamp < ?
+       ORDER BY timestamp DESC
+       LIMIT ?`
+    : `SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+       FROM messages
+       WHERE chat_jid IN (${placeholders})
+       ORDER BY timestamp DESC
+       LIMIT ?`;
+  const args: unknown[] = before
+    ? [...chatJids, before, limit]
+    : [...chatJids, limit];
+  return db.prepare(sql).all(...args) as StoredMessage[];
+}
+
+export function updateMessageContent(
+  id: string,
+  chatJid: string,
+  content: string,
+): void {
+  db.prepare(
+    `UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ?`,
+  ).run(content, id, chatJid);
+}
+
+export function deleteMessageById(id: string, chatJid: string): void {
+  db.prepare(`DELETE FROM messages WHERE id = ? AND chat_jid = ?`).run(
+    id,
+    chatJid,
   );
 }
 
 export function getNewMessages(
   jids: string[],
   lastTimestamp: string,
-  botPrefixes: string[],
 ): { messages: NewMessage[]; newTimestamp: string } {
   if (jids.length === 0) return { messages: [], newTimestamp: lastTimestamp };
 
   const placeholders = jids.map(() => '?').join(',');
-  // Filter out bot's own messages by checking content prefix (not is_from_me, since user shares the account)
-  const prefixFilters = botPrefixes
-    .map(() => 'content NOT LIKE ?')
-    .join(' AND ');
   const sql = `
     SELECT id, chat_jid, sender, sender_name, content, timestamp
     FROM messages
-    WHERE timestamp > ? AND chat_jid IN (${placeholders}) AND ${prefixFilters}
+    WHERE timestamp > ? AND chat_jid IN (${placeholders}) AND is_from_me = 0
     ORDER BY timestamp
   `;
 
-  const rows = db
-    .prepare(sql)
-    .all(
-      lastTimestamp,
-      ...jids,
-      ...botPrefixes.map((p) => `${p}:%`),
-    ) as NewMessage[];
+  const rows = db.prepare(sql).all(lastTimestamp, ...jids) as NewMessage[];
 
   let newTimestamp = lastTimestamp;
   for (const row of rows) {
@@ -418,25 +472,14 @@ export function getNewMessages(
 export function getMessagesSince(
   chatJid: string,
   sinceTimestamp: string,
-  botPrefixes: string[],
 ): NewMessage[] {
-  // Filter out bot's own messages by checking content prefix
-  const prefixFilters = botPrefixes
-    .map(() => 'content NOT LIKE ?')
-    .join(' AND ');
   const sql = `
     SELECT id, chat_jid, sender, sender_name, content, timestamp
     FROM messages
-    WHERE chat_jid = ? AND timestamp > ? AND ${prefixFilters}
+    WHERE chat_jid = ? AND timestamp > ? AND is_from_me = 0
     ORDER BY timestamp
   `;
-  return db
-    .prepare(sql)
-    .all(
-      chatJid,
-      sinceTimestamp,
-      ...botPrefixes.map((p) => `${p}:%`),
-    ) as NewMessage[];
+  return db.prepare(sql).all(chatJid, sinceTimestamp) as NewMessage[];
 }
 
 // ─── Event functions ───────────────────────────────────────────────────────

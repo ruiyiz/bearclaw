@@ -66,7 +66,18 @@ export interface SlashCommand {
   description: string;
 }
 
-export interface ChatSession {
+export interface ChatMessage {
+  id: string;
+  chatJid: string;
+  sender: string;
+  senderName: string;
+  content: string;
+  timestamp: string;
+  isFromMe: boolean;
+}
+
+// Admin-only: SDK session metadata + parsed transcript message.
+export interface TranscriptSession {
   sessionId: string;
   summary: string;
   firstPrompt?: string;
@@ -74,7 +85,7 @@ export interface ChatSession {
   createdAt?: number;
 }
 
-export interface HistoryMessage {
+export interface TranscriptMessage {
   sender: string;
   timestamp: string;
   content: string;
@@ -138,14 +149,18 @@ export const api = {
       folder,
       text,
     }),
-  chatSessions: (folder: string, limit = 50) =>
-    get<{ sessions: ChatSession[] }>(
-      `/api/user/chat/sessions?folder=${encodeURIComponent(folder)}&limit=${limit}`,
-    ),
-  chatHistory: (folder: string, sessionId: string) =>
-    get<{ messages: HistoryMessage[] }>(
-      `/api/user/chat/history?folder=${encodeURIComponent(folder)}&sessionId=${encodeURIComponent(sessionId)}`,
-    ),
+  chatMessages: (
+    folder: string,
+    opts?: { before?: string; limit?: number; allChannels?: boolean },
+  ) => {
+    const params = new URLSearchParams({ folder });
+    if (opts?.before) params.set('before', opts.before);
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    if (opts?.allChannels) params.set('allChannels', '1');
+    return get<{ messages: ChatMessage[] }>(
+      `/api/user/chat/messages?${params.toString()}`,
+    );
+  },
   commands: () => get<{ commands: SlashCommand[] }>('/api/user/commands'),
   agentMediaUrl: (folder: string, absPath: string) =>
     `/api/user/agent-media?folder=${encodeURIComponent(folder)}&path=${encodeURIComponent(absPath)}`,
@@ -205,6 +220,14 @@ export const api = {
       'DELETE',
     ),
   agents: () => get<{ agents: RegisteredAgent[] }>('/api/admin/agents'),
+  transcriptSessions: (folder: string, limit = 50) =>
+    get<{ sessions: TranscriptSession[] }>(
+      `/api/admin/transcripts/sessions?folder=${encodeURIComponent(folder)}&limit=${limit}`,
+    ),
+  transcriptMessages: (folder: string, sessionId: string) =>
+    get<{ messages: TranscriptMessage[] }>(
+      `/api/admin/transcripts/messages?folder=${encodeURIComponent(folder)}&sessionId=${encodeURIComponent(sessionId)}`,
+    ),
   health: () => get<{ checks: HealthCheck[] }>('/api/admin/health'),
   heartbeat: (folder: string, lines = 40) =>
     get<{ folder: string; log: string }>(

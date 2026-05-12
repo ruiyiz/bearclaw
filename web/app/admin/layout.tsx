@@ -16,6 +16,7 @@ export default function AdminLayout({
           { href: '/admin/agents', label: 'Agents' },
           { href: '/admin/health', label: 'Health' },
           { href: '/admin/heartbeat', label: 'Heartbeat' },
+          { href: '/admin/transcripts', label: 'Transcripts' },
         ]}
       />
       <main className="flex-1 px-3 py-3 overflow-y-auto">{children}</main>
