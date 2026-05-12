@@ -8,7 +8,6 @@ export default function ChatPage() {
         base="NanoClaw"
         items={[
           { href: '/chat', label: 'Chat' },
-          { href: '/events', label: 'Events' },
           { href: '/admin', label: 'Admin' },
         ]}
       />

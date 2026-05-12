@@ -483,11 +483,6 @@ add('GET', /^\/api\/user\/commands$/, (_req, res) => {
   });
 });
 
-add('GET', /^\/api\/user\/events$/, (_req, res, url) => {
-  const limit = parseInt(url.searchParams.get('limit') || '50', 10);
-  json(res, 200, { events: getRecentEvents(limit) });
-});
-
 // ─── Agent-media passthrough (per-agent persisted files) ───────────────────
 
 function mediaContentType(file: string): string {

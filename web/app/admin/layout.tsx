@@ -9,6 +9,7 @@ export default function AdminLayout({
     <>
       <Nav
         base="Admin"
+        homeHref="/chat"
         items={[
           { href: '/admin/skills', label: 'Skills' },
           { href: '/admin/events', label: 'Events' },

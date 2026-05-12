@@ -177,8 +177,6 @@ export const api = {
       'POST',
       payload,
     ),
-  userEvents: (limit = 50) =>
-    get<{ events: EventRecord[] }>(`/api/user/events?limit=${limit}`),
   // admin
   skills: () => get<{ skills: SkillInfo[] }>('/api/admin/skills'),
   skillSources: () =>

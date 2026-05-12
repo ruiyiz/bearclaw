@@ -54,6 +54,9 @@ export function ChatView() {
   const [pickerIndex, setPickerIndex] = useState(0);
   const pickerItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [allChannels, setAllChannels] = useState(false);
+  // Tracks whether the next scroll-to-bottom should be instant (initial load
+  // or folder switch) vs. smooth (new message arrival).
+  const justLoadedRef = useRef(true);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -94,6 +97,7 @@ export function ChatView() {
       setMessages([]);
       return;
     }
+    justLoadedRef.current = true;
     let cancelled = false;
     setLoadingHistory(true);
     api
@@ -139,8 +143,45 @@ export function ChatView() {
   }, [folder]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 1e9, behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (!el) return;
+    if (justLoadedRef.current) {
+      el.scrollTop = el.scrollHeight;
+      justLoadedRef.current = false;
+    } else {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    }
   }, [messages, typing]);
+
+  // Autofocus the composer on mount and whenever the agent changes.
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, [folder]);
+
+  // Pressing Enter anywhere while focus is outside an editable element jumps
+  // straight into the composer.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Enter' || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey)
+        return;
+      const ta = textareaRef.current;
+      if (!ta || document.activeElement === ta) return;
+      const tgt = e.target as HTMLElement | null;
+      const tag = tgt?.tagName;
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        tag === 'BUTTON' ||
+        tgt?.isContentEditable
+      )
+        return;
+      e.preventDefault();
+      ta.focus();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     const ta = textareaRef.current;
@@ -425,7 +466,7 @@ export function ChatView() {
         <select
           value={folder ?? ''}
           onChange={(e) => setFolder(e.target.value || null)}
-          className="bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-2 py-1 text-sm"
+          className="bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-2 py-1 text-sm transition-colors hover:border-[color:var(--accent)] focus:border-[color:var(--accent)] focus:outline-none cursor-pointer"
         >
           {agents.map((a) => (
             <option key={a.folder} value={a.folder}>
@@ -475,7 +516,7 @@ export function ChatView() {
         ))}
         {typing && messages.length > 0 && (
           <div className="flex justify-start">
-            <div className="rounded-2xl rounded-bl-md bg-[color:var(--card)] border border-[color:var(--border)] px-3 py-2 text-sm text-[color:var(--muted)]">
+            <div className="rounded-2xl rounded-bl-md bg-[color:var(--card)] border border-[color:var(--border)] px-3 py-2 text-sm text-[color:var(--muted)] animate-pulse">
               …
             </div>
           </div>
@@ -504,7 +545,7 @@ export function ChatView() {
           aria-label="Attach"
           disabled={!folder || uploading || recording}
           onClick={() => fileInputRef.current?.click()}
-          className="h-9 inline-flex items-center justify-center rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-3 text-sm leading-none disabled:opacity-40"
+          className="h-9 inline-flex items-center justify-center rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-3 text-sm leading-none transition-all duration-150 hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[color:var(--card)] disabled:hover:border-[color:var(--border)] disabled:active:scale-100"
           title="Attach file"
         >
           📎
@@ -515,10 +556,10 @@ export function ChatView() {
           disabled={!folder || uploading}
           onClick={() => (recording ? stopRecording() : void startRecording())}
           className={
-            'h-9 inline-flex items-center justify-center rounded-md border px-3 text-sm leading-none disabled:opacity-40 ' +
+            'h-9 inline-flex items-center justify-center rounded-md border px-3 text-sm leading-none transition-all duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 ' +
             (recording
               ? 'border-red-500 bg-red-500/20 text-red-300 animate-pulse'
-              : 'border-[color:var(--border)] bg-[color:var(--card)]')
+              : 'border-[color:var(--border)] bg-[color:var(--card)] hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10')
           }
           title={recording ? 'Stop recording' : 'Record voice message'}
         >
@@ -540,7 +581,7 @@ export function ChatView() {
                   }}
                   onMouseEnter={() => setPickerIndex(i)}
                   className={
-                    'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline ' +
+                    'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline transition-colors duration-100 ' +
                     (i === pickerIndex
                       ? 'bg-[color:var(--accent)]/20'
                       : 'hover:bg-white/5')
@@ -598,7 +639,7 @@ export function ChatView() {
         <button
           type="submit"
           disabled={!folder || !input.trim() || sending}
-          className="h-9 inline-flex items-center justify-center rounded-md bg-[color:var(--accent)] text-white px-4 text-sm leading-none disabled:opacity-40"
+          className="h-9 inline-flex items-center justify-center rounded-md bg-[color:var(--accent)] text-white px-4 text-sm leading-none transition-all duration-150 hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
         >
           Send
         </button>
