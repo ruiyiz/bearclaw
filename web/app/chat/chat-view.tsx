@@ -1,5 +1,7 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   api,
   type ChatSession,
@@ -11,9 +13,13 @@ interface ChatMessage {
   id: string;
   side: 'user' | 'agent';
   text: string;
+  // ms-epoch; 0 = unknown.
+  ts: number;
   remoteId?: number;
   media?: { url: string; mediaType: string; caption?: string };
 }
+
+const TEXTAREA_MAX_PX = 240;
 
 export function ChatView() {
   const [agents, setAgents] = useState<UserAgent[]>([]);
@@ -27,6 +33,12 @@ export function ChatView() {
   const [sending, setSending] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const [recording, setRecording] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const latestSessionId = sessions[0]?.sessionId ?? null;
   const viewingLatest = sessionId !== null && sessionId === latestSessionId;
@@ -89,6 +101,7 @@ export function ChatView() {
             id: `h-${sessionId}-${i}`,
             side: m.sender === 'Assistant' ? 'agent' : 'user',
             text: m.content,
+            ts: m.timestamp ? Date.parse(m.timestamp) || 0 : 0,
           })),
         );
       })
@@ -130,6 +143,14 @@ export function ChatView() {
     scrollRef.current?.scrollTo({ top: 1e9, behavior: 'smooth' });
   }, [messages, typing]);
 
+  // Resize textarea to fit content, capped at TEXTAREA_MAX_PX.
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, TEXTAREA_MAX_PX) + 'px';
+  }, [input]);
+
   function applyStreamEvent(evt: ChatStreamEvent) {
     if (evt.type === 'typing') {
       // Only show typing for the live session view.
@@ -149,12 +170,13 @@ export function ChatView() {
               id: `r-${evt.id}`,
               side: 'agent',
               text: evt.text,
+              ts: evt.ts,
               remoteId: evt.id,
             },
           ];
         case 'edit':
           return prev.map((m) =>
-            m.remoteId === evt.id ? { ...m, text: evt.text } : m,
+            m.remoteId === evt.id ? { ...m, text: evt.text, ts: evt.ts } : m,
           );
         case 'delete':
           return prev.filter((m) => m.remoteId !== evt.id);
@@ -165,6 +187,7 @@ export function ChatView() {
               id: `r-${evt.id}`,
               side: 'agent',
               text: evt.caption ?? '',
+              ts: evt.ts,
               remoteId: evt.id,
               media: evt.url
                 ? {
@@ -181,6 +204,157 @@ export function ChatView() {
     });
   }
 
+  function kindForMime(mime: string): 'image' | 'video' | 'audio' | 'document' {
+    if (mime.startsWith('image/')) return 'image';
+    if (mime.startsWith('video/')) return 'video';
+    if (mime.startsWith('audio/')) return 'audio';
+    return 'document';
+  }
+
+  async function fileToBase64(file: Blob): Promise<string> {
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      bin += String.fromCharCode(
+        ...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)),
+      );
+    }
+    return btoa(bin);
+  }
+
+  async function handleFile(file: File) {
+    if (!folder || uploading) return;
+    if (!viewingLatest && latestSessionId) setSessionId(latestSessionId);
+    setUploading(true);
+    const kind = kindForMime(file.type || '');
+    const previewUrl = URL.createObjectURL(file);
+    const localId = `u-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: localId,
+        side: 'user',
+        text: '',
+        ts: Date.now(),
+        media: {
+          url: previewUrl,
+          mediaType: kind,
+          caption: file.name,
+        },
+      },
+    ]);
+    try {
+      const dataB64 = await fileToBase64(file);
+      await api.chatUpload({
+        folder,
+        kind,
+        fileName: file.name,
+        mimeType: file.type,
+        dataB64,
+      });
+    } catch (e) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `e-${Date.now()}`,
+          side: 'agent',
+          text: `(upload failed: ${String(e)})`,
+          ts: Date.now(),
+        },
+      ]);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function startRecording() {
+    if (!folder || recording) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : 'audio/mp4';
+      const rec = new MediaRecorder(stream, { mimeType: mime });
+      recordedChunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(recordedChunksRef.current, { type: mime });
+        recordedChunksRef.current = [];
+        if (blob.size === 0) return;
+        if (!viewingLatest && latestSessionId) setSessionId(latestSessionId);
+        const localId = `v-${Date.now()}`;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: localId,
+            side: 'user',
+            text: '[Voice message] (uploading…)',
+            ts: Date.now(),
+          },
+        ]);
+        setUploading(true);
+        try {
+          const dataB64 = await fileToBase64(blob);
+          const res = await api.chatUpload({
+            folder: folder!,
+            kind: 'voice',
+            fileName: `voice.${mime.includes('webm') ? 'webm' : 'm4a'}`,
+            mimeType: mime,
+            dataB64,
+          });
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === localId
+                ? {
+                    ...m,
+                    text: res.transcript
+                      ? `[Voice message] ${res.transcript}`
+                      : '[Voice message]',
+                  }
+                : m,
+            ),
+          );
+        } catch (e) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === localId
+                ? { ...m, text: `(voice upload failed: ${String(e)})` }
+                : m,
+            ),
+          );
+        } finally {
+          setUploading(false);
+        }
+      };
+      mediaRecorderRef.current = rec;
+      rec.start();
+      setRecording(true);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `e-${Date.now()}`,
+          side: 'agent',
+          text: `(mic failed: ${String(err)})`,
+          ts: Date.now(),
+        },
+      ]);
+    }
+  }
+
+  function stopRecording() {
+    const rec = mediaRecorderRef.current;
+    if (!rec) return;
+    if (rec.state !== 'inactive') rec.stop();
+    mediaRecorderRef.current = null;
+    setRecording(false);
+  }
+
   async function send() {
     if (!folder || !input.trim() || sending) return;
     if (!viewingLatest) {
@@ -193,7 +367,7 @@ export function ChatView() {
     setSending(true);
     setMessages((prev) => [
       ...prev,
-      { id: `u-${Date.now()}`, side: 'user', text },
+      { id: `u-${Date.now()}`, side: 'user', text, ts: Date.now() },
     ]);
     try {
       await api.chat(folder, text);
@@ -204,6 +378,7 @@ export function ChatView() {
           id: `e-${Date.now()}`,
           side: 'agent',
           text: `(send failed: ${String(e)})`,
+          ts: Date.now(),
         },
       ]);
     } finally {
@@ -298,13 +473,50 @@ export function ChatView() {
         )}
       </div>
       <form
-        className="border-t border-[color:var(--border)] p-2 flex gap-2"
+        className="border-t border-[color:var(--border)] p-2 flex gap-2 items-end"
         onSubmit={(e) => {
           e.preventDefault();
           void send();
         }}
       >
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept="image/*,video/*,audio/*,application/pdf,.zip,.txt,.md,.csv,.json"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleFile(f);
+            e.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          aria-label="Attach"
+          disabled={!folder || uploading || recording}
+          onClick={() => fileInputRef.current?.click()}
+          className="rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-3 py-2 text-sm disabled:opacity-40"
+          title="Attach file"
+        >
+          📎
+        </button>
+        <button
+          type="button"
+          aria-label={recording ? 'Stop recording' : 'Record voice'}
+          disabled={!folder || uploading}
+          onClick={() => (recording ? stopRecording() : void startRecording())}
+          className={
+            'rounded-md border px-3 py-2 text-sm disabled:opacity-40 ' +
+            (recording
+              ? 'border-red-500 bg-red-500/20 text-red-300 animate-pulse'
+              : 'border-[color:var(--border)] bg-[color:var(--card)]')
+          }
+          title={recording ? 'Stop recording' : 'Record voice message'}
+        >
+          {recording ? '⏹' : '🎙'}
+        </button>
         <textarea
+          ref={textareaRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -315,7 +527,7 @@ export function ChatView() {
           }}
           rows={1}
           placeholder={folder ? `Message ${folder}…` : 'Pick an agent'}
-          className="flex-1 resize-none bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-2 text-sm focus:outline-none focus:border-[color:var(--accent)]"
+          className="flex-1 resize-none overflow-y-auto bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-2 text-sm focus:outline-none focus:border-[color:var(--accent)] leading-5"
         />
         <button
           type="submit"
@@ -341,27 +553,164 @@ function formatSessionLabel(s: ChatSession): string {
   return `${when} — ${short}`;
 }
 
+function formatTimestamp(ts: number): string {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  return d.toLocaleString(undefined, {
+    month: sameDay ? undefined : 'short',
+    day: sameDay ? undefined : 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 function Bubble({ m }: { m: ChatMessage }) {
   const own = m.side === 'user';
+  const time = formatTimestamp(m.ts);
   return (
-    <div className={'flex ' + (own ? 'justify-end' : 'justify-start')}>
+    <div className={'flex flex-col ' + (own ? 'items-end' : 'items-start')}>
       <div
         className={
-          'max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words ' +
+          'max-w-[85%] rounded-2xl px-3 py-2 text-sm break-words ' +
           (own
             ? 'bg-[color:var(--accent)] text-white rounded-br-md'
             : 'bg-[color:var(--card)] border border-[color:var(--border)] rounded-bl-md')
         }
       >
-        {m.media?.url && m.media.mediaType.startsWith('image') && (
-          <img
-            src={m.media.url}
-            alt={m.media.caption || ''}
-            className="rounded-md mb-1 max-h-80 object-contain"
-          />
+        {m.media?.url && <MediaPreview media={m.media} />}
+        {m.text ? (
+          <MarkdownBody text={m.text} dark={own} />
+        ) : m.media ? null : (
+          <span>…</span>
         )}
-        {m.text || (m.media ? '' : '…')}
       </div>
+      {time && (
+        <span className="text-[10px] text-[color:var(--muted)] mt-0.5 px-1">
+          {time}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function MediaPreview({
+  media,
+}: {
+  media: { url: string; mediaType: string; caption?: string };
+}) {
+  const t = media.mediaType.toLowerCase();
+  if (t === 'image' || t.startsWith('image/')) {
+    return (
+      <img
+        src={media.url}
+        alt={media.caption || ''}
+        className="rounded-md mb-1 max-h-80 object-contain"
+      />
+    );
+  }
+  if (t === 'video' || t.startsWith('video/')) {
+    return (
+      <video
+        src={media.url}
+        controls
+        className="rounded-md mb-1 max-h-80 w-full"
+      />
+    );
+  }
+  if (t === 'audio' || t.startsWith('audio/')) {
+    return <audio src={media.url} controls className="mb-1 w-full" />;
+  }
+  // document / other
+  const filename = media.url.split('/').pop() || 'file';
+  return (
+    <a
+      href={media.url}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-2 underline mb-1"
+      download
+    >
+      📎 {decodeURIComponent(filename)}
+    </a>
+  );
+}
+
+function MarkdownBody({ text, dark }: { text: string; dark: boolean }) {
+  return (
+    <div
+      className={
+        'chat-md ' +
+        (dark
+          ? '[&_a]:text-white [&_a]:underline [&_code]:bg-white/20'
+          : '[&_a]:text-[color:var(--accent)] [&_a]:underline [&_code]:bg-black/10')
+      }
+    >
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => (
+            <p className="whitespace-pre-wrap [&:not(:last-child)]:mb-2">
+              {children}
+            </p>
+          ),
+          ul: ({ children }) => (
+            <ul className="list-disc pl-5 [&:not(:last-child)]:mb-2">
+              {children}
+            </ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="list-decimal pl-5 [&:not(:last-child)]:mb-2">
+              {children}
+            </ol>
+          ),
+          li: ({ children }) => <li className="mb-0.5">{children}</li>,
+          code: ({ className, children, ...props }) => {
+            const isBlock = /language-/.test(className || '');
+            if (isBlock) {
+              return (
+                <pre className="bg-black/30 rounded-md p-2 my-2 overflow-x-auto text-xs">
+                  <code {...props}>{children}</code>
+                </pre>
+              );
+            }
+            return (
+              <code
+                className="rounded px-1 py-0.5 text-[0.85em] font-mono"
+                {...props}
+              >
+                {children}
+              </code>
+            );
+          },
+          pre: ({ children }) => <>{children}</>,
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          ),
+          h1: ({ children }) => (
+            <h1 className="text-base font-semibold mt-1 mb-1">{children}</h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="text-sm font-semibold mt-1 mb-1">{children}</h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="text-sm font-semibold mt-1 mb-1">{children}</h3>
+          ),
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-2 border-current/40 pl-2 italic opacity-90 my-1">
+              {children}
+            </blockquote>
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }

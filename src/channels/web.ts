@@ -58,12 +58,12 @@ export class WebChannel implements Channel {
 
   async sendMessage(jid: string, text: string): Promise<void> {
     const id = this.nextId++;
-    webBroker.publish(jid, { type: 'message', jid, id, text });
+    webBroker.publish(jid, { type: 'message', jid, id, text, ts: Date.now() });
   }
 
   async sendMessageWithId(jid: string, text: string): Promise<number> {
     const id = this.nextId++;
-    webBroker.publish(jid, { type: 'message', jid, id, text });
+    webBroker.publish(jid, { type: 'message', jid, id, text, ts: Date.now() });
     return id;
   }
 
@@ -72,7 +72,13 @@ export class WebChannel implements Channel {
     messageId: number,
     text: string,
   ): Promise<void> {
-    webBroker.publish(jid, { type: 'edit', jid, id: messageId, text });
+    webBroker.publish(jid, {
+      type: 'edit',
+      jid,
+      id: messageId,
+      text,
+      ts: Date.now(),
+    });
   }
 
   async deleteMessage(jid: string, messageId: number): Promise<void> {
@@ -109,6 +115,7 @@ export class WebChannel implements Channel {
       mediaType: type,
       caption: options?.caption,
       url,
+      ts: Date.now(),
     });
   }
 

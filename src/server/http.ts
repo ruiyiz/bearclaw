@@ -16,6 +16,7 @@ import { logger } from '../logger.js';
 import { webBroker, type WebOutboundEvent } from './broker.js';
 import { authenticate, handleLogin, handleLogout, initAuth } from './auth.js';
 import { loadParsedTranscript } from '../agent/runner.js';
+import { transcribeAudio } from '../media/transcribe.js';
 import type { WebChannel } from '../channels/web.js';
 import {
   addSkillSource,
@@ -85,6 +86,24 @@ async function readBody(req: http.IncomingMessage): Promise<unknown> {
   } catch {
     return {};
   }
+}
+
+const UPLOAD_MAX_BYTES = 60 * 1024 * 1024; // 60 MB after base64-decode
+
+async function readRawBody(
+  req: http.IncomingMessage,
+  maxBytes: number,
+): Promise<Buffer | null> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const c of req) {
+    total += (c as Buffer).length;
+    if (total > maxBytes) {
+      return null;
+    }
+    chunks.push(c as Buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
 // ─── Auth routes (public) ──────────────────────────────────────────────────
@@ -252,6 +271,97 @@ add('POST', /^\/api\/user\/chat$/, async (req, res, _url, opts) => {
   opts.registerWebAgent(body.folder);
   opts.webChannel.ingest(jid, body.text, body.senderName || 'You');
   json(res, 202, { ok: true, jid });
+});
+
+type UploadKind = 'image' | 'video' | 'audio' | 'document' | 'voice';
+
+function safeExtFromName(name: string, mime: string): string {
+  const fromName = path.extname(name).toLowerCase();
+  if (/^\.[a-z0-9]{1,8}$/.test(fromName)) return fromName;
+  if (mime.includes('png')) return '.png';
+  if (mime.includes('jpeg') || mime.includes('jpg')) return '.jpg';
+  if (mime.includes('webp')) return '.webp';
+  if (mime.includes('gif')) return '.gif';
+  if (mime.includes('mp4')) return '.mp4';
+  if (mime.includes('webm')) return '.webm';
+  if (mime.includes('ogg')) return '.ogg';
+  if (mime.includes('wav')) return '.wav';
+  if (mime.includes('mpeg')) return '.mp3';
+  if (mime.includes('pdf')) return '.pdf';
+  return '.bin';
+}
+
+add('POST', /^\/api\/user\/chat\/upload$/, async (req, res, _url, opts) => {
+  const raw = await readRawBody(req, UPLOAD_MAX_BYTES + 1024 * 1024);
+  if (!raw) return json(res, 413, { error: 'payload too large' });
+  let body: {
+    folder?: string;
+    kind?: UploadKind;
+    fileName?: string;
+    mimeType?: string;
+    dataB64?: string;
+    caption?: string;
+    senderName?: string;
+  };
+  try {
+    body = JSON.parse(raw.toString('utf-8'));
+  } catch {
+    return json(res, 400, { error: 'invalid json' });
+  }
+  const { folder, kind, fileName, mimeType, dataB64, caption, senderName } =
+    body;
+  if (!folder || !kind || !dataB64)
+    return json(res, 400, { error: 'missing fields' });
+  if (!['image', 'video', 'audio', 'document', 'voice'].includes(kind))
+    return json(res, 400, { error: 'invalid kind' });
+
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(dataB64, 'base64');
+  } catch {
+    return json(res, 400, { error: 'invalid base64' });
+  }
+  if (buffer.length === 0) return json(res, 400, { error: 'empty file' });
+  if (buffer.length > UPLOAD_MAX_BYTES)
+    return json(res, 413, { error: 'file too large' });
+
+  const jid = `web:${folder}`;
+  opts.registerWebAgent(folder);
+
+  // Voice: transcribe + ingest text only. Mirrors Telegram voice flow.
+  if (kind === 'voice') {
+    let transcript: string | null = null;
+    try {
+      transcript = await transcribeAudio(buffer, `web-voice-${Date.now()}`);
+    } catch (err) {
+      logger.warn({ err }, 'Web voice transcription failed');
+    }
+    const text = transcript
+      ? `[Voice message] ${transcript}`
+      : '[Voice message - transcription failed]';
+    opts.webChannel.ingest(jid, text, senderName || 'You');
+    return json(res, 202, { ok: true, kind, transcript });
+  }
+
+  // Persist file to per-agent media dir.
+  const ext = safeExtFromName(fileName || '', mimeType || '');
+  const mediaDir = path.join(agentVarDir(folder), 'media');
+  fs.mkdirSync(mediaDir, { recursive: true });
+  const base = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+  const filePath = path.join(mediaDir, base);
+  fs.writeFileSync(filePath, buffer);
+
+  const captionPart = caption ? ` ${caption}` : '';
+  const tagByKind: Record<Exclude<UploadKind, 'voice'>, string> = {
+    image: 'Photo',
+    video: 'Video',
+    audio: 'Audio',
+    document: 'Document',
+  };
+  const tag = tagByKind[kind as Exclude<UploadKind, 'voice'>];
+  const text = `[${tag}: ${filePath}]${captionPart}`;
+  opts.webChannel.ingest(jid, text, senderName || 'You');
+  json(res, 202, { ok: true, kind, path: filePath });
 });
 
 add('GET', /^\/api\/user\/chat\/stream$/, (_req, res, url) => {

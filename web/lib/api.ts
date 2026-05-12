@@ -141,6 +141,19 @@ export const api = {
     get<{ messages: HistoryMessage[] }>(
       `/api/user/chat/history?folder=${encodeURIComponent(folder)}&sessionId=${encodeURIComponent(sessionId)}`,
     ),
+  chatUpload: (payload: {
+    folder: string;
+    kind: 'image' | 'video' | 'audio' | 'document' | 'voice';
+    fileName?: string;
+    mimeType?: string;
+    dataB64: string;
+    caption?: string;
+  }) =>
+    send<{ ok: boolean; kind: string; transcript?: string; path?: string }>(
+      '/api/user/chat/upload',
+      'POST',
+      payload,
+    ),
   userEvents: (limit = 50) =>
     get<{ events: EventRecord[] }>(`/api/user/events?limit=${limit}`),
   // admin
@@ -192,8 +205,8 @@ export const api = {
 };
 
 export type ChatStreamEvent =
-  | { type: 'message'; jid: string; id: number; text: string }
-  | { type: 'edit'; jid: string; id: number; text: string }
+  | { type: 'message'; jid: string; id: number; text: string; ts: number }
+  | { type: 'edit'; jid: string; id: number; text: string; ts: number }
   | { type: 'delete'; jid: string; id: number }
   | { type: 'typing'; jid: string; isTyping: boolean }
   | {
@@ -203,4 +216,5 @@ export type ChatStreamEvent =
       mediaType: string;
       caption?: string;
       url?: string;
+      ts: number;
     };

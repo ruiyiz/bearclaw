@@ -3,8 +3,8 @@ import { EventEmitter } from 'node:events';
 // Web channel broker — fan-out of channel outbound events to SSE subscribers.
 // Events are JSON-serializable so the HTTP layer can stream them verbatim.
 export type WebOutboundEvent =
-  | { type: 'message'; jid: string; id: number; text: string }
-  | { type: 'edit'; jid: string; id: number; text: string }
+  | { type: 'message'; jid: string; id: number; text: string; ts: number }
+  | { type: 'edit'; jid: string; id: number; text: string; ts: number }
   | { type: 'delete'; jid: string; id: number }
   | { type: 'typing'; jid: string; isTyping: boolean }
   | {
@@ -15,6 +15,7 @@ export type WebOutboundEvent =
       caption?: string;
       dataUrl?: string;
       url?: string;
+      ts: number;
     };
 
 class Broker extends EventEmitter {
