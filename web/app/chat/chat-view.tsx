@@ -537,7 +537,7 @@ export function ChatView() {
           aria-label="Attach"
           disabled={!folder || uploading || recording}
           onClick={() => fileInputRef.current?.click()}
-          className="rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-3 py-2 text-sm disabled:opacity-40"
+          className="h-9 inline-flex items-center justify-center rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-3 text-sm leading-none disabled:opacity-40"
           title="Attach file"
         >
           📎
@@ -548,7 +548,7 @@ export function ChatView() {
           disabled={!folder || uploading}
           onClick={() => (recording ? stopRecording() : void startRecording())}
           className={
-            'rounded-md border px-3 py-2 text-sm disabled:opacity-40 ' +
+            'h-9 inline-flex items-center justify-center rounded-md border px-3 text-sm leading-none disabled:opacity-40 ' +
             (recording
               ? 'border-red-500 bg-red-500/20 text-red-300 animate-pulse'
               : 'border-[color:var(--border)] bg-[color:var(--card)]')
@@ -625,13 +625,13 @@ export function ChatView() {
             }}
             rows={1}
             placeholder={folder ? `Message ${folder}…` : 'Pick an agent'}
-            className="w-full resize-none overflow-y-auto bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-2 text-sm focus:outline-none focus:border-[color:var(--accent)] leading-5"
+            className="w-full block min-h-9 resize-none overflow-y-auto bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-[color:var(--accent)] leading-5 align-bottom"
           />
         </div>
         <button
           type="submit"
           disabled={!folder || !input.trim() || sending}
-          className="rounded-md bg-[color:var(--accent)] text-white px-4 py-2 text-sm disabled:opacity-40"
+          className="h-9 inline-flex items-center justify-center rounded-md bg-[color:var(--accent)] text-white px-4 text-sm leading-none disabled:opacity-40"
         >
           Send
         </button>
