@@ -1,6 +1,11 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
-import { api, type ChatStreamEvent, type UserAgent } from '@/lib/api';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  api,
+  type ChatSession,
+  type ChatStreamEvent,
+  type UserAgent,
+} from '@/lib/api';
 
 interface ChatMessage {
   id: string;
@@ -13,12 +18,18 @@ interface ChatMessage {
 export function ChatView() {
   const [agents, setAgents] = useState<UserAgent[]>([]);
   const [folder, setFolder] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const [sending, setSending] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const latestSessionId = sessions[0]?.sessionId ?? null;
+  const viewingLatest = sessionId !== null && sessionId === latestSessionId;
 
   useEffect(() => {
     api
@@ -34,6 +45,64 @@ export function ChatView() {
       })
       .catch(() => {});
   }, []);
+
+  // Reload sessions whenever folder changes.
+  useEffect(() => {
+    if (!folder) {
+      setSessions([]);
+      setSessionId(null);
+      setMessages([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .chatSessions(folder)
+      .then((d) => {
+        if (cancelled) return;
+        setSessions(d.sessions);
+        setSessionId(d.sessions[0]?.sessionId ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSessions([]);
+        setSessionId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [folder]);
+
+  // Load transcript when session changes.
+  useEffect(() => {
+    if (!folder || !sessionId) {
+      setMessages([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingHistory(true);
+    api
+      .chatHistory(folder, sessionId)
+      .then((d) => {
+        if (cancelled) return;
+        setMessages(
+          d.messages.map((m, i) => ({
+            id: `h-${sessionId}-${i}`,
+            side: m.sender === 'Assistant' ? 'agent' : 'user',
+            text: m.content,
+          })),
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setMessages([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingHistory(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [folder, sessionId]);
 
   useEffect(() => {
     if (!folder) return;
@@ -63,10 +132,13 @@ export function ChatView() {
 
   function applyStreamEvent(evt: ChatStreamEvent) {
     if (evt.type === 'typing') {
-      setTyping(evt.isTyping);
+      // Only show typing for the live session view.
+      if (viewingLatest) setTyping(evt.isTyping);
       return;
     }
-    // Any inbound text/media implies the agent is no longer "typing".
+    // Drop live events when scrolled back to an older session — they belong
+    // to the latest session's transcript, not the one currently displayed.
+    if (!viewingLatest) return;
     setTyping(false);
     setMessages((prev) => {
       switch (evt.type) {
@@ -111,6 +183,11 @@ export function ChatView() {
 
   async function send() {
     if (!folder || !input.trim() || sending) return;
+    if (!viewingLatest) {
+      // Sending always lands in the agent's live (latest) session — jump
+      // forward so the user sees their bubble in the right view.
+      if (latestSessionId) setSessionId(latestSessionId);
+    }
     const text = input.trim();
     setInput('');
     setSending(true);
@@ -134,9 +211,16 @@ export function ChatView() {
     }
   }
 
+  const sessionLabels = useMemo(() => {
+    return sessions.map((s) => ({
+      value: s.sessionId,
+      label: formatSessionLabel(s),
+    }));
+  }, [sessions]);
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="border-b border-[color:var(--border)] px-3 py-2 flex items-center gap-2">
+      <div className="border-b border-[color:var(--border)] px-3 py-2 flex flex-wrap items-center gap-2">
         <label className="text-xs text-[color:var(--muted)]">Agent</label>
         <select
           value={folder ?? ''}
@@ -149,6 +233,31 @@ export function ChatView() {
             </option>
           ))}
         </select>
+        <label className="text-xs text-[color:var(--muted)] ml-2">
+          Session
+        </label>
+        <select
+          value={sessionId ?? ''}
+          onChange={(e) => setSessionId(e.target.value || null)}
+          disabled={sessions.length === 0}
+          className="bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-2 py-1 text-sm max-w-[60vw] disabled:opacity-50"
+        >
+          {sessionLabels.length === 0 && <option value="">(none)</option>}
+          {sessionLabels.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        {!viewingLatest && sessionId && (
+          <button
+            type="button"
+            onClick={() => latestSessionId && setSessionId(latestSessionId)}
+            className="text-xs text-[color:var(--accent)] underline"
+          >
+            jump to latest
+          </button>
+        )}
         {typing && (
           <span className="text-xs text-[color:var(--muted)]">… typing</span>
         )}
@@ -157,7 +266,12 @@ export function ChatView() {
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-3 py-3 space-y-2"
       >
-        {messages.length === 0 && (
+        {loadingHistory && (
+          <div className="text-center text-xs text-[color:var(--muted)]">
+            loading transcript…
+          </div>
+        )}
+        {!loadingHistory && messages.length === 0 && (
           <div className="h-full flex items-center justify-center text-center px-6">
             <div className="text-[color:var(--muted)] text-sm">
               {folder ? (
@@ -213,6 +327,18 @@ export function ChatView() {
       </form>
     </div>
   );
+}
+
+function formatSessionLabel(s: ChatSession): string {
+  const when = new Date(s.lastModified).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  const title = (s.summary || s.firstPrompt || s.sessionId.slice(0, 8)).trim();
+  const short = title.length > 60 ? title.slice(0, 57) + '…' : title;
+  return `${when} — ${short}`;
 }
 
 function Bubble({ m }: { m: ChatMessage }) {

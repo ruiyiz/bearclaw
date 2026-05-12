@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { URL } from 'node:url';
 
+import { listSessions } from '@anthropic-ai/claude-agent-sdk';
+
 import {
   CACHE_DIR,
   CONFIG_DIR,
@@ -13,6 +15,7 @@ import {
 import { logger } from '../logger.js';
 import { webBroker, type WebOutboundEvent } from './broker.js';
 import { authenticate, handleLogin, handleLogout, initAuth } from './auth.js';
+import { loadParsedTranscript } from '../agent/runner.js';
 import type { WebChannel } from '../channels/web.js';
 import {
   addSkillSource,
@@ -276,6 +279,47 @@ add('GET', /^\/api\/user\/chat\/stream$/, (_req, res, url) => {
   };
   res.on('close', cleanup);
   res.on('error', cleanup);
+});
+
+add('GET', /^\/api\/user\/chat\/sessions$/, async (_req, res, url) => {
+  const folder = url.searchParams.get('folder');
+  if (!folder) return json(res, 400, { error: 'missing folder' });
+  const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+  try {
+    const sessions = await listSessions({
+      dir: agentVarDir(folder),
+      includeWorktrees: false,
+      limit,
+    });
+    json(res, 200, {
+      sessions: sessions.map((s) => ({
+        sessionId: s.sessionId,
+        summary: s.summary,
+        firstPrompt: s.firstPrompt,
+        lastModified: s.lastModified,
+        createdAt: s.createdAt,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err, folder }, 'listSessions failed');
+    json(res, 500, { error: String(err) });
+  }
+});
+
+add('GET', /^\/api\/user\/chat\/history$/, async (_req, res, url) => {
+  const folder = url.searchParams.get('folder');
+  const sessionId = url.searchParams.get('sessionId');
+  if (!folder || !sessionId)
+    return json(res, 400, { error: 'missing folder or sessionId' });
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId))
+    return json(res, 400, { error: 'invalid sessionId' });
+  try {
+    const messages = await loadParsedTranscript(sessionId, agentVarDir(folder));
+    json(res, 200, { messages });
+  } catch (err) {
+    logger.error({ err, folder, sessionId }, 'loadParsedTranscript failed');
+    json(res, 500, { error: String(err) });
+  }
 });
 
 add('GET', /^\/api\/user\/events$/, (_req, res, url) => {

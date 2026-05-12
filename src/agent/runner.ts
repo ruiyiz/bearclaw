@@ -292,7 +292,7 @@ export function generateFallbackName(): string {
   return `conversation-${time.getHours().toString().padStart(2, '0')}${time.getMinutes().toString().padStart(2, '0')}`;
 }
 
-interface ParsedMessage {
+export interface ParsedMessage {
   // sender: human name (from <message sender="..."> wrapper) or 'Assistant'.
   sender: string;
   // ISO timestamp. For user turns, taken from inner <message time="...">; for

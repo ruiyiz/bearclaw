@@ -61,6 +61,20 @@ export interface UserAgent {
   webJid: string;
 }
 
+export interface ChatSession {
+  sessionId: string;
+  summary: string;
+  firstPrompt?: string;
+  lastModified: number;
+  createdAt?: number;
+}
+
+export interface HistoryMessage {
+  sender: string;
+  timestamp: string;
+  content: string;
+}
+
 function readCookie(name: string): string | null {
   if (typeof document === 'undefined') return null;
   for (const part of document.cookie.split(';')) {
@@ -119,6 +133,14 @@ export const api = {
       folder,
       text,
     }),
+  chatSessions: (folder: string, limit = 50) =>
+    get<{ sessions: ChatSession[] }>(
+      `/api/user/chat/sessions?folder=${encodeURIComponent(folder)}&limit=${limit}`,
+    ),
+  chatHistory: (folder: string, sessionId: string) =>
+    get<{ messages: HistoryMessage[] }>(
+      `/api/user/chat/history?folder=${encodeURIComponent(folder)}&sessionId=${encodeURIComponent(sessionId)}`,
+    ),
   userEvents: (limit = 50) =>
     get<{ events: EventRecord[] }>(`/api/user/events?limit=${limit}`),
   // admin
