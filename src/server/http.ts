@@ -437,6 +437,42 @@ add('GET', /^\/api\/user\/events$/, (_req, res, url) => {
   json(res, 200, { events: getRecentEvents(limit) });
 });
 
+// ─── Agent-media passthrough (per-agent persisted files) ───────────────────
+
+function mediaContentType(file: string): string {
+  return guessContentType(file);
+}
+
+add('GET', /^\/api\/user\/agent-media$/, (_req, res, url) => {
+  const folder = url.searchParams.get('folder');
+  const rel = url.searchParams.get('path');
+  if (!folder || !rel) {
+    res.writeHead(400);
+    res.end('missing params');
+    return;
+  }
+  const baseDir = path.resolve(agentVarDir(folder), 'media');
+  // Accept absolute paths that resolve into baseDir, or names relative to it.
+  const candidate = path.isAbsolute(rel)
+    ? path.resolve(rel)
+    : path.resolve(baseDir, rel);
+  if (candidate !== baseDir && !candidate.startsWith(baseDir + path.sep)) {
+    res.writeHead(403);
+    res.end('forbidden');
+    return;
+  }
+  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) {
+    res.writeHead(404);
+    res.end('not found');
+    return;
+  }
+  res.writeHead(200, {
+    'content-type': mediaContentType(candidate),
+    'cache-control': 'private, max-age=3600',
+  });
+  fs.createReadStream(candidate).pipe(res);
+});
+
 // ─── Media passthrough ──────────────────────────────────────────────────────
 
 add('GET', /^\/api\/media\/([^/]+)$/, (_req, res, url) => {

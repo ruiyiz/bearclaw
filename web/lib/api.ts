@@ -141,6 +141,8 @@ export const api = {
     get<{ messages: HistoryMessage[] }>(
       `/api/user/chat/history?folder=${encodeURIComponent(folder)}&sessionId=${encodeURIComponent(sessionId)}`,
     ),
+  agentMediaUrl: (folder: string, absPath: string) =>
+    `/api/user/agent-media?folder=${encodeURIComponent(folder)}&path=${encodeURIComponent(absPath)}`,
   chatUpload: (payload: {
     folder: string;
     kind: 'image' | 'video' | 'audio' | 'document' | 'voice';

@@ -97,12 +97,16 @@ export function ChatView() {
       .then((d) => {
         if (cancelled) return;
         setMessages(
-          d.messages.map((m, i) => ({
-            id: `h-${sessionId}-${i}`,
-            side: m.sender === 'Assistant' ? 'agent' : 'user',
-            text: m.content,
-            ts: m.timestamp ? Date.parse(m.timestamp) || 0 : 0,
-          })),
+          d.messages.map((m, i) => {
+            const parsed = parseMediaTag(m.content, folder);
+            return {
+              id: `h-${sessionId}-${i}`,
+              side: m.sender === 'Assistant' ? 'agent' : 'user',
+              text: parsed?.text ?? m.content,
+              ts: m.timestamp ? Date.parse(m.timestamp) || 0 : 0,
+              media: parsed?.media,
+            };
+          }),
         );
       })
       .catch(() => {
@@ -539,6 +543,39 @@ export function ChatView() {
       </form>
     </div>
   );
+}
+
+const MEDIA_TAG_RE = /^\[(Photo|Video|Audio|Document):\s+([^\]]+?)\](.*)$/s;
+
+function parseMediaTag(
+  content: string,
+  folder: string,
+): {
+  text: string;
+  media: { url: string; mediaType: string; caption?: string };
+} | null {
+  const m = content.match(MEDIA_TAG_RE);
+  if (!m) return null;
+  const tag = m[1];
+  const raw = m[2].trim();
+  const trailing = m[3].trim();
+  // [Document: name.pdf] without a path on disk: skip — can't fetch.
+  if (!raw.startsWith('/')) return null;
+  const kindMap: Record<string, string> = {
+    Photo: 'image',
+    Video: 'video',
+    Audio: 'audio',
+    Document: 'document',
+  };
+  const mediaType = kindMap[tag];
+  return {
+    text: trailing,
+    media: {
+      url: api.agentMediaUrl(folder, raw),
+      mediaType,
+      caption: trailing || undefined,
+    },
+  };
 }
 
 function formatSessionLabel(s: ChatSession): string {
