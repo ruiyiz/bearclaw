@@ -8,6 +8,8 @@ Single Node.js process that connects to chat platforms (WhatsApp, Telegram, iMes
 
 The web UI is a Next.js 15 PWA in `web/` (separate package). It talks to a local HTTP/SSE server (`src/server/http.ts`, default `127.0.0.1:7878`) inside the main process. The web app has two module groups: **user** (chat, events) and **admin** (skills, handlers, agents, health, heartbeat).
 
+Auth: signed-cookie session + double-submit CSRF (`src/server/auth.ts`). Single owner password from `NANOCLAW_PASSWORD` in `~/.nanoclaw/.env`. If unset on first start, a random password is written to `~/.nanoclaw/var/initial-password` and logged once — copy it to the env file then delete the bootstrap file. HMAC secret auto-generated at `~/.nanoclaw/var/auth-secret`. Web app gates all routes via `web/middleware.ts`; API client (`web/lib/api.ts`) attaches `x-csrf-token` from the `nc_csrf` cookie on mutations.
+
 ## Source Layout
 
 ```

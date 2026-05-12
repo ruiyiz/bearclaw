@@ -61,8 +61,29 @@ export interface UserAgent {
   webJid: string;
 }
 
+function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  for (const part of document.cookie.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    const k = part.slice(0, eq).trim();
+    if (k === name) return decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return null;
+}
+
+function bounceToLogin(): void {
+  if (typeof window === 'undefined') return;
+  const path = window.location.pathname + window.location.search;
+  window.location.href = `/login?next=${encodeURIComponent(path)}`;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path, { cache: 'no-store' });
+  if (res.status === 401) {
+    bounceToLogin();
+    throw new Error('unauthorized');
+  }
   if (!res.ok) throw new Error(`${res.status} ${path}`);
   return res.json();
 }
@@ -72,11 +93,19 @@ async function send<T>(
   method: string,
   body?: unknown,
 ): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (body) headers['content-type'] = 'application/json';
+  const csrf = readCookie('nc_csrf');
+  if (csrf) headers['x-csrf-token'] = csrf;
   const res = await fetch(path, {
     method,
-    headers: body ? { 'content-type': 'application/json' } : undefined,
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (res.status === 401) {
+    bounceToLogin();
+    throw new Error('unauthorized');
+  }
   if (!res.ok) throw new Error(`${res.status} ${path}`);
   return res.json();
 }

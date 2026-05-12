@@ -12,6 +12,7 @@ import {
 } from '../config.js';
 import { logger } from '../logger.js';
 import { webBroker, type WebOutboundEvent } from './broker.js';
+import { authenticate, handleLogin, handleLogout, initAuth } from './auth.js';
 import type { WebChannel } from '../channels/web.js';
 import {
   addSkillSource,
@@ -82,6 +83,26 @@ async function readBody(req: http.IncomingMessage): Promise<unknown> {
     return {};
   }
 }
+
+// ─── Auth routes (public) ──────────────────────────────────────────────────
+
+add('POST', /^\/api\/auth\/login$/, async (req, res) => {
+  const body = (await readBody(req)) as { password?: string };
+  const result = handleLogin(req, res, body);
+  if (!result.ok) return json(res, 401, { ok: false, error: result.error });
+  json(res, 200, { ok: true });
+});
+
+add('POST', /^\/api\/auth\/logout$/, async (_req, res) => {
+  handleLogout(_req, res);
+  json(res, 200, { ok: true });
+});
+
+add('GET', /^\/api\/auth\/me$/, (req, res) => {
+  const ctx = authenticate(req);
+  // /me always returns 200; only `authed` flag tells the client.
+  json(res, 200, { authed: ctx.authed });
+});
 
 // ─── Admin routes ───────────────────────────────────────────────────────────
 
@@ -336,11 +357,26 @@ export function persistRegisteredAgentsHelper(): {
 
 // ─── Server bootstrap ───────────────────────────────────────────────────────
 
+// Routes that bypass the cookie-auth gate. Everything else under /api/* must
+// present a valid session cookie. Non-/api/* paths (none today) bypass too.
+const PUBLIC_API: Array<RegExp> = [
+  /^\/api\/auth\/login$/,
+  /^\/api\/auth\/me$/,
+  /^\/api\/auth\/logout$/,
+  // Media URLs are issued to authed clients; keep gated. If we ever need an
+  // unauthenticated thumb/share endpoint, add a separate path here.
+];
+
+function isPublic(pathname: string): boolean {
+  return PUBLIC_API.some((re) => re.test(pathname));
+}
+
 export function startHttpServer(opts: HttpServerOpts): http.Server {
+  initAuth();
   const server = http.createServer(async (req, res) => {
-    res.setHeader('access-control-allow-origin', '*');
-    res.setHeader('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('access-control-allow-headers', 'content-type');
+    // Same-origin only. Web app is proxied through Next, so requests share
+    // the origin. Refuse cross-origin to keep CSRF surface minimal.
+    res.setHeader('vary', 'origin');
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       res.end();
@@ -354,6 +390,15 @@ export function startHttpServer(opts: HttpServerOpts): http.Server {
       res.writeHead(400);
       res.end('bad url');
       return;
+    }
+
+    // Auth gate for /api/*.
+    if (url.pathname.startsWith('/api/') && !isPublic(url.pathname)) {
+      const ctx = authenticate(req);
+      if (!ctx.authed) {
+        json(res, 401, { error: 'unauthorized', reason: ctx.reason });
+        return;
+      }
     }
 
     for (const route of routes) {
