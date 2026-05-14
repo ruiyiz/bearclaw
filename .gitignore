@@ -27,3 +27,6 @@ agents-sdk-docs
 
 # Claude Code runtime state
 .claude/*.lock
+
+# Playwright MCP scratch dir
+.playwright-mcp/
