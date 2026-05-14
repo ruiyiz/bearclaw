@@ -1,280 +1,40 @@
 /**
- * Conversation checkpoint + daily archive.
+ * Daily conversation archive (DB-sourced).
  *
- * Three write paths:
+ * One job: at 01:00 local each day, render yesterday's messages for every
+ * registered agent folder into `var/agents/{folder}/conversations/{date}.md`.
+ * gbrain's sync cron picks the files up, git-commits them, and runs
+ * `gbrain sync --all` to ingest.
  *
- *   1. Periodic checkpoint (every MEMORY_FLUSH_INTERVAL): full transcript
- *      written to `var/agents/{folder}/checkpoints/{sessionId}.md`. Single
- *      file per session, overwritten each tick. Crash-safety material.
- *
- *   2. /new (flushBeforeSessionClear): writes one final checkpoint for the
- *      session being cleared, leaves the file in `checkpoints/`. The daily
- *      consolidator picks it up at 1am local.
- *
- *   3. Daily 1am consolidator (consolidateStaleCheckpoints): groups every
- *      checkpoint older than today (by mtime) by date, appends each into
- *      `conversations/{date}.md`, deletes the consumed checkpoint. Live
- *      sessions are skipped. Result: one conversation file per day per
- *      agent, matching the old daily-rollup contract without the dream
- *      cycle.
- *
- * Startup also runs the consolidator so a crash that left stale checkpoints
- * around gets cleaned up immediately rather than waiting for the next 1am.
+ * Source moved from per-session checkpoints (gone) to the `messages` table.
+ * The file boundary stays so gbrain's ingestion contract is unchanged.
  */
 
 import fs from 'fs';
 import path from 'path';
 
-import {
-  AGENTS_VAR_DIR,
-  MEMORY_FLUSH_INTERVAL,
-  TIMEZONE,
-  agentVarDir,
-  localDate,
-} from '../config.js';
+import { TIMEZONE, agentVarDir } from '../config.js';
+import { getDb, getMessagesInRange, type StoredMessage } from '../db.js';
 import { logger } from '../logger.js';
-import {
-  formatTranscriptMarkdown,
-  getSessionSummary,
-  loadParsedTranscript,
-} from './runner.js';
+import type { RegisteredAgent } from '../types.js';
 
-interface MemoryFlusherDeps {
-  getSessions: () => Record<string, string>;
+interface DailyFlushDeps {
+  registeredAgents: () => Record<string, RegisteredAgent>;
 }
 
-function checkpointPath(varDir: string, sessionId: string): string {
-  return path.join(varDir, 'checkpoints', `${sessionId}.md`);
+function localDateString(d: Date): string {
+  return d.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
 }
 
-async function writeCheckpoint(
-  varDir: string,
-  sessionId: string,
-): Promise<void> {
-  const messages = await loadParsedTranscript(sessionId, varDir);
-  if (messages.length === 0) return;
-
-  const summary = getSessionSummary(sessionId, varDir);
-  const cpPath = checkpointPath(varDir, sessionId);
-  fs.mkdirSync(path.dirname(cpPath), { recursive: true });
-  const tmp = `${cpPath}.tmp`;
-  fs.writeFileSync(tmp, formatTranscriptMarkdown(messages, summary));
-  fs.renameSync(tmp, cpPath);
+function yesterdayLocalString(now: Date): string {
+  const y = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  return localDateString(y);
 }
 
-function dateFromMtime(ms: number): string {
-  return new Date(ms).toLocaleDateString('en-CA', { timeZone: TIMEZONE });
-}
-
-/**
- * Consolidate every checkpoint that does not belong to a live session into
- * the day's conversation file. Idempotent — re-runs are safe because the
- * source file is removed after a successful append.
- */
-function consolidateAgentCheckpoints(
-  folder: string,
-  liveSessionIds: Set<string>,
-): { promoted: number } {
-  const varDir = agentVarDir(folder);
-  const cpDir = path.join(varDir, 'checkpoints');
-  if (!fs.existsSync(cpDir)) return { promoted: 0 };
-
-  const today = localDate();
-  const conversationsDir = path.join(varDir, 'conversations');
-  fs.mkdirSync(conversationsDir, { recursive: true });
-
-  const files = fs.readdirSync(cpDir).filter((f) => f.endsWith('.md'));
-  type Entry = { path: string; mtime: number; date: string };
-  const byDate = new Map<string, Entry[]>();
-
-  for (const f of files) {
-    const sessionId = f.replace(/\.md$/, '');
-    if (liveSessionIds.has(sessionId)) continue;
-    const fp = path.join(cpDir, f);
-    let mtime: number;
-    try {
-      mtime = fs.statSync(fp).mtimeMs;
-    } catch {
-      continue;
-    }
-    const date = dateFromMtime(mtime);
-    if (date === today) continue; // wait until tomorrow's 1am
-    const list = byDate.get(date) ?? [];
-    list.push({ path: fp, mtime, date });
-    byDate.set(date, list);
-  }
-
-  let promoted = 0;
-  for (const [date, entries] of byDate) {
-    entries.sort((a, b) => a.mtime - b.mtime);
-    const target = path.join(conversationsDir, `${date}.md`);
-    const sections: string[] = [];
-    if (fs.existsSync(target)) {
-      sections.push(fs.readFileSync(target, 'utf-8').trim());
-    }
-    for (const e of entries) {
-      try {
-        sections.push(fs.readFileSync(e.path, 'utf-8').trim());
-      } catch (err) {
-        logger.warn({ err, path: e.path }, 'Failed to read checkpoint');
-      }
-    }
-    fs.writeFileSync(
-      target,
-      sections.filter(Boolean).join('\n\n---\n\n') + '\n',
-    );
-    for (const e of entries) {
-      try {
-        fs.rmSync(e.path);
-        promoted += 1;
-      } catch (err) {
-        logger.warn(
-          { err, path: e.path },
-          'Failed to remove consolidated checkpoint',
-        );
-      }
-    }
-    logger.info(
-      { folder, date, sessions: entries.length, target },
-      'Consolidated checkpoints into daily conversation',
-    );
-  }
-  return { promoted };
-}
-
-function listAgentFolders(): string[] {
-  if (!fs.existsSync(AGENTS_VAR_DIR)) return [];
-  return fs
-    .readdirSync(AGENTS_VAR_DIR, { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name);
-}
-
-function consolidateAllAgents(liveSessionIds: Set<string>): void {
-  for (const folder of listAgentFolders()) {
-    try {
-      consolidateAgentCheckpoints(folder, liveSessionIds);
-    } catch (err) {
-      logger.error({ err, folder }, 'Daily checkpoint consolidation failed');
-    }
-  }
-}
-
-/**
- * No-op kept for callsite compatibility. The new checkpoint flow rewrites
- * the full transcript each tick, so there is no incremental cursor.
- */
-export function initFlushCursors(_sessions: Record<string, string>): void {
-  // intentionally empty
-}
-
-/**
- * Startup hook: consolidate any orphan checkpoint files from previous days
- * that are not associated with a currently live session. Replaces the old
- * "recover orphaned checkpoints" path which promoted each crash residue
- * into its own `recovered-…` conversation file.
- */
-export function recoverOrphanedCheckpoints(
-  folder: string,
-  liveSessionIds: Set<string>,
-): void {
-  consolidateAgentCheckpoints(folder, liveSessionIds);
-}
-
-/**
- * Called from /new before the session id is dropped. Persists the latest
- * transcript to the session's checkpoint so the daily consolidator at 1am
- * picks it up. Does NOT write to `conversations/` — that is the daily
- * consolidator's job.
- */
-export function flushBeforeSessionClear(
-  folder: string,
-  sessionId: string,
-): void {
-  const varDir = agentVarDir(folder);
-  // Fire-and-forget: callers (e.g. /new) drop the session id immediately
-  // after this returns; the SDK's getSessionMessages reads the JSONL on disk,
-  // which is unaffected by clearing the in-memory session map.
-  writeCheckpoint(varDir, sessionId).catch((err) => {
-    logger.error({ err, folder }, 'Final checkpoint write failed');
-  });
-}
-
-export function startMemoryFlusher(deps: MemoryFlusherDeps): void {
-  const tick = async () => {
-    const sessions = deps.getSessions();
-    await Promise.all(
-      Object.entries(sessions).map(async ([folder, sessionId]) => {
-        const varDir = agentVarDir(folder);
-        try {
-          await writeCheckpoint(varDir, sessionId);
-        } catch (err) {
-          logger.error({ err, folder }, 'Conversation checkpoint error');
-        }
-      }),
-    );
-    setTimeout(tick, MEMORY_FLUSH_INTERVAL);
-  };
-
-  setTimeout(tick, MEMORY_FLUSH_INTERVAL);
-  logger.info(
-    { intervalMs: MEMORY_FLUSH_INTERVAL },
-    'Conversation checkpoint started',
-  );
-}
-
-/**
- * Schedule the daily 1am consolidation. Computes ms until the next 01:00
- * in the configured TZ, fires once, then re-arms for 24h later. Runs once
- * immediately on start so a freshly-booted process catches yesterday's
- * stale checkpoints without waiting up to a day.
- */
-export function startDailyConversationFlush(deps: MemoryFlusherDeps): void {
-  const fire = () => {
-    const live = new Set<string>(Object.values(deps.getSessions()));
-    consolidateAllAgents(live);
-    setTimeout(fire, msUntilNextLocalHour(1));
-  };
-
-  // Initial sweep handles crash residue + any checkpoints left from a
-  // previous run that crossed a day boundary while the service was down.
-  const live = new Set<string>(Object.values(deps.getSessions()));
-  consolidateAllAgents(live);
-
-  const wait = msUntilNextLocalHour(1);
-  setTimeout(fire, wait);
-  logger.info(
-    { firstRunInMs: wait, hour: 1, tz: TIMEZONE },
-    'Daily conversation flush scheduled',
-  );
-}
-
-/**
- * Milliseconds from now until the next occurrence of the given local hour
- * in TIMEZONE. Robust against DST: re-derives the boundary by formatting
- * candidate UTC times back into the local zone rather than naive offset
- * arithmetic.
- */
-function msUntilNextLocalHour(hour: number): number {
-  const now = new Date();
-  for (let dayOffset = 0; dayOffset <= 1; dayOffset++) {
-    const candidate = nextLocalHourUTC(now, hour, dayOffset);
-    if (candidate.getTime() > now.getTime()) {
-      return candidate.getTime() - now.getTime();
-    }
-  }
-  // Fallback: 24h. Should never hit.
-  return 24 * 60 * 60 * 1000;
-}
-
-function nextLocalHourUTC(now: Date, hour: number, dayOffset: number): Date {
-  const base = new Date(now.getTime() + dayOffset * 86_400_000);
-  const ymd = base.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
-  // ymd is YYYY-MM-DD in the target zone for that calendar day.
-  // Ask the system to interpret `${ymd}T${hh}:00:00` as if it were local-zone
-  // time by computing the offset for that instant.
-  const naive = new Date(`${ymd}T${String(hour).padStart(2, '0')}:00:00Z`);
-  // Determine the zone offset at `naive` for TIMEZONE by formatting back.
+function localDayBoundsUtc(localDate: string): { start: string; end: string } {
+  // Probe-and-correct: take the desired local date at midnight, compute the
+  // current zone offset for that instant, then shift to UTC.
+  const naive = new Date(`${localDate}T00:00:00Z`);
   const localStr = naive.toLocaleString('en-US', {
     timeZone: TIMEZONE,
     hour12: false,
@@ -285,9 +45,148 @@ function nextLocalHourUTC(now: Date, hour: number, dayOffset: number): Date {
     minute: '2-digit',
     second: '2-digit',
   });
-  // localStr is the zone-local rendering of `naive` (which we sent as UTC).
-  // Difference between intended local time and the returned local time =
-  // the offset we need to subtract.
+  const [datePart, timePart] = localStr.split(', ');
+  const [m, d, y] = datePart.split('/').map(Number);
+  const [h, mi, s] = timePart.split(':').map(Number);
+  const localAsUtc = Date.UTC(y, m - 1, d, h, mi, s);
+  const offsetMs = naive.getTime() - localAsUtc;
+  const startUtc = new Date(naive.getTime() + offsetMs);
+  const endUtc = new Date(startUtc.getTime() + 24 * 60 * 60 * 1000);
+  return { start: startUtc.toISOString(), end: endUtc.toISOString() };
+}
+
+function jidsForFolder(
+  folder: string,
+  registered: Record<string, RegisteredAgent>,
+): string[] {
+  // All registered IM/email/web jids for the folder. Web rows live under many
+  // composite jids (`web:<folder>:<sessionId>`); pull them by prefix instead
+  // of by the bare `web:<folder>` registry key.
+  const jids = new Set<string>();
+  for (const [jid, agent] of Object.entries(registered)) {
+    if (agent.folder !== folder) continue;
+    if (jid.startsWith('web:')) continue;
+    jids.add(jid);
+  }
+  return [...jids];
+}
+
+function mergeAndSort(rows: StoredMessage[]): StoredMessage[] {
+  return rows.slice().sort((a, b) => (a.timestamp < b.timestamp ? -1 : 1));
+}
+
+function formatRows(
+  folder: string,
+  date: string,
+  rows: StoredMessage[],
+): string {
+  if (rows.length === 0) return '';
+  const header = `# ${folder} — ${date}\n`;
+  const body = rows
+    .map((m) => {
+      const who = m.is_from_me === 1 ? 'Assistant' : m.sender_name || m.sender;
+      return `**${who}** [${m.timestamp}]\n\n${m.content}`;
+    })
+    .join('\n\n---\n\n');
+  return `${header}\n${body}\n`;
+}
+
+function listFolders(registered: Record<string, RegisteredAgent>): string[] {
+  const set = new Set<string>();
+  for (const a of Object.values(registered)) set.add(a.folder);
+  return [...set];
+}
+
+async function flushFolder(
+  folder: string,
+  date: string,
+  registered: Record<string, RegisteredAgent>,
+): Promise<void> {
+  const { start, end } = localDayBoundsUtc(date);
+  const directJids = jidsForFolder(folder, registered);
+  // Web rows live under `web:<folder>:<sessionId>`. Pull them via a LIKE
+  // pattern to avoid enumerating every session id here.
+  const webRows = getDb()
+    .prepare(
+      `SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+       FROM messages
+       WHERE chat_jid LIKE ?
+         AND timestamp >= ? AND timestamp < ?
+       ORDER BY timestamp`,
+    )
+    .all(`web:${folder}:%`, start, end) as StoredMessage[];
+  const direct = getMessagesInRange(directJids, start, end);
+  const rows = mergeAndSort([...direct, ...webRows]);
+  if (rows.length === 0) return;
+
+  const out = formatRows(folder, date, rows);
+  const dir = path.join(agentVarDir(folder), 'conversations');
+  fs.mkdirSync(dir, { recursive: true });
+  const target = path.join(dir, `${date}.md`);
+  fs.writeFileSync(target, out);
+  logger.info(
+    { folder, date, rows: rows.length, target },
+    'Daily conversation archive written',
+  );
+}
+
+async function flushAll(date: string, deps: DailyFlushDeps): Promise<void> {
+  const registered = deps.registeredAgents();
+  for (const folder of listFolders(registered)) {
+    try {
+      await flushFolder(folder, date, registered);
+    } catch (err) {
+      logger.error({ err, folder, date }, 'Daily conversation flush failed');
+    }
+  }
+}
+
+export function startDailyConversationFlush(deps: DailyFlushDeps): void {
+  const fire = async () => {
+    const date = yesterdayLocalString(new Date());
+    await flushAll(date, deps);
+    setTimeout(fire, msUntilNextLocalHour(1));
+  };
+
+  // Catch-up on boot: render yesterday's archive in case the service was
+  // down at 1am. Idempotent — overwriting the same file is fine.
+  void flushAll(yesterdayLocalString(new Date()), deps).catch((err) => {
+    logger.error({ err }, 'Initial conversation flush failed');
+  });
+
+  const wait = msUntilNextLocalHour(1);
+  setTimeout(fire, wait);
+  logger.info(
+    { firstRunInMs: wait, hour: 1, tz: TIMEZONE },
+    'Daily conversation flush scheduled',
+  );
+}
+
+function msUntilNextLocalHour(hour: number): number {
+  const now = new Date();
+  for (let dayOffset = 0; dayOffset <= 1; dayOffset++) {
+    const candidate = nextLocalHourUTC(now, hour, dayOffset);
+    if (candidate.getTime() > now.getTime()) {
+      return candidate.getTime() - now.getTime();
+    }
+  }
+  return 24 * 60 * 60 * 1000;
+}
+
+function nextLocalHourUTC(now: Date, hour: number, dayOffset: number): Date {
+  const base = new Date(now.getTime() + dayOffset * 86_400_000);
+  const ymd = base.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+  const naive = new Date(`${ymd}T${String(hour).padStart(2, '0')}:00:00Z`);
+  const localStr = naive.toLocaleString('en-US', {
+    timeZone: TIMEZONE,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
   const [datePart, timePart] = localStr.split(', ');
   const [m, d, y] = datePart.split('/').map(Number);
   const [h, mi, s] = timePart.split(':').map(Number);

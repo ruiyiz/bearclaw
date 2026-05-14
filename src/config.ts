@@ -51,7 +51,6 @@ export const AGENT_TIMEOUT = parseInt(
   10,
 );
 export const IPC_POLL_INTERVAL = 1000;
-export const MEMORY_FLUSH_INTERVAL = 10 * 60 * 1000; // 10 minutes
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

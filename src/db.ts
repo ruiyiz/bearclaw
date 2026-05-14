@@ -125,7 +125,23 @@ export function initDatabase(): void {
       mtime REAL NOT NULL,
       PRIMARY KEY (agent_folder, source, filename)
     );
+
+    CREATE TABLE IF NOT EXISTS web_sessions (
+      id              TEXT NOT NULL,
+      folder          TEXT NOT NULL,
+      title           TEXT,
+      sdk_session_id  TEXT,
+      created_at      TEXT NOT NULL,
+      last_message_at TEXT,
+      pinned          INTEGER NOT NULL DEFAULT 0,
+      archived        INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (folder, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_web_sessions_folder
+      ON web_sessions(folder, last_message_at DESC);
   `);
+
+  migrateWebSessions();
 
   // Add sender_name column if it doesn't exist (migration for existing DBs)
   try {
@@ -141,6 +157,44 @@ export function initDatabase(): void {
   db.exec(
     `UPDATE handlers SET context_mode = 'agent' WHERE context_mode = 'group'`,
   );
+}
+
+// One-shot web-channel migration: pre-session web rows live under chat_jid =
+// "web:<folder>"; tag them into a synthetic "legacy" session per folder so the
+// new composite-jid scheme (web:<folder>:<sessionId>) covers them uniformly.
+// Idempotent — guarded on the LIKE pattern, no rerun side effects.
+function migrateWebSessions(): void {
+  const tagged = db
+    .prepare(
+      `UPDATE messages
+       SET chat_jid = chat_jid || ':legacy'
+       WHERE chat_jid LIKE 'web:%' AND chat_jid NOT LIKE 'web:%:%'`,
+    )
+    .run();
+
+  const inserted = db
+    .prepare(
+      `INSERT OR IGNORE INTO web_sessions
+         (id, folder, title, created_at, last_message_at, pinned)
+       SELECT
+         'legacy',
+         substr(chat_jid, 5, length(chat_jid) - 11),
+         'Imported history',
+         MIN(timestamp),
+         MAX(timestamp),
+         0
+       FROM messages
+       WHERE chat_jid LIKE 'web:%:legacy'
+       GROUP BY chat_jid`,
+    )
+    .run();
+
+  if (tagged.changes > 0 || inserted.changes > 0) {
+    logger.info(
+      { taggedRows: tagged.changes, legacySessions: inserted.changes },
+      'Migrated legacy web channel rows into composite jid scheme',
+    );
+  }
 }
 
 function dropLegacyMemoryAndDreamTables(): void {
@@ -467,6 +521,148 @@ export function getNewMessages(
   }
 
   return { messages: rows, newTimestamp };
+}
+
+export function getMessagesInRange(
+  chatJids: string[],
+  startInclusive: string,
+  endExclusive: string,
+): StoredMessage[] {
+  if (chatJids.length === 0) return [];
+  const placeholders = chatJids.map(() => '?').join(',');
+  const sql = `SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+               FROM messages
+               WHERE chat_jid IN (${placeholders})
+                 AND timestamp >= ? AND timestamp < ?
+               ORDER BY timestamp`;
+  return db
+    .prepare(sql)
+    .all(...chatJids, startInclusive, endExclusive) as StoredMessage[];
+}
+
+export interface WebSession {
+  id: string;
+  folder: string;
+  title: string | null;
+  sdk_session_id: string | null;
+  created_at: string;
+  last_message_at: string | null;
+  pinned: number;
+  archived: number;
+}
+
+export function createWebSession(s: {
+  id: string;
+  folder: string;
+  title?: string | null;
+  created_at: string;
+}): void {
+  db.prepare(
+    `INSERT INTO web_sessions (id, folder, title, created_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(s.id, s.folder, s.title ?? null, s.created_at);
+}
+
+export function listWebSessions(
+  folder: string,
+  includeArchived = false,
+): WebSession[] {
+  const sql = includeArchived
+    ? `SELECT * FROM web_sessions WHERE folder = ?
+       ORDER BY pinned DESC, last_message_at DESC NULLS LAST, created_at DESC`
+    : `SELECT * FROM web_sessions WHERE folder = ? AND archived = 0
+       ORDER BY pinned DESC, last_message_at DESC NULLS LAST, created_at DESC`;
+  return db.prepare(sql).all(folder) as WebSession[];
+}
+
+export function listAllWebSessions(): WebSession[] {
+  return db
+    .prepare(`SELECT * FROM web_sessions WHERE archived = 0`)
+    .all() as WebSession[];
+}
+
+export function getWebSession(
+  folder: string,
+  id: string,
+): WebSession | undefined {
+  return db
+    .prepare(`SELECT * FROM web_sessions WHERE folder = ? AND id = ?`)
+    .get(folder, id) as WebSession | undefined;
+}
+
+export function renameWebSession(
+  folder: string,
+  id: string,
+  title: string,
+): void {
+  db.prepare(
+    `UPDATE web_sessions SET title = ? WHERE folder = ? AND id = ?`,
+  ).run(title, folder, id);
+}
+
+export function setWebSessionTitleIfNull(
+  folder: string,
+  id: string,
+  title: string,
+): void {
+  db.prepare(
+    `UPDATE web_sessions SET title = ?
+     WHERE folder = ? AND id = ? AND (title IS NULL OR title = '')`,
+  ).run(title, folder, id);
+}
+
+export function pinWebSession(
+  folder: string,
+  id: string,
+  pinned: boolean,
+): void {
+  db.prepare(
+    `UPDATE web_sessions SET pinned = ? WHERE folder = ? AND id = ?`,
+  ).run(pinned ? 1 : 0, folder, id);
+}
+
+export function archiveWebSession(
+  folder: string,
+  id: string,
+  archived: boolean,
+): void {
+  db.prepare(
+    `UPDATE web_sessions SET archived = ? WHERE folder = ? AND id = ?`,
+  ).run(archived ? 1 : 0, folder, id);
+}
+
+export function deleteWebSession(folder: string, id: string): void {
+  db.transaction(() => {
+    db.prepare(`DELETE FROM messages WHERE chat_jid = ?`).run(
+      `web:${folder}:${id}`,
+    );
+    db.prepare(`DELETE FROM web_sessions WHERE folder = ? AND id = ?`).run(
+      folder,
+      id,
+    );
+  })();
+}
+
+export function touchWebSession(
+  folder: string,
+  id: string,
+  timestamp: string,
+): void {
+  db.prepare(
+    `UPDATE web_sessions SET last_message_at = ?
+     WHERE folder = ? AND id = ?
+       AND (last_message_at IS NULL OR last_message_at < ?)`,
+  ).run(timestamp, folder, id, timestamp);
+}
+
+export function setWebSessionSdkId(
+  folder: string,
+  id: string,
+  sdkId: string,
+): void {
+  db.prepare(
+    `UPDATE web_sessions SET sdk_session_id = ? WHERE folder = ? AND id = ?`,
+  ).run(sdkId, folder, id);
 }
 
 export function getMessagesSince(

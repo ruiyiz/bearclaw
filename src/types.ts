@@ -88,8 +88,17 @@ export interface RegisteredAgent {
   primary?: boolean;
 }
 
+// Session ID lookup table. Keyed by the per-thread routing key:
+//   - Web channel:   web:<folder>:<sessionId>  (one SDK session per UI thread)
+//   - IM channels:   tg:<chatId> | imsg:<chatId> | <jid>@s.whatsapp.net
+//   - Event handlers (context_mode='agent'): bare folder name, used when no
+//     chat exists (cron handlers, heartbeats).
+//
+// Lookups by chat_jid for chat-driven turns; bare folder name for unattended
+// agent runs. Both shapes coexist — no collisions because chat_jid keys always
+// contain a channel prefix (web:, tg:, imsg:) or @-suffix.
 export interface Session {
-  [folder: string]: string;
+  [routingKey: string]: string;
 }
 
 export interface NewMessage {

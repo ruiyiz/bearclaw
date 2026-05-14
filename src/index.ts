@@ -40,7 +40,12 @@ import type { EffortLevel } from './agent/runner.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { initBotPool, TelegramChannel } from './channels/telegram.js';
 import { IMessageChannel } from './channels/imessage.js';
-import { WebChannel } from './channels/web.js';
+import {
+  WebChannel,
+  folderFromJid as webFolderFromJid,
+  isWebJid,
+  sessionIdFromJid as webSessionIdFromJid,
+} from './channels/web.js';
 import { attachOutboundPersistence } from './channels/outbound-persist.js';
 import {
   persistRegisteredAgentsHelper,
@@ -58,8 +63,11 @@ import {
   getMessagesSince,
   getNewMessages,
   initDatabase,
+  setWebSessionSdkId,
+  setWebSessionTitleIfNull,
   storeChatMetadata,
   storeMessage,
+  touchWebSession,
   updateHandler,
   updateMessageContent,
 } from './db.js';
@@ -87,13 +95,7 @@ import {
   Session,
 } from './types.js';
 import { loadJson, saveJson } from './utils/json.js';
-import {
-  startDailyConversationFlush,
-  startMemoryFlusher,
-  flushBeforeSessionClear,
-  initFlushCursors,
-  recoverOrphanedCheckpoints,
-} from './agent/conversation-checkpoint.js';
+import { startDailyConversationFlush } from './agent/conversation-checkpoint.js';
 import { logger } from './logger.js';
 import { initSubprocessManager } from './agent/subprocess-manager.js';
 import { startMaintenance } from './maintenance.js';
@@ -150,7 +152,27 @@ function loadState(): void {
   }>(statePath, {});
   lastTimestamp = state.last_timestamp || '';
   lastAgentTimestamp = state.last_agent_timestamp || {};
-  sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
+  const sessionsPath = path.join(DATA_DIR, 'sessions.json');
+  const raw = loadJson<Record<string, string | boolean>>(sessionsPath, {});
+  const alreadyMigrated = raw.__migrated_v2 === true;
+  const migrated: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (k === '__migrated_v2') continue;
+    if (typeof v !== 'string') continue;
+    if (!alreadyMigrated && k.startsWith('web:') && !k.slice(4).includes(':')) {
+      migrated[`${k}:legacy`] = v;
+    } else {
+      migrated[k] = v;
+    }
+  }
+  sessions = migrated;
+  if (!alreadyMigrated) {
+    saveJson(sessionsPath, { ...sessions, __migrated_v2: true });
+    logger.info(
+      { migrated: Object.keys(migrated).length },
+      'sessions.json migrated',
+    );
+  }
   agentModels = loadJson(path.join(DATA_DIR, 'models.json'), {});
   agentEfforts = loadJson(path.join(DATA_DIR, 'efforts.json'), {});
   registeredAgents = loadJson(
@@ -163,12 +185,58 @@ function loadState(): void {
   );
 }
 
+function persistSessions(): void {
+  saveJson(path.join(DATA_DIR, 'sessions.json'), {
+    ...sessions,
+    __migrated_v2: true,
+  });
+}
+
+function touchWebSessionForJid(chatJid: string, timestamp: string): void {
+  if (!isWebJid(chatJid)) return;
+  const folder = webFolderFromJid(chatJid);
+  const sessionId = webSessionIdFromJid(chatJid);
+  if (!folder || !sessionId) return;
+  touchWebSession(folder, sessionId, timestamp);
+}
+
+// Auto-title: trim the first user message in a session to a label. Only writes
+// when the title column is still null, so subsequent prompts don't overwrite a
+// previously-set title.
+function maybeAutoTitle(msg: NewMessage): void {
+  if (!isWebJid(msg.chat_jid)) return;
+  const folder = webFolderFromJid(msg.chat_jid);
+  const sessionId = webSessionIdFromJid(msg.chat_jid);
+  if (!folder || !sessionId) return;
+  const text = msg.content.trim().replace(/\s+/g, ' ');
+  if (!text) return;
+  const title = text.length > 60 ? text.slice(0, 59) + '…' : text;
+  setWebSessionTitleIfNull(folder, sessionId, title);
+}
+
+// Resolves a chat_jid to its registered agent. Web composite jids
+// (`web:<folder>:<sessionId>`) all share one folder-level registry entry under
+// `web:<folder>`. IM and other channels register exact jids.
+function lookupAgent(chatJid: string): RegisteredAgent | undefined {
+  const exact = registeredAgents[chatJid];
+  if (exact) return exact;
+  if (chatJid.startsWith('web:')) {
+    const rest = chatJid.slice(4);
+    const colon = rest.indexOf(':');
+    if (colon !== -1) {
+      const folderKey = `web:${rest.slice(0, colon)}`;
+      return registeredAgents[folderKey];
+    }
+  }
+  return undefined;
+}
+
 function saveState(): void {
   saveJson(path.join(DATA_DIR, 'router_state.json'), {
     last_timestamp: lastTimestamp,
     last_agent_timestamp: lastAgentTimestamp,
   });
-  saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
+  persistSessions();
 }
 
 function registerAgent(jid: string, agent: RegisteredAgent): void {
@@ -241,7 +309,7 @@ async function handleOffHoursReply(
 }
 
 async function processMessage(msg: NewMessage): Promise<void> {
-  const agent = registeredAgents[msg.chat_jid];
+  const agent = lookupAgent(msg.chat_jid);
   if (!agent) return;
 
   let content = msg.content.trim();
@@ -277,15 +345,13 @@ async function processMessage(msg: NewMessage): Promise<void> {
           if (ch) await ch.sendMessage(msg.chat_jid, text);
         },
         clearSession: () => {
-          if (sessions[agent.folder]) {
-            flushBeforeSessionClear(agent.folder, sessions[agent.folder]);
-          }
-          delete sessions[agent.folder];
-          saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
-          closeStreamingSession(agent.folder);
+          const key = sessionKeyFor(msg.chat_jid, agent.folder);
+          delete sessions[key];
+          persistSessions();
+          closeStreamingSession(msg.chat_jid);
           logger.info({ agent: agent.name }, 'Session cleared by user');
         },
-        getSessionId: () => sessions[agent.folder],
+        getSessionId: () => sessions[sessionKeyFor(msg.chat_jid, agent.folder)],
         getModel: () => agentModels[agent.folder],
         setModel: (model: string) => {
           agentModels[agent.folder] = model;
@@ -293,7 +359,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
           logger.info({ agent: agent.name, model }, 'Agent model set by user');
           // Push to in-flight streaming Query if one exists, so the change
           // takes effect on the next turn without recreating the session.
-          const session = streamingSessions.get(agent.folder);
+          const session = streamingSessions.get(msg.chat_jid);
           if (session && !session.isClosed()) {
             void session.setModel(model);
           }
@@ -306,7 +372,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
             { agent: agent.name, effort },
             'Agent effort set by user',
           );
-          const session = streamingSessions.get(agent.folder);
+          const session = streamingSessions.get(msg.chat_jid);
           if (session && !session.isClosed()) {
             void session.setEffort(effort as EffortLevel);
           }
@@ -320,7 +386,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
           );
         },
         interruptCurrent: async () => {
-          const session = streamingSessions.get(agent.folder);
+          const session = streamingSessions.get(msg.chat_jid);
           if (!session || session.isClosed()) return false;
           if (session.hasPendingTurns()) return session.interrupt();
           // Auto-interrupt path may have already fired in dispatchMessage
@@ -560,13 +626,27 @@ function isNonResponse(text: string): boolean {
   return suppressPatterns.includes(normalized);
 }
 
+function sessionKeyFor(chatJid: string, folder: string): string {
+  // Web channel: every web jid carries its own session id, so each thread
+  // resumes its own SDK session.
+  // IM/event-handler path: legacy keyed by folder so multi-channel chats
+  // continue to share one SDK session per agent identity.
+  return chatJid.startsWith('web:') ? chatJid : folder;
+}
+
+function imJidsForFolder(folder: string): string[] {
+  return Object.entries(registeredAgents)
+    .filter(([jid, a]) => a.folder === folder && !jid.startsWith('web:'))
+    .map(([jid]) => jid);
+}
+
 function getOrCreateStreamingSession(
   agent: RegisteredAgent,
   chatJid: string,
 ): AgentSession {
-  let session = streamingSessions.get(agent.folder);
+  let session = streamingSessions.get(chatJid);
   if (session && session.isClosed()) {
-    streamingSessions.delete(agent.folder);
+    streamingSessions.delete(chatJid);
     session = undefined;
   }
   if (!session) {
@@ -574,7 +654,7 @@ function getOrCreateStreamingSession(
       agent,
       chatJid,
       isMain: agent.folder === MAIN_AGENT_FOLDER,
-      resumeSessionId: sessions[agent.folder],
+      resumeSessionId: sessions[sessionKeyFor(chatJid, agent.folder)],
       model: agentModels[agent.folder],
       effort: agentEfforts[agent.folder] as
         | 'low'
@@ -583,17 +663,18 @@ function getOrCreateStreamingSession(
         | 'xhigh'
         | 'max'
         | undefined,
+      imJids: imJidsForFolder(agent.folder),
     });
-    streamingSessions.set(agent.folder, session);
+    streamingSessions.set(chatJid, session);
   }
   return session;
 }
 
-function closeStreamingSession(folder: string): void {
-  const session = streamingSessions.get(folder);
+function closeStreamingSession(key: string): void {
+  const session = streamingSessions.get(key);
   if (session) {
     void session.close();
-    streamingSessions.delete(folder);
+    streamingSessions.delete(key);
   }
 }
 
@@ -622,8 +703,15 @@ async function runAgent(
     const turn = await session.runTurn(prompt, { onText, onActivity });
 
     if (turn.newSessionId) {
-      sessions[agent.folder] = turn.newSessionId;
-      saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
+      sessions[sessionKeyFor(chatJid, agent.folder)] = turn.newSessionId;
+      persistSessions();
+      if (isWebJid(chatJid)) {
+        const folder = webFolderFromJid(chatJid);
+        const sessionId = webSessionIdFromJid(chatJid);
+        if (folder && sessionId) {
+          setWebSessionSdkId(folder, sessionId, turn.newSessionId);
+        }
+      }
     }
 
     if (turn.status === 'error') {
@@ -695,6 +783,7 @@ async function runBgAgent(
       | 'xhigh'
       | 'max'
       | undefined,
+    imJids: imJidsForFolder(agent.folder),
   });
 
   const channel = findChannel(channels, chatJid);
@@ -793,7 +882,7 @@ function startIpcWatcher(): void {
                 }
 
                 for (const targetJid of targetJids) {
-                  const targetAgent = registeredAgents[targetJid];
+                  const targetAgent = lookupAgent(targetJid);
                   if (
                     !isMain &&
                     !(targetAgent && targetAgent.folder === sourceAgent)
@@ -1254,7 +1343,7 @@ async function processTaskIpc(
 }
 
 function dispatchMessage(msg: NewMessage): void {
-  const agent = registeredAgents[msg.chat_jid];
+  const agent = lookupAgent(msg.chat_jid);
   if (!agent) return;
   const botPrefixes =
     DISPLAY_NAME !== ASSISTANT_NAME
@@ -1268,7 +1357,7 @@ function dispatchMessage(msg: NewMessage): void {
   //            finishes (queue-and-wait, preserves prior work). When a turn
   //            is in flight, ack with a 👀 reaction so the user sees the
   //            message landed.
-  const session = streamingSessions.get(agent.folder);
+  const session = streamingSessions.get(msg.chat_jid);
   const inFlight = session && !session.isClosed() && session.hasPendingTurns();
   if (inFlight) {
     const trimmed = msg.content.trim();
@@ -1333,20 +1422,10 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
-  initFlushCursors(sessions);
 
-  // Recover any orphaned conversation checkpoints (sessions interrupted by
-  // a previous crash). Promote each to a conversation archive.
-  const liveSessionIds = new Set(Object.values(sessions));
-  const seenFolders = new Set<string>();
-  for (const agent of Object.values(registeredAgents)) {
-    if (seenFolders.has(agent.folder)) continue;
-    seenFolders.add(agent.folder);
-    recoverOrphanedCheckpoints(agent.folder, liveSessionIds);
-  }
-
-  startMemoryFlusher({ getSessions: () => sessions });
-  startDailyConversationFlush({ getSessions: () => sessions });
+  startDailyConversationFlush({
+    registeredAgents: () => registeredAgents,
+  });
   initSubprocessManager();
   startMaintenance();
 
@@ -1407,11 +1486,16 @@ async function main(): Promise<void> {
   const webChannel = new WebChannel({
     onMessage: (_chatJid, msg) => {
       storeMessage(msg);
+      touchWebSessionForJid(msg.chat_jid, msg.timestamp);
+      maybeAutoTitle(msg);
       dispatchMessage(msg);
     },
     onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
     registeredAgents: () => registeredAgents,
-    onOutbound: (msg) => storeMessage(msg, 1),
+    onOutbound: (msg) => {
+      storeMessage(msg, 1);
+      touchWebSessionForJid(msg.chat_jid, msg.timestamp);
+    },
     onOutboundEdit: (id, jid, content) =>
       updateMessageContent(id, jid, content),
     onOutboundDelete: (id, jid) => deleteMessageById(id, jid),
@@ -1441,8 +1525,7 @@ async function main(): Promise<void> {
   startEventBusLoop({
     registeredAgents: () => registeredAgents,
     getSessions: () => sessions,
-    saveSessions: () =>
-      saveJson(path.join(DATA_DIR, 'sessions.json'), sessions),
+    saveSessions: () => persistSessions(),
   });
   startIpcWatcher();
   startMessageLoop();

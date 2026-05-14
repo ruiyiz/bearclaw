@@ -36,7 +36,6 @@ import {
   buildContextPrompt,
   createSessionStartHook,
   describeBlock,
-  writeTurnCheckpoint,
 } from './runner.js';
 import { emitEvent } from '../db.js';
 
@@ -132,6 +131,7 @@ export interface SessionOptions {
   model?: string;
   effort?: EffortLevel;
   isMain: boolean;
+  imJids?: string[];
 }
 
 export class AgentSession {
@@ -141,6 +141,7 @@ export class AgentSession {
   private readonly model: string;
   private readonly effort: EffortLevel;
   private readonly varDir: string;
+  private readonly imJids: string[];
   private input = new InputController();
   private query: Query | null = null;
   private turnQueue: PendingTurn[] = [];
@@ -157,6 +158,7 @@ export class AgentSession {
     this.model = opts.model || DEFAULT_MODEL;
     this.effort = opts.effort || DEFAULT_EFFORT;
     this.varDir = agentVarDir(this.agent.folder);
+    this.imJids = opts.imJids ?? [];
   }
 
   isClosed(): boolean {
@@ -270,7 +272,11 @@ export class AgentSession {
           ...userMcpServers,
         },
         hooks: {
-          SessionStart: [{ hooks: [createSessionStartHook(this.varDir)] }],
+          SessionStart: [
+            {
+              hooks: [createSessionStartHook(this.agent.folder, this.imJids)],
+            },
+          ],
         },
       },
     });
@@ -510,17 +516,6 @@ export class AgentSession {
         },
         'Streaming-input turn complete',
       );
-
-      // Crash-safety: dump transcript checkpoint after each turn.
-      if (this.sessionId) {
-        const sid = this.sessionId;
-        void writeTurnCheckpoint(this.varDir, sid).catch((err) => {
-          logger.warn(
-            { err, group: this.agent.name },
-            'Per-turn checkpoint failed',
-          );
-        });
-      }
 
       emitEvent('agent_complete', {
         group_folder: this.agent.folder,

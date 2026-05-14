@@ -17,7 +17,17 @@ import { webBroker, type WebOutboundEvent } from './broker.js';
 import { authenticate, handleLogin, handleLogout, initAuth } from './auth.js';
 import { loadParsedTranscript } from '../agent/runner.js';
 import { commands as slashCommands } from '../commands/registry.js';
-import { getMessagesByJid, getMessagesByJids } from '../db.js';
+import {
+  archiveWebSession,
+  createWebSession,
+  deleteWebSession,
+  getMessagesByJid,
+  getWebSession,
+  listWebSessions,
+  pinWebSession,
+  renameWebSession,
+} from '../db.js';
+import { randomUUID } from 'node:crypto';
 import { transcribeAudio } from '../media/transcribe.js';
 import type { WebChannel } from '../channels/web.js';
 import {
@@ -264,16 +274,29 @@ add('GET', /^\/api\/user\/agents$/, (_req, res, _url, opts) => {
 add('POST', /^\/api\/user\/chat$/, async (req, res, _url, opts) => {
   const body = (await readBody(req)) as {
     folder?: string;
+    sessionId?: string;
     text?: string;
     senderName?: string;
   };
   if (!body.folder || !body.text)
     return json(res, 400, { error: 'missing fields' });
-  const jid = `web:${body.folder}`;
+  const sessionId = body.sessionId || 'legacy';
+  ensureWebSession(body.folder, sessionId);
+  const jid = `web:${body.folder}:${sessionId}`;
   opts.registerWebAgent(body.folder);
   opts.webChannel.ingest(jid, body.text, body.senderName || 'You');
-  json(res, 202, { ok: true, jid });
+  json(res, 202, { ok: true, jid, sessionId });
 });
+
+function ensureWebSession(folder: string, sessionId: string): void {
+  if (getWebSession(folder, sessionId)) return;
+  createWebSession({
+    id: sessionId,
+    folder,
+    title: sessionId === 'legacy' ? 'Imported history' : null,
+    created_at: new Date().toISOString(),
+  });
+}
 
 type UploadKind = 'image' | 'video' | 'audio' | 'document' | 'voice';
 
@@ -298,6 +321,7 @@ add('POST', /^\/api\/user\/chat\/upload$/, async (req, res, _url, opts) => {
   if (!raw) return json(res, 413, { error: 'payload too large' });
   let body: {
     folder?: string;
+    sessionId?: string;
     kind?: UploadKind;
     fileName?: string;
     mimeType?: string;
@@ -327,7 +351,9 @@ add('POST', /^\/api\/user\/chat\/upload$/, async (req, res, _url, opts) => {
   if (buffer.length > UPLOAD_MAX_BYTES)
     return json(res, 413, { error: 'file too large' });
 
-  const jid = `web:${folder}`;
+  const sessionId = body.sessionId || 'legacy';
+  ensureWebSession(folder, sessionId);
+  const jid = `web:${folder}:${sessionId}`;
   opts.registerWebAgent(folder);
 
   // Voice: transcribe + ingest text only. Mirrors Telegram voice flow.
@@ -368,7 +394,8 @@ add('POST', /^\/api\/user\/chat\/upload$/, async (req, res, _url, opts) => {
 
 add('GET', /^\/api\/user\/chat\/stream$/, (_req, res, url) => {
   const folder = url.searchParams.get('folder');
-  const jid = folder ? `web:${folder}` : null;
+  const sessionId = url.searchParams.get('sessionId') || 'legacy';
+  const jid = folder ? `web:${folder}:${sessionId}` : null;
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache, no-transform',
@@ -393,30 +420,18 @@ add('GET', /^\/api\/user\/chat\/stream$/, (_req, res, url) => {
   res.on('error', cleanup);
 });
 
-add('GET', /^\/api\/user\/chat\/messages$/, (_req, res, url, opts) => {
+add('GET', /^\/api\/user\/chat\/messages$/, (_req, res, url) => {
   const folder = url.searchParams.get('folder');
   if (!folder) return json(res, 400, { error: 'missing folder' });
+  const sessionId = url.searchParams.get('sessionId') || 'legacy';
   const before = url.searchParams.get('before');
   const limit = Math.min(
     Math.max(parseInt(url.searchParams.get('limit') || '200', 10), 1),
     1000,
   );
-  const allChannels = url.searchParams.get('allChannels') === '1';
-  let rows;
-  if (allChannels) {
-    // Every registered JID whose folder matches — covers tg:, imsg:, whatsapp,
-    // and web alike. Other channels register lazily, so reload after the user
-    // adds a new channel to see its history.
-    const regs = opts.registeredAgents();
-    const jids = Object.entries(regs)
-      .filter(([, a]) => a.folder === folder)
-      .map(([jid]) => jid);
-    rows = getMessagesByJids(jids, before, limit);
-  } else {
-    rows = getMessagesByJid(`web:${folder}`, before, limit);
-  }
-  // Returned in DB order (newest first); client reverses for render. Map to
-  // the shape the web client expects.
+  const jid = `web:${folder}:${sessionId}`;
+  const rows = getMessagesByJid(jid, before, limit);
+  // Returned in DB order (newest first); client reverses for render.
   json(res, 200, {
     messages: rows.map((m) => ({
       id: m.id,
@@ -429,6 +444,93 @@ add('GET', /^\/api\/user\/chat\/messages$/, (_req, res, url, opts) => {
     })),
   });
 });
+
+// ─── Web session CRUD ─────────────────────────────────────────────────────
+
+add('GET', /^\/api\/user\/chat\/sessions$/, (_req, res, url) => {
+  const folder = url.searchParams.get('folder');
+  if (!folder) return json(res, 400, { error: 'missing folder' });
+  const includeArchived = url.searchParams.get('includeArchived') === '1';
+  const rows = listWebSessions(folder, includeArchived);
+  json(res, 200, {
+    sessions: rows.map((s) => ({
+      id: s.id,
+      folder: s.folder,
+      title: s.title,
+      sdkSessionId: s.sdk_session_id,
+      createdAt: s.created_at,
+      lastMessageAt: s.last_message_at,
+      pinned: s.pinned === 1,
+      archived: s.archived === 1,
+    })),
+  });
+});
+
+add('POST', /^\/api\/user\/chat\/sessions$/, async (req, res) => {
+  const body = (await readBody(req)) as { folder?: string; title?: string };
+  if (!body.folder) return json(res, 400, { error: 'missing folder' });
+  const id = randomUUID();
+  const created_at = new Date().toISOString();
+  createWebSession({
+    id,
+    folder: body.folder,
+    title: body.title ?? null,
+    created_at,
+  });
+  json(res, 201, {
+    id,
+    chatJid: `web:${body.folder}:${id}`,
+    folder: body.folder,
+    title: body.title ?? null,
+    createdAt: created_at,
+  });
+});
+
+add(
+  'PATCH',
+  /^\/api\/user\/chat\/sessions\/([^/]+)$/,
+  async (req, res, url) => {
+    const id = decodeURIComponent(url.pathname.split('/').pop()!);
+    const body = (await readBody(req)) as {
+      folder?: string;
+      title?: string;
+      pinned?: boolean;
+      archived?: boolean;
+    };
+    if (!body.folder) return json(res, 400, { error: 'missing folder' });
+    const existing = getWebSession(body.folder, id);
+    if (!existing) return json(res, 404, { error: 'not found' });
+    if (typeof body.title === 'string') {
+      renameWebSession(body.folder, id, body.title);
+    }
+    if (typeof body.pinned === 'boolean') {
+      pinWebSession(body.folder, id, body.pinned);
+    }
+    if (typeof body.archived === 'boolean') {
+      archiveWebSession(body.folder, id, body.archived);
+    }
+    json(res, 200, { ok: true });
+  },
+);
+
+add(
+  'DELETE',
+  /^\/api\/user\/chat\/sessions\/([^/]+)$/,
+  async (_req, res, url) => {
+    const id = decodeURIComponent(url.pathname.split('/').pop()!);
+    const folder = url.searchParams.get('folder');
+    const hard = url.searchParams.get('hard') === '1';
+    if (!folder) return json(res, 400, { error: 'missing folder' });
+    const existing = getWebSession(folder, id);
+    if (!existing) return json(res, 404, { error: 'not found' });
+    if (hard) {
+      deleteWebSession(folder, id);
+    } else {
+      archiveWebSession(folder, id, true);
+    }
+    json(res, 200, { ok: true });
+  },
+);
 
 // Read-only JSONL transcript inspection lives under /admin so the user-facing
 // chat surface stays focused on the live conversation. Same handlers, admin

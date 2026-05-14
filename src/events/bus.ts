@@ -141,6 +141,12 @@ ${handlerPromptBody}
       ? agent.heartbeat?.model
       : undefined;
 
+    const imJids = Object.entries(agents)
+      .filter(
+        ([jid, a]) =>
+          a.folder === handler.group_folder && !jid.startsWith('web:'),
+      )
+      .map(([jid]) => jid);
     const output = await runContainerAgent(agent, {
       prompt,
       sessionId,
@@ -149,6 +155,7 @@ ${handlerPromptBody}
       isMain,
       isEventHandler: true,
       model,
+      imJids,
     });
 
     if (output.status === 'error') {

@@ -3,7 +3,6 @@
  * Runs Claude Agent SDK directly in-process (no containers)
  */
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import {
   getSessionMessages,
@@ -23,7 +22,7 @@ import {
   agentVarDir,
 } from '../config.js';
 import { createIpcMcp } from './ipc-mcp.js';
-import { emitEvent } from '../db.js';
+import { emitEvent, getDb, type StoredMessage } from '../db.js';
 import { logger } from '../logger.js';
 import { Handler, RegisteredAgent } from '../types.js';
 import { loadUserMcpServers } from './mcp-config.js';
@@ -65,6 +64,11 @@ interface ContainerInput {
   isEventHandler?: boolean;
   model?: string;
   effort?: EffortLevel;
+  // Non-web jids registered to this agent folder. Used to populate the
+  // warm-start hook with cross-channel context. Web jids are folded in via
+  // a LIKE pattern by buildWarmStartContext, so callers don't need to
+  // enumerate sessions here.
+  imJids?: string[];
   onText?: (text: string) => void;
   onActivity?: (label: string) => void;
 }
@@ -140,112 +144,37 @@ interface ContainerOutput {
   sentMediaViaIpc?: boolean;
 }
 
-interface SessionEntry {
-  sessionId: string;
-  fullPath: string;
-  summary: string;
-  firstPrompt: string;
-}
-
-interface SessionsIndex {
-  entries: SessionEntry[];
-}
-
-export function getSessionSummary(
-  sessionId: string,
-  cwd: string,
-): string | null {
-  const encodedCwd = cwd.replace(/[/.]/g, '-');
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', encodedCwd);
-  const indexPath = path.join(projectDir, 'sessions-index.json');
-
-  if (!fs.existsSync(indexPath)) {
-    return null;
-  }
-
-  try {
-    const index: SessionsIndex = JSON.parse(
-      fs.readFileSync(indexPath, 'utf-8'),
-    );
-    const entry = index.entries.find((e) => e.sessionId === sessionId);
-    if (entry?.summary) {
-      return entry.summary;
-    }
-  } catch (err) {
-    logger.debug({ err }, 'Failed to read sessions index');
-  }
-
-  return null;
-}
-
 /**
- * Build warm-start text from recent conversation archives + checkpoints.
- * Archives sorted by date ascending; checkpoints by mtime ascending. By
- * construction (archives are the daily-flush product of checkpoints) every
- * archive is older than every checkpoint, so the simple two-stage append
- * yields a chronologically correct stream. Tail-capped at
- * WARM_START_BUDGET_BYTES so the most recent context survives truncation.
+ * Build warm-start text from the messages DB. Pulls the last N days of
+ * exchanges for the agent folder — IM jids passed in by the caller plus every
+ * `web:<folder>:*` composite jid — and tail-caps at WARM_START_BUDGET_BYTES so
+ * the most recent turns survive truncation.
  */
-export function buildWarmStartContext(varDir: string): string | null {
-  const sections: string[] = [];
+export function buildWarmStartContext(
+  folder: string,
+  imJids: string[],
+): string | null {
+  const cutoffMs = Date.now() - WARM_START_DAYS * 86_400_000;
+  const sinceIso = new Date(cutoffMs).toISOString();
+  const db = getDb();
 
-  const conversationsDir = path.join(varDir, 'conversations');
-  if (fs.existsSync(conversationsDir)) {
-    const cutoffMs = Date.now() - (WARM_START_DAYS + 1) * 86_400_000;
-    const archives = fs
-      .readdirSync(conversationsDir)
-      .filter((f) => f.endsWith('.md'))
-      .map((f) => {
-        const m = f.match(/^(\d{4}-\d{2}-\d{2})/);
-        const ts = m ? Date.parse(`${m[1]}T00:00:00Z`) : NaN;
-        return { f, ts };
-      })
-      .filter((x) => !Number.isNaN(x.ts) && x.ts >= cutoffMs)
-      .sort((a, b) => a.ts - b.ts);
-    for (const { f } of archives) {
-      try {
-        const raw = fs
-          .readFileSync(path.join(conversationsDir, f), 'utf-8')
-          .trim();
-        if (!raw) continue;
-        sections.push(`=== conversations/${f} ===\n${raw}`);
-      } catch {
-        // skip
-      }
-    }
-  }
+  const placeholders = imJids.length ? imJids.map(() => '?').join(',') : `''`;
+  const sql = `SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+               FROM messages
+               WHERE timestamp >= ?
+                 AND (chat_jid LIKE ? OR chat_jid IN (${placeholders}))
+               ORDER BY timestamp`;
+  const rows = db
+    .prepare(sql)
+    .all(sinceIso, `web:${folder}:%`, ...imJids) as StoredMessage[];
 
-  const cpDir = path.join(varDir, 'checkpoints');
-  if (fs.existsSync(cpDir)) {
-    const checkpoints = fs
-      .readdirSync(cpDir)
-      .filter((f) => f.endsWith('.md'))
-      .map((f) => {
-        const fp = path.join(cpDir, f);
-        let mtime = 0;
-        try {
-          mtime = fs.statSync(fp).mtimeMs;
-        } catch {
-          mtime = -1;
-        }
-        return { f, fp, mtime };
-      })
-      .filter((x) => x.mtime >= 0)
-      .sort((a, b) => a.mtime - b.mtime);
-    for (const { f, fp } of checkpoints) {
-      try {
-        const raw = fs.readFileSync(fp, 'utf-8').trim();
-        if (!raw) continue;
-        sections.push(`=== checkpoints/${f} ===\n${raw}`);
-      } catch {
-        // skip
-      }
-    }
-  }
+  if (rows.length === 0) return null;
 
-  if (sections.length === 0) return null;
-
-  const merged = sections.join('\n\n');
+  const lines = rows.map((m) => {
+    const who = m.is_from_me === 1 ? 'Assistant' : m.sender_name || m.sender;
+    return `**${who}** [${m.timestamp}]\n\n${m.content}`;
+  });
+  const merged = lines.join('\n\n---\n\n');
   const tail =
     merged.length <= WARM_START_BUDGET_BYTES
       ? merged
@@ -253,27 +182,30 @@ export function buildWarmStartContext(varDir: string): string | null {
 
   logger.info(
     {
-      varDir,
-      sections: sections.length,
+      folder,
+      rows: rows.length,
       mergedBytes: merged.length,
       injectedBytes: tail.length,
       truncated: merged.length > WARM_START_BUDGET_BYTES,
     },
-    'Warm-start context built',
+    'Warm-start context built (DB)',
   );
 
   return tail;
 }
 
-export function createSessionStartHook(varDir: string): HookCallback {
+export function createSessionStartHook(
+  folder: string,
+  imJids: string[],
+): HookCallback {
   return async (_input, _toolUseId, _context) => {
-    const tail = buildWarmStartContext(varDir);
+    const tail = buildWarmStartContext(folder, imJids);
     if (!tail) return {};
 
     return {
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
-        additionalContext: `Warm-start context (recent checkpoint + conversation archives):\n\n${tail}`,
+        additionalContext: `Warm-start context (recent conversation history):\n\n${tail}`,
       },
     };
   };
@@ -415,73 +347,6 @@ export async function loadParsedTranscript(
   }
 
   return out;
-}
-
-function formatTime(iso: string): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZone: TIMEZONE,
-  });
-}
-
-export function formatTranscriptMarkdown(
-  messages: ParsedMessage[],
-  title?: string | null,
-): string {
-  const now = new Date();
-  const formatDateTime = (d: Date) =>
-    d.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-      timeZone: TIMEZONE,
-    });
-
-  const lines: string[] = [];
-  lines.push(`# ${title || 'Conversation'}`);
-  lines.push('');
-  lines.push(`Archived: ${formatDateTime(now)}`);
-  lines.push('');
-  lines.push('---');
-  lines.push('');
-
-  for (const msg of messages) {
-    const time = formatTime(msg.timestamp);
-    const header = time ? `**${msg.sender}** (${time})` : `**${msg.sender}**`;
-    const content =
-      msg.content.length > 2000
-        ? msg.content.slice(0, 2000) + '...'
-        : msg.content;
-    lines.push(`${header}: ${content}`);
-    lines.push('');
-    lines.push('---');
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-export async function writeTurnCheckpoint(
-  varDir: string,
-  sessionId: string,
-): Promise<void> {
-  const messages = await loadParsedTranscript(sessionId, varDir);
-  if (messages.length === 0) return;
-
-  const summary = getSessionSummary(sessionId, varDir);
-  const cpDir = path.join(varDir, 'checkpoints');
-  fs.mkdirSync(cpDir, { recursive: true });
-  const cpPath = path.join(cpDir, `${sessionId}.md`);
-  const tmp = `${cpPath}.tmp`;
-  fs.writeFileSync(tmp, formatTranscriptMarkdown(messages, summary));
-  fs.renameSync(tmp, cpPath);
 }
 
 export function buildContextPrompt(agentFolder: string): string {
@@ -643,7 +508,13 @@ export async function runContainerAgent(
           ...userMcpServers,
         },
         hooks: {
-          SessionStart: [{ hooks: [createSessionStartHook(varDir)] }],
+          SessionStart: [
+            {
+              hooks: [
+                createSessionStartHook(input.agentFolder, input.imJids ?? []),
+              ],
+            },
+          ],
         },
       },
     })) {
@@ -726,18 +597,6 @@ export async function runContainerAgent(
     }
 
     fs.writeFileSync(logFile, logLines.join('\n'));
-
-    // Crash safety: dump the current transcript to the session's checkpoint
-    // file before the periodic flusher would otherwise tick. A session that
-    // ends abruptly here (network blip, kernel signal) still leaves the
-    // latest turn on disk for the daily consolidator to pick up. Run off the
-    // critical path so the user-visible final reply isn't blocked on disk I/O.
-    if (newSessionId) {
-      const sid = newSessionId;
-      void writeTurnCheckpoint(varDir, sid).catch((err) => {
-        logger.warn({ err, group: group.name }, 'Per-turn checkpoint failed');
-      });
-    }
 
     // Emit agent_complete event
     const triggerType = input.isEventHandler ? 'event_handler' : 'message';

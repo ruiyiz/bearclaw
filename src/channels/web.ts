@@ -28,16 +28,29 @@ interface WebChannelOpts {
   onOutboundDelete?: OnOutboundDelete;
 }
 
-// JID prefix used by the web channel. Each registered agent gets one JID per
-// "session" — currently a single shared session per folder under web:<folder>.
+// JID layout: `web:<folder>:<sessionId>` — folder picks the agent identity,
+// sessionId picks one of the user's persistent conversation threads. Anything
+// starting with `web:` is owned by this channel.
 const WEB_JID_PREFIX = 'web:';
 
 export function isWebJid(jid: string): boolean {
   return jid.startsWith(WEB_JID_PREFIX);
 }
 
-function folderFromJid(jid: string): string {
-  return jid.slice(WEB_JID_PREFIX.length);
+export function folderFromJid(jid: string): string {
+  const rest = jid.slice(WEB_JID_PREFIX.length);
+  const colon = rest.indexOf(':');
+  return colon === -1 ? rest : rest.slice(0, colon);
+}
+
+export function sessionIdFromJid(jid: string): string | null {
+  const rest = jid.slice(WEB_JID_PREFIX.length);
+  const colon = rest.indexOf(':');
+  return colon === -1 ? null : rest.slice(colon + 1);
+}
+
+export function webJid(folder: string, sessionId: string): string {
+  return `${WEB_JID_PREFIX}${folder}:${sessionId}`;
 }
 
 const MEDIA_TYPE_TAG: Record<MediaType, string> = {
@@ -197,7 +210,7 @@ export class WebChannel implements Channel {
   // use so the runner's queue + session logic stays untouched.
   ingest(jid: string, text: string, senderName = 'You'): void {
     const timestamp = new Date().toISOString();
-    this.opts.onChatMetadata(jid, timestamp, jid.slice(WEB_JID_PREFIX.length));
+    this.opts.onChatMetadata(jid, timestamp, folderFromJid(jid));
     this.opts.onMessage(jid, {
       id: `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       chat_jid: jid,
