@@ -76,6 +76,17 @@ export interface ChatMessage {
   isFromMe: boolean;
 }
 
+export interface WebSession {
+  id: string;
+  folder: string;
+  title: string | null;
+  sdkSessionId: string | null;
+  createdAt: string;
+  lastMessageAt: string | null;
+  pinned: boolean;
+  archived: boolean;
+}
+
 // Admin-only: SDK session metadata + parsed transcript message.
 export interface TranscriptSession {
   sessionId: string;
@@ -144,28 +155,66 @@ export const api = {
   // user
   userAgents: () =>
     get<{ agents: UserAgent[]; main: string }>('/api/user/agents'),
-  chat: (folder: string, text: string) =>
-    send<{ ok: boolean; jid: string }>('/api/user/chat', 'POST', {
-      folder,
-      text,
-    }),
+  chat: (folder: string, sessionId: string, text: string) =>
+    send<{ ok: boolean; jid: string; sessionId: string }>(
+      '/api/user/chat',
+      'POST',
+      { folder, sessionId, text },
+    ),
   chatMessages: (
     folder: string,
-    opts?: { before?: string; limit?: number; allChannels?: boolean },
+    sessionId: string,
+    opts?: { before?: string; limit?: number },
   ) => {
-    const params = new URLSearchParams({ folder });
+    const params = new URLSearchParams({ folder, sessionId });
     if (opts?.before) params.set('before', opts.before);
     if (opts?.limit) params.set('limit', String(opts.limit));
-    if (opts?.allChannels) params.set('allChannels', '1');
     return get<{ messages: ChatMessage[] }>(
       `/api/user/chat/messages?${params.toString()}`,
     );
   },
+  chatSessions: (folder: string, includeArchived = false) => {
+    const params = new URLSearchParams({ folder });
+    if (includeArchived) params.set('includeArchived', '1');
+    return get<{ sessions: WebSession[] }>(
+      `/api/user/chat/sessions?${params.toString()}`,
+    );
+  },
+  createChatSession: (folder: string, title?: string) =>
+    send<{ id: string; chatJid: string; folder: string; title: string | null }>(
+      '/api/user/chat/sessions',
+      'POST',
+      { folder, title },
+    ),
+  renameChatSession: (folder: string, id: string, title: string) =>
+    send<{ ok: boolean }>(
+      `/api/user/chat/sessions/${encodeURIComponent(id)}`,
+      'PATCH',
+      { folder, title },
+    ),
+  pinChatSession: (folder: string, id: string, pinned: boolean) =>
+    send<{ ok: boolean }>(
+      `/api/user/chat/sessions/${encodeURIComponent(id)}`,
+      'PATCH',
+      { folder, pinned },
+    ),
+  archiveChatSession: (folder: string, id: string, archived: boolean) =>
+    send<{ ok: boolean }>(
+      `/api/user/chat/sessions/${encodeURIComponent(id)}`,
+      'PATCH',
+      { folder, archived },
+    ),
+  deleteChatSession: (folder: string, id: string, hard = false) =>
+    send<{ ok: boolean }>(
+      `/api/user/chat/sessions/${encodeURIComponent(id)}?folder=${encodeURIComponent(folder)}${hard ? '&hard=1' : ''}`,
+      'DELETE',
+    ),
   commands: () => get<{ commands: SlashCommand[] }>('/api/user/commands'),
   agentMediaUrl: (folder: string, absPath: string) =>
     `/api/user/agent-media?folder=${encodeURIComponent(folder)}&path=${encodeURIComponent(absPath)}`,
   chatUpload: (payload: {
     folder: string;
+    sessionId: string;
     kind: 'image' | 'video' | 'audio' | 'document' | 'voice';
     fileName?: string;
     mimeType?: string;

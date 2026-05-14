@@ -164,11 +164,34 @@ export function initDatabase(): void {
 // new composite-jid scheme (web:<folder>:<sessionId>) covers them uniformly.
 // Idempotent — guarded on the LIKE pattern, no rerun side effects.
 function migrateWebSessions(): void {
+  // messages.chat_jid has a FOREIGN KEY into chats.jid. Add the new composite
+  // chat rows first so the UPDATE doesn't fail FK validation.
+  const insertedChats = db
+    .prepare(
+      `INSERT OR IGNORE INTO chats (jid, name, last_message_time)
+       SELECT
+         c.jid || ':legacy',
+         substr(c.jid, 5),
+         (SELECT MAX(m.timestamp) FROM messages m WHERE m.chat_jid = c.jid)
+       FROM chats c
+       WHERE c.jid LIKE 'web:%' AND c.jid NOT LIKE 'web:%:%'`,
+    )
+    .run();
+
   const tagged = db
     .prepare(
       `UPDATE messages
        SET chat_jid = chat_jid || ':legacy'
        WHERE chat_jid LIKE 'web:%' AND chat_jid NOT LIKE 'web:%:%'`,
+    )
+    .run();
+
+  // Old per-folder chats rows are now unreferenced (every message moved to
+  // the composite jid). Drop them to keep the chats table tidy.
+  const droppedChats = db
+    .prepare(
+      `DELETE FROM chats
+       WHERE jid LIKE 'web:%' AND jid NOT LIKE 'web:%:%'`,
     )
     .run();
 
@@ -191,7 +214,12 @@ function migrateWebSessions(): void {
 
   if (tagged.changes > 0 || inserted.changes > 0) {
     logger.info(
-      { taggedRows: tagged.changes, legacySessions: inserted.changes },
+      {
+        taggedRows: tagged.changes,
+        legacySessions: inserted.changes,
+        insertedChats: insertedChats.changes,
+        droppedChats: droppedChats.changes,
+      },
       'Migrated legacy web channel rows into composite jid scheme',
     );
   }

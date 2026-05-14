@@ -1,28 +1,24 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   api,
   type ChatMessage,
   type ChatStreamEvent,
   type SlashCommand,
   type UserAgent,
+  type WebSession,
 } from '@/lib/api';
 import {
   Bubble,
-  channelLabelFromJid,
   parseMediaTag,
   type BubbleData,
 } from '@/components/chat-bubble';
 
 const TEXTAREA_MAX_PX = 240;
 const HISTORY_LIMIT = 200;
-const ALL_CHANNELS_KEY = 'nc.chat.allChannels';
+const COLLAPSED_KEY = 'nc.chat.collapsedAgents';
 
-function rowToBubble(
-  m: ChatMessage,
-  folder: string,
-  showChannel: boolean,
-): BubbleData {
+function rowToBubble(m: ChatMessage, folder: string): BubbleData {
   const parsed = parseMediaTag(m.content, folder);
   return {
     id: `db-${m.id}`,
@@ -30,13 +26,84 @@ function rowToBubble(
     text: parsed?.text ?? m.content,
     ts: m.timestamp ? Date.parse(m.timestamp) || 0 : 0,
     media: parsed?.media,
-    channelLabel: showChannel ? channelLabelFromJid(m.chatJid) : undefined,
   };
+}
+
+function avatarColor(folder: string): string {
+  // Stable hue from folder name. Used for the round agent badge.
+  let h = 0;
+  for (const c of folder) h = (h * 31 + c.charCodeAt(0)) | 0;
+  const hue = Math.abs(h) % 360;
+  return `hsl(${hue}, 55%, 45%)`;
+}
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
+function shortWhen(iso: string | null): string {
+  if (!iso) return '';
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return '';
+  const diffMin = (Date.now() - then) / 60000;
+  if (diffMin < 1) return 'now';
+  if (diffMin < 60) return `${Math.floor(diffMin)}m`;
+  if (diffMin < 24 * 60) return `${Math.floor(diffMin / 60)}h`;
+  return `${Math.floor(diffMin / (60 * 24))}d`;
+}
+
+function loadCollapsed(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(
+      Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCollapsed(s: Set<string>): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...s]));
+}
+
+function urlState(): { folder: string | null; session: string | null } {
+  if (typeof window === 'undefined') return { folder: null, session: null };
+  const sp = new URLSearchParams(window.location.search);
+  return {
+    folder: sp.get('folder'),
+    session: sp.get('session'),
+  };
+}
+
+function pushUrl(folder: string, session: string): void {
+  if (typeof window === 'undefined') return;
+  const sp = new URLSearchParams(window.location.search);
+  sp.set('folder', folder);
+  sp.set('session', session);
+  const next = `${window.location.pathname}?${sp.toString()}`;
+  window.history.replaceState({}, '', next);
 }
 
 export function ChatView() {
   const [agents, setAgents] = useState<UserAgent[]>([]);
+  const [sessionsByFolder, setSessionsByFolder] = useState<
+    Record<string, WebSession[]>
+  >({});
   const [folder, setFolder] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() =>
+    loadCollapsed(),
+  );
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [messages, setMessages] = useState<BubbleData[]>([]);
   const [input, setInput] = useState('');
@@ -53,47 +120,99 @@ export function ChatView() {
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [pickerIndex, setPickerIndex] = useState(0);
   const pickerItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const [allChannels, setAllChannels] = useState(false);
-  // Tracks whether the next scroll-to-bottom should be instant (initial load
-  // or folder switch) vs. smooth (new message arrival).
   const justLoadedRef = useRef(true);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    setAllChannels(window.localStorage.getItem(ALL_CHANNELS_KEY) === '1');
-  }, []);
+  const refreshSessions = useCallback(
+    async (f: string): Promise<WebSession[]> => {
+      const d = await api.chatSessions(f);
+      setSessionsByFolder((prev) => ({ ...prev, [f]: d.sessions }));
+      return d.sessions;
+    },
+    [],
+  );
 
-  function toggleAllChannels(next: boolean) {
-    setAllChannels(next);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(ALL_CHANNELS_KEY, next ? '1' : '0');
-    }
-  }
-
+  // Boot: load agents, snap to URL state if any, otherwise default to the main
+  // folder + its most-recent session (or auto-create one).
   useEffect(() => {
-    api
-      .userAgents()
-      .then((d) => {
-        setAgents(d.agents);
-        if (d.agents.length > 0) {
-          setFolder(
-            d.agents.find((a) => a.folder === d.main)?.folder ||
-              d.agents[0].folder,
-          );
+    let cancelled = false;
+    (async () => {
+      try {
+        const [agentsD, cmdsD] = await Promise.all([
+          api.userAgents(),
+          api.commands().catch(() => ({ commands: [] as SlashCommand[] })),
+        ]);
+        if (cancelled) return;
+        setAgents(agentsD.agents);
+        setCommands(cmdsD.commands);
+
+        // Prefetch sessions for every agent so the sidebar renders fully on
+        // first paint. Cheap (one row per session per folder).
+        const sessionEntries = await Promise.all(
+          agentsD.agents.map(async (a) => {
+            try {
+              const d = await api.chatSessions(a.folder);
+              return [a.folder, d.sessions] as const;
+            } catch {
+              return [a.folder, [] as WebSession[]] as const;
+            }
+          }),
+        );
+        if (cancelled) return;
+        const byFolder: Record<string, WebSession[]> = {};
+        for (const [k, v] of sessionEntries) byFolder[k] = v;
+        setSessionsByFolder(byFolder);
+
+        const wanted = urlState();
+        const initialFolder =
+          wanted.folder ||
+          agentsD.agents.find((a) => a.folder === agentsD.main)?.folder ||
+          agentsD.agents[0]?.folder ||
+          null;
+        if (!initialFolder) return;
+
+        let initialSession = wanted.session;
+        if (!initialSession) {
+          const list = byFolder[initialFolder] || [];
+          initialSession = list[0]?.id || null;
+          if (!initialSession) {
+            // Bootstrap an empty session so the composer has somewhere to
+            // write. New users land on a fresh thread.
+            const created = await api.createChatSession(initialFolder);
+            if (cancelled) return;
+            initialSession = created.id;
+            setSessionsByFolder((prev) => ({
+              ...prev,
+              [initialFolder]: [
+                {
+                  id: created.id,
+                  folder: created.folder,
+                  title: created.title,
+                  sdkSessionId: null,
+                  createdAt: new Date().toISOString(),
+                  lastMessageAt: null,
+                  pinned: false,
+                  archived: false,
+                },
+                ...(prev[initialFolder] || []),
+              ],
+            }));
+          }
         }
-      })
-      .catch(() => {});
-    api
-      .commands()
-      .then((d) => setCommands(d.commands))
-      .catch(() => {});
+        setFolder(initialFolder);
+        setSessionId(initialSession);
+        pushUrl(initialFolder, initialSession);
+      } catch {
+        /* unauthed redirects via api helpers */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Load message history for the selected agent. The web channel owns its
-  // own persistence (messages table) so this is just the agent's linear
-  // chat history — not split by SDK sessions.
+  // History reload when folder/session changes.
   useEffect(() => {
-    if (!folder) {
+    if (!folder || !sessionId) {
       setMessages([]);
       return;
     }
@@ -101,12 +220,11 @@ export function ChatView() {
     let cancelled = false;
     setLoadingHistory(true);
     api
-      .chatMessages(folder, { limit: HISTORY_LIMIT, allChannels })
+      .chatMessages(folder, sessionId, { limit: HISTORY_LIMIT })
       .then((d) => {
         if (cancelled) return;
-        // DB returns newest-first; reverse for chronological render.
         const rows = [...d.messages].reverse();
-        setMessages(rows.map((m) => rowToBubble(m, folder, allChannels)));
+        setMessages(rows.map((m) => rowToBubble(m, folder)));
       })
       .catch(() => {
         if (cancelled) return;
@@ -118,13 +236,14 @@ export function ChatView() {
     return () => {
       cancelled = true;
     };
-  }, [folder, allChannels]);
+  }, [folder, sessionId]);
 
+  // SSE stream keyed to the active composite jid.
   useEffect(() => {
-    if (!folder) return;
+    if (!folder || !sessionId) return;
     sourceRef.current?.close();
     const es = new EventSource(
-      `/api/user/chat/stream?folder=${encodeURIComponent(folder)}`,
+      `/api/user/chat/stream?folder=${encodeURIComponent(folder)}&sessionId=${encodeURIComponent(sessionId)}`,
     );
     sourceRef.current = es;
     es.onmessage = (e) => {
@@ -140,7 +259,7 @@ export function ChatView() {
     };
     return () => es.close();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [folder]);
+  }, [folder, sessionId]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -153,13 +272,10 @@ export function ChatView() {
     }
   }, [messages, typing]);
 
-  // Autofocus the composer on mount and whenever the agent changes.
   useEffect(() => {
     textareaRef.current?.focus();
-  }, [folder]);
+  }, [folder, sessionId]);
 
-  // Pressing Enter anywhere while focus is outside an editable element jumps
-  // straight into the composer.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Enter' || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey)
@@ -196,14 +312,9 @@ export function ChatView() {
       return;
     }
     setTyping(false);
-    // SSE is web-only; tag bubbles with the web channel label when the
-    // cross-channel view is active so the user sees a consistent chip column.
-    const liveLabel = allChannels ? 'web' : undefined;
     setMessages((prev) => {
       switch (evt.type) {
         case 'message':
-          // De-dupe against the row the server already persisted: if a bubble
-          // with the same remoteId is present, skip; otherwise append.
           if (prev.some((m) => m.remoteId === evt.id)) return prev;
           return [
             ...prev,
@@ -213,7 +324,6 @@ export function ChatView() {
               text: evt.text,
               ts: evt.ts,
               remoteId: evt.id,
-              channelLabel: liveLabel,
             },
           ];
         case 'edit':
@@ -239,7 +349,6 @@ export function ChatView() {
                     caption: evt.caption,
                   }
                 : undefined,
-              channelLabel: liveLabel,
             },
           ];
         default:
@@ -269,7 +378,7 @@ export function ChatView() {
   }
 
   async function handleFile(file: File) {
-    if (!folder || uploading) return;
+    if (!folder || !sessionId || uploading) return;
     setUploading(true);
     const kind = kindForMime(file.type || '');
     const previewUrl = URL.createObjectURL(file);
@@ -281,18 +390,14 @@ export function ChatView() {
         side: 'user',
         text: '',
         ts: Date.now(),
-        media: {
-          url: previewUrl,
-          mediaType: kind,
-          caption: file.name,
-        },
-        channelLabel: allChannels ? 'web' : undefined,
+        media: { url: previewUrl, mediaType: kind, caption: file.name },
       },
     ]);
     try {
       const dataB64 = await fileToBase64(file);
       await api.chatUpload({
         folder,
+        sessionId,
         kind,
         fileName: file.name,
         mimeType: file.type,
@@ -314,7 +419,7 @@ export function ChatView() {
   }
 
   async function startRecording() {
-    if (!folder || recording) return;
+    if (!folder || !sessionId || recording) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mime = MediaRecorder.isTypeSupported('audio/webm')
@@ -338,7 +443,6 @@ export function ChatView() {
             side: 'user',
             text: '[Voice message] (uploading…)',
             ts: Date.now(),
-            channelLabel: allChannels ? 'web' : undefined,
           },
         ]);
         setUploading(true);
@@ -346,6 +450,7 @@ export function ChatView() {
           const dataB64 = await fileToBase64(blob);
           const res = await api.chatUpload({
             folder: folder!,
+            sessionId: sessionId!,
             kind: 'voice',
             fileName: `voice.${mime.includes('webm') ? 'webm' : 'm4a'}`,
             mimeType: mime,
@@ -400,22 +505,19 @@ export function ChatView() {
   }
 
   async function send() {
-    if (!folder || !input.trim() || sending) return;
+    if (!folder || !sessionId || !input.trim() || sending) return;
     const text = input.trim();
     setInput('');
     setSending(true);
     setMessages((prev) => [
       ...prev,
-      {
-        id: `u-${Date.now()}`,
-        side: 'user',
-        text,
-        ts: Date.now(),
-        channelLabel: allChannels ? 'web' : undefined,
-      },
+      { id: `u-${Date.now()}`, side: 'user', text, ts: Date.now() },
     ]);
     try {
-      await api.chat(folder, text);
+      await api.chat(folder, sessionId, text);
+      // Server auto-titles on first user message; refresh the sidebar entry
+      // so the title chip stops saying "New chat".
+      void refreshSessions(folder).catch(() => {});
     } catch (e) {
       setMessages((prev) => [
         ...prev,
@@ -428,6 +530,89 @@ export function ChatView() {
       ]);
     } finally {
       setSending(false);
+    }
+  }
+
+  async function switchTo(f: string, s: string) {
+    setFolder(f);
+    setSessionId(s);
+    pushUrl(f, s);
+    setDrawerOpen(false);
+  }
+
+  async function newSession(f: string) {
+    try {
+      const created = await api.createChatSession(f);
+      const row: WebSession = {
+        id: created.id,
+        folder: created.folder,
+        title: created.title,
+        sdkSessionId: null,
+        createdAt: new Date().toISOString(),
+        lastMessageAt: null,
+        pinned: false,
+        archived: false,
+      };
+      setSessionsByFolder((prev) => ({
+        ...prev,
+        [f]: [row, ...(prev[f] || [])],
+      }));
+      setFolder(f);
+      setSessionId(created.id);
+      pushUrl(f, created.id);
+      setDrawerOpen(false);
+      // Ensure the agent group is expanded so the new session is visible.
+      setCollapsed((prev) => {
+        if (!prev.has(f)) return prev;
+        const next = new Set(prev);
+        next.delete(f);
+        saveCollapsed(next);
+        return next;
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function toggleCollapse(f: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(f)) next.delete(f);
+      else next.add(f);
+      saveCollapsed(next);
+      return next;
+    });
+  }
+
+  async function commitRename(f: string, id: string) {
+    const title = renameDraft.trim();
+    setRenamingId(null);
+    if (!title) return;
+    try {
+      await api.renameChatSession(f, id, title);
+      setSessionsByFolder((prev) => ({
+        ...prev,
+        [f]: (prev[f] || []).map((s) => (s.id === id ? { ...s, title } : s)),
+      }));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function deleteSession(f: string, id: string) {
+    if (!confirm('Archive this conversation? It will be hidden from the list.'))
+      return;
+    try {
+      await api.deleteChatSession(f, id, false);
+      const remaining = (sessionsByFolder[f] || []).filter((s) => s.id !== id);
+      setSessionsByFolder((prev) => ({ ...prev, [f]: remaining }));
+      if (folder === f && sessionId === id) {
+        const next = remaining[0]?.id || null;
+        if (next) switchTo(f, next);
+        else setSessionId(null);
+      }
+    } catch {
+      /* ignore */
     }
   }
 
@@ -459,191 +644,374 @@ export function ChatView() {
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
+  const activeAgent = useMemo(
+    () => agents.find((a) => a.folder === folder) || null,
+    [agents, folder],
+  );
+  const activeSession = useMemo(() => {
+    if (!folder || !sessionId) return null;
+    return (
+      (sessionsByFolder[folder] || []).find((s) => s.id === sessionId) || null
+    );
+  }, [folder, sessionId, sessionsByFolder]);
+
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div className="border-b border-[color:var(--border)] px-3 py-2 flex flex-wrap items-center gap-2">
-        <label className="text-xs text-[color:var(--muted)]">Agent</label>
-        <select
-          value={folder ?? ''}
-          onChange={(e) => setFolder(e.target.value || null)}
-          className="bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-2 py-1 text-sm transition-colors hover:border-[color:var(--accent)] focus:border-[color:var(--accent)] focus:outline-none cursor-pointer"
-        >
-          {agents.map((a) => (
-            <option key={a.folder} value={a.folder}>
-              {a.name} ({a.folder})
-            </option>
-          ))}
-        </select>
-        <label className="text-xs text-[color:var(--muted)] ml-2 inline-flex items-center gap-1 select-none cursor-pointer">
-          <input
-            type="checkbox"
-            checked={allChannels}
-            onChange={(e) => toggleAllChannels(e.target.checked)}
-            className="accent-[color:var(--accent)]"
-          />
-          all channels
-        </label>
-        {typing && (
-          <span className="text-xs text-[color:var(--muted)]">… typing</span>
-        )}
-      </div>
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto px-3 py-3 space-y-2"
+    <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)] relative">
+      {/* Sidebar */}
+      <aside
+        className={
+          'bg-[color:var(--bg-2,#14171d)] border-r border-[color:var(--border)] flex flex-col min-w-0 ' +
+          'fixed md:static inset-y-0 left-0 w-72 z-30 transform transition-transform duration-200 ' +
+          (drawerOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0')
+        }
       >
-        {loadingHistory && (
-          <div className="text-center text-xs text-[color:var(--muted)]">
-            loading history…
-          </div>
-        )}
-        {!loadingHistory && messages.length === 0 && (
-          <div className="h-full flex items-center justify-center text-center px-6">
-            <div className="text-[color:var(--muted)] text-sm">
-              {folder ? (
-                <>
-                  Chatting with <span className="font-medium">{folder}</span>.
-                  <br />
-                  Type a message below to start.
-                </>
-              ) : (
-                'Pick an agent above.'
-              )}
-            </div>
-          </div>
-        )}
-        {messages.map((m) => (
-          <Bubble key={m.id} m={m} />
-        ))}
-        {typing && messages.length > 0 && (
-          <div className="flex justify-start">
-            <div className="rounded-2xl rounded-bl-md bg-[color:var(--card)] border border-[color:var(--border)] px-3 py-2 text-sm text-[color:var(--muted)] animate-pulse">
-              …
-            </div>
-          </div>
-        )}
-      </div>
-      <form
-        className="border-t border-[color:var(--border)] p-2 flex gap-2 items-end"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void send();
-        }}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          accept="image/*,video/*,audio/*,application/pdf,.zip,.txt,.md,.csv,.json"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void handleFile(f);
-            e.target.value = '';
-          }}
-        />
-        <button
-          type="button"
-          aria-label="Attach"
-          disabled={!folder || uploading || recording}
-          onClick={() => fileInputRef.current?.click()}
-          className="h-9 inline-flex items-center justify-center rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-3 text-sm leading-none transition-all duration-150 hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[color:var(--card)] disabled:hover:border-[color:var(--border)] disabled:active:scale-100"
-          title="Attach file"
-        >
-          📎
-        </button>
-        <button
-          type="button"
-          aria-label={recording ? 'Stop recording' : 'Record voice'}
-          disabled={!folder || uploading}
-          onClick={() => (recording ? stopRecording() : void startRecording())}
-          className={
-            'h-9 inline-flex items-center justify-center rounded-md border px-3 text-sm leading-none transition-all duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 ' +
-            (recording
-              ? 'border-red-500 bg-red-500/20 text-red-300 animate-pulse'
-              : 'border-[color:var(--border)] bg-[color:var(--card)] hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10')
-          }
-          title={recording ? 'Stop recording' : 'Record voice message'}
-        >
-          {recording ? '⏹' : '🎙'}
-        </button>
-        <div className="relative flex-1">
-          {pickerVisible && (
-            <div className="absolute bottom-full left-0 right-0 mb-1 max-h-60 overflow-y-auto rounded-md border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-10">
-              {pickerOptions.map((c, i) => (
-                <button
-                  type="button"
-                  key={c.name}
-                  ref={(el) => {
-                    pickerItemRefs.current[i] = el;
-                  }}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    applyCommand(c.name);
-                  }}
-                  onMouseEnter={() => setPickerIndex(i)}
-                  className={
-                    'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline transition-colors duration-100 ' +
-                    (i === pickerIndex
-                      ? 'bg-[color:var(--accent)]/20'
-                      : 'hover:bg-white/5')
-                  }
+        <header className="px-3 py-3 flex items-center gap-2 border-b border-[color:var(--border)]">
+          <div className="text-sm font-semibold flex-1">Conversations</div>
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(false)}
+            className="md:hidden text-[color:var(--muted)] hover:text-[color:var(--fg)] px-2 text-lg"
+            aria-label="Close sidebar"
+          >
+            ✕
+          </button>
+        </header>
+        <nav className="flex-1 overflow-y-auto py-2">
+          {agents.map((a) => {
+            const sessions = sessionsByFolder[a.folder] || [];
+            const isCollapsed = collapsed.has(a.folder);
+            const isActiveAgent = folder === a.folder;
+            return (
+              <div key={a.folder} className="mb-1">
+                <div
+                  className="px-2 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-[color:var(--card)] mx-1 rounded-md"
+                  onClick={() => toggleCollapse(a.folder)}
                 >
-                  <span className="font-mono">/{c.name}</span>
-                  <span className="text-xs text-[color:var(--muted)] truncate">
-                    {c.description}
+                  <span
+                    className="w-3 text-[10px] text-[color:var(--muted)] transition-transform"
+                    style={{
+                      transform: isCollapsed ? 'rotate(-90deg)' : 'none',
+                    }}
+                  >
+                    ▾
                   </span>
-                </button>
-              ))}
+                  <span
+                    className="w-5 h-5 rounded-full grid place-items-center text-[10px] font-bold text-white shrink-0"
+                    style={{ background: avatarColor(a.folder) }}
+                  >
+                    {initials(a.name || a.folder)}
+                  </span>
+                  <span className="flex-1 text-[13px] font-medium truncate">
+                    {a.name || a.folder}
+                  </span>
+                  {isActiveAgent && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--accent)]" />
+                  )}
+                  <span className="text-[11px] text-[color:var(--muted)] bg-[color:var(--card)] rounded-full px-1.5">
+                    {sessions.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void newSession(a.folder);
+                    }}
+                    aria-label="New session"
+                    title="New session"
+                    className="text-[color:var(--muted)] hover:text-[color:var(--accent)] px-1 text-base leading-none"
+                  >
+                    ＋
+                  </button>
+                </div>
+                {!isCollapsed && (
+                  <div className="pl-1">
+                    {sessions.length === 0 && (
+                      <div className="px-10 py-1 text-[11px] text-[color:var(--muted)] italic">
+                        no sessions yet
+                      </div>
+                    )}
+                    {sessions.map((s) => {
+                      const active = a.folder === folder && s.id === sessionId;
+                      const isRenaming = renamingId === s.id;
+                      return (
+                        <div
+                          key={s.id}
+                          className={
+                            'group flex items-center gap-2 pl-10 pr-2 py-1 mx-1 rounded-md cursor-pointer ' +
+                            (active
+                              ? 'bg-[color:var(--accent)]/15'
+                              : 'hover:bg-[color:var(--card)]')
+                          }
+                          onClick={() =>
+                            !isRenaming && void switchTo(a.folder, s.id)
+                          }
+                          onDoubleClick={(e) => {
+                            e.preventDefault();
+                            setRenamingId(s.id);
+                            setRenameDraft(s.title || '');
+                          }}
+                        >
+                          {isRenaming ? (
+                            <input
+                              autoFocus
+                              value={renameDraft}
+                              onChange={(e) => setRenameDraft(e.target.value)}
+                              onBlur={() => commitRename(a.folder, s.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  void commitRename(a.folder, s.id);
+                                } else if (e.key === 'Escape') {
+                                  setRenamingId(null);
+                                }
+                              }}
+                              className="flex-1 bg-transparent border border-[color:var(--accent)] rounded px-1 text-[12.5px] focus:outline-none"
+                            />
+                          ) : (
+                            <span
+                              className={
+                                'flex-1 text-[12.5px] truncate ' +
+                                (active ? 'text-[color:var(--accent)]' : '')
+                              }
+                            >
+                              {s.title || (
+                                <span className="text-[color:var(--muted)] italic">
+                                  New chat
+                                </span>
+                              )}
+                            </span>
+                          )}
+                          <span className="text-[11px] text-[color:var(--muted)] shrink-0">
+                            {shortWhen(s.lastMessageAt || s.createdAt)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void deleteSession(a.folder, s.id);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 text-[color:var(--muted)] hover:text-red-400 text-xs shrink-0"
+                            aria-label="Archive session"
+                            title="Archive"
+                          >
+                            ⌫
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </nav>
+      </aside>
+      {drawerOpen && (
+        <div
+          className="md:hidden fixed inset-0 bg-black/40 z-20"
+          onClick={() => setDrawerOpen(false)}
+        />
+      )}
+
+      {/* Main pane */}
+      <section className="flex flex-col min-h-0">
+        <div className="border-b border-[color:var(--border)] px-3 py-2 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            className="md:hidden h-8 w-8 rounded-md border border-[color:var(--border)] inline-flex items-center justify-center text-[color:var(--muted)] hover:text-[color:var(--fg)]"
+            aria-label="Open sidebar"
+          >
+            ☰
+          </button>
+          {activeAgent && (
+            <span className="inline-flex items-center gap-1.5 bg-[color:var(--card)] border border-[color:var(--border)] rounded-full px-2 py-0.5 text-xs">
+              <span
+                className="w-4 h-4 rounded-full grid place-items-center text-[9px] font-bold text-white"
+                style={{ background: avatarColor(activeAgent.folder) }}
+              >
+                {initials(activeAgent.name || activeAgent.folder)}
+              </span>
+              <span>{activeAgent.name || activeAgent.folder}</span>
+            </span>
+          )}
+          <span className="text-sm font-medium truncate">
+            {activeSession?.title || (
+              <span className="text-[color:var(--muted)] italic">
+                {activeSession ? 'New chat' : 'No session'}
+              </span>
+            )}
+          </span>
+          <span className="flex-1" />
+          {typing && (
+            <span className="text-xs text-[color:var(--muted)]">… typing</span>
+          )}
+        </div>
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto px-3 py-3 space-y-2"
+        >
+          {loadingHistory && (
+            <div className="text-center text-xs text-[color:var(--muted)]">
+              loading history…
             </div>
           )}
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (pickerVisible) {
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setPickerIndex((i) => (i + 1) % pickerOptions.length);
-                  return;
-                }
-                if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setPickerIndex(
-                    (i) =>
-                      (i - 1 + pickerOptions.length) % pickerOptions.length,
-                  );
-                  return;
-                }
-                if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
-                  e.preventDefault();
-                  const pick = pickerOptions[pickerIndex];
-                  if (pick) applyCommand(pick.name);
-                  return;
-                }
-                if (e.key === 'Escape') {
-                  e.preventDefault();
-                  setInput('');
-                  return;
-                }
-              }
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            rows={1}
-            placeholder={folder ? `Message ${folder}…` : 'Pick an agent'}
-            className="w-full block min-h-9 resize-none overflow-y-auto bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-[color:var(--accent)] leading-5 align-bottom"
-          />
+          {!loadingHistory && messages.length === 0 && (
+            <div className="h-full flex items-center justify-center text-center px-6">
+              <div className="text-[color:var(--muted)] text-sm">
+                {folder && sessionId ? (
+                  <>
+                    New conversation with{' '}
+                    <span className="font-medium">{folder}</span>.<br />
+                    Type a message below to start.
+                  </>
+                ) : (
+                  'Pick or start a conversation from the sidebar.'
+                )}
+              </div>
+            </div>
+          )}
+          {messages.map((m) => (
+            <Bubble key={m.id} m={m} />
+          ))}
+          {typing && messages.length > 0 && (
+            <div className="flex justify-start">
+              <div className="rounded-2xl rounded-bl-md bg-[color:var(--card)] border border-[color:var(--border)] px-3 py-2 text-sm text-[color:var(--muted)] animate-pulse">
+                …
+              </div>
+            </div>
+          )}
         </div>
-        <button
-          type="submit"
-          disabled={!folder || !input.trim() || sending}
-          className="h-9 inline-flex items-center justify-center rounded-md bg-[color:var(--accent)] text-white px-4 text-sm leading-none transition-all duration-150 hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
+        <form
+          className="border-t border-[color:var(--border)] p-2 flex gap-2 items-end"
+          style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send();
+          }}
         >
-          Send
-        </button>
-      </form>
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            accept="image/*,video/*,audio/*,application/pdf,.zip,.txt,.md,.csv,.json"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleFile(f);
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            aria-label="Attach"
+            disabled={!folder || !sessionId || uploading || recording}
+            onClick={() => fileInputRef.current?.click()}
+            className="h-9 inline-flex items-center justify-center rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-3 text-sm leading-none transition-all duration-150 hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[color:var(--card)] disabled:hover:border-[color:var(--border)] disabled:active:scale-100"
+            title="Attach file"
+          >
+            📎
+          </button>
+          <button
+            type="button"
+            aria-label={recording ? 'Stop recording' : 'Record voice'}
+            disabled={!folder || !sessionId || uploading}
+            onClick={() =>
+              recording ? stopRecording() : void startRecording()
+            }
+            className={
+              'h-9 inline-flex items-center justify-center rounded-md border px-3 text-sm leading-none transition-all duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 ' +
+              (recording
+                ? 'border-red-500 bg-red-500/20 text-red-300 animate-pulse'
+                : 'border-[color:var(--border)] bg-[color:var(--card)] hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10')
+            }
+            title={recording ? 'Stop recording' : 'Record voice message'}
+          >
+            {recording ? '⏹' : '🎙'}
+          </button>
+          <div className="relative flex-1">
+            {pickerVisible && (
+              <div className="absolute bottom-full left-0 right-0 mb-1 max-h-60 overflow-y-auto rounded-md border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-10">
+                {pickerOptions.map((c, i) => (
+                  <button
+                    type="button"
+                    key={c.name}
+                    ref={(el) => {
+                      pickerItemRefs.current[i] = el;
+                    }}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      applyCommand(c.name);
+                    }}
+                    onMouseEnter={() => setPickerIndex(i)}
+                    className={
+                      'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline transition-colors duration-100 ' +
+                      (i === pickerIndex
+                        ? 'bg-[color:var(--accent)]/20'
+                        : 'hover:bg-white/5')
+                    }
+                  >
+                    <span className="font-mono">/{c.name}</span>
+                    <span className="text-xs text-[color:var(--muted)] truncate">
+                      {c.description}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (pickerVisible) {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setPickerIndex((i) => (i + 1) % pickerOptions.length);
+                    return;
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setPickerIndex(
+                      (i) =>
+                        (i - 1 + pickerOptions.length) % pickerOptions.length,
+                    );
+                    return;
+                  }
+                  if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                    e.preventDefault();
+                    const pick = pickerOptions[pickerIndex];
+                    if (pick) applyCommand(pick.name);
+                    return;
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setInput('');
+                    return;
+                  }
+                }
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              rows={1}
+              placeholder={
+                folder && sessionId
+                  ? `Message ${activeAgent?.name || folder}…`
+                  : 'Pick or start a conversation'
+              }
+              className="w-full block min-h-9 resize-none overflow-y-auto bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-[color:var(--accent)] leading-5 align-bottom"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={!folder || !sessionId || !input.trim() || sending}
+            className="h-9 inline-flex items-center justify-center rounded-md bg-[color:var(--accent)] text-white px-4 text-sm leading-none transition-all duration-150 hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
+          >
+            Send
+          </button>
+        </form>
+      </section>
     </div>
   );
 }
