@@ -396,6 +396,11 @@ add('GET', /^\/api\/user\/chat\/stream$/, (_req, res, url) => {
   const folder = url.searchParams.get('folder');
   const sessionId = url.searchParams.get('sessionId') || 'legacy';
   const jid = folder ? `web:${folder}:${sessionId}` : null;
+  // Disable Nagle so small SSE chunks ship the moment they're written instead
+  // of being coalesced for ~40ms / next ACK by the kernel.
+  if (res.socket && typeof res.socket.setNoDelay === 'function') {
+    res.socket.setNoDelay(true);
+  }
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache, no-transform',
@@ -403,11 +408,11 @@ add('GET', /^\/api\/user\/chat\/stream$/, (_req, res, url) => {
     'x-accel-buffering': 'no',
   });
   res.write(': connected\n\n');
+  const channel = jid ? `out:${jid}` : 'out:*';
 
   const handler = (evt: WebOutboundEvent) => {
     res.write(`data: ${JSON.stringify(evt)}\n\n`);
   };
-  const channel = jid ? `out:${jid}` : 'out:*';
   webBroker.on(channel, handler);
 
   const ka = setInterval(() => res.write(': ka\n\n'), 25000);

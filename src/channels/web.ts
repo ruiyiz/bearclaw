@@ -157,6 +157,10 @@ export class WebChannel implements Channel {
     webBroker.publish(jid, { type: 'typing', jid, isTyping });
   }
 
+  async setActivity(jid: string, label: string | null): Promise<void> {
+    webBroker.publish(jid, { type: 'activity', jid, label });
+  }
+
   async sendMedia(
     jid: string,
     type: MediaType,

@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   api,
@@ -13,6 +14,7 @@ import {
   parseMediaTag,
   type BubbleData,
 } from '@/components/chat-bubble';
+import { SettingsModal } from '@/components/settings-modal';
 
 const TEXTAREA_MAX_PX = 240;
 const HISTORY_LIMIT = 200;
@@ -102,12 +104,14 @@ export function ChatView() {
     loadCollapsed(),
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [messages, setMessages] = useState<BubbleData[]>([]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
+  const [activity, setActivity] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -210,56 +214,113 @@ export function ChatView() {
     };
   }, []);
 
-  // History reload when folder/session changes.
+  // History reload when folder/session changes, plus a refetch on tab
+  // foreground so we catch anything the broker fanned out during a blackout.
+  const reloadHistory = useCallback(
+    (f: string, s: string, opts: { showSpinner: boolean }) => {
+      let cancelled = false;
+      if (opts.showSpinner) setLoadingHistory(true);
+      api
+        .chatMessages(f, s, { limit: HISTORY_LIMIT })
+        .then((d) => {
+          if (cancelled) return;
+          const rows = [...d.messages].reverse();
+          setMessages(rows.map((m) => rowToBubble(m, f)));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (opts.showSpinner) setMessages([]);
+        })
+        .finally(() => {
+          if (!cancelled && opts.showSpinner) setLoadingHistory(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!folder || !sessionId) {
       setMessages([]);
       return;
     }
     justLoadedRef.current = true;
-    let cancelled = false;
-    setLoadingHistory(true);
-    api
-      .chatMessages(folder, sessionId, { limit: HISTORY_LIMIT })
-      .then((d) => {
-        if (cancelled) return;
-        const rows = [...d.messages].reverse();
-        setMessages(rows.map((m) => rowToBubble(m, folder)));
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setMessages([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingHistory(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [folder, sessionId]);
+    const cancel = reloadHistory(folder, sessionId, { showSpinner: true });
+    return cancel;
+  }, [folder, sessionId, reloadHistory]);
 
-  // SSE stream keyed to the active composite jid.
+  // SSE stream keyed to the active composite jid. Browser auto-reconnect goes
+  // through a Next.js prod proxy and sometimes never re-establishes a fresh
+  // backend subscription after the backend restarts (zero broker listeners on
+  // the new process). We force a fresh EventSource on every error / hidden →
+  // visible transition / focus / pageshow, and refetch history on reopen so
+  // anything fanned out during the blackout still surfaces.
   useEffect(() => {
     if (!folder || !sessionId) return;
-    sourceRef.current?.close();
-    const es = new EventSource(
-      `/api/user/chat/stream?folder=${encodeURIComponent(folder)}&sessionId=${encodeURIComponent(sessionId)}`,
-    );
-    sourceRef.current = es;
-    es.onmessage = (e) => {
-      try {
-        const evt = JSON.parse(e.data) as ChatStreamEvent;
-        applyStreamEvent(evt);
-      } catch {
-        /* ignore */
+    let closed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const open = () => {
+      if (closed) return;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
       }
+      sourceRef.current?.close();
+      const ssePath = `/api/user/chat/stream?folder=${encodeURIComponent(folder)}&sessionId=${encodeURIComponent(sessionId)}`;
+      const es = new EventSource(ssePath);
+      sourceRef.current = es;
+      es.onmessage = (e) => {
+        try {
+          const evt = JSON.parse(e.data) as ChatStreamEvent;
+          applyStreamEvent(evt);
+        } catch {
+          /* ignore */
+        }
+      };
+      es.onerror = () => {
+        // Browser auto-reconnect can wedge behind some prod proxies; tear
+        // the socket down and retry ourselves. The history refetch on
+        // reopen catches anything fanned out during the blackout.
+        es.close();
+        if (closed) return;
+        retryTimer = setTimeout(() => {
+          if (!closed) {
+            reloadHistory(folder, sessionId, { showSpinner: false });
+            open();
+          }
+        }, 1500);
+      };
     };
-    es.onerror = () => {
-      // EventSource auto-reconnects.
+
+    open();
+
+    const reopen = () => {
+      if (closed) return;
+      reloadHistory(folder, sessionId, { showSpinner: false });
+      const es = sourceRef.current;
+      if (!es || es.readyState !== EventSource.OPEN) open();
     };
-    return () => es.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [folder, sessionId]);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') reopen();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pageshow', reopen);
+    window.addEventListener('focus', reopen);
+    window.addEventListener('online', reopen);
+
+    return () => {
+      closed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pageshow', reopen);
+      window.removeEventListener('focus', reopen);
+      window.removeEventListener('online', reopen);
+      sourceRef.current?.close();
+    };
+  }, [folder, sessionId, reloadHistory]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -270,7 +331,7 @@ export function ChatView() {
     } else {
       el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
     }
-  }, [messages, typing]);
+  }, [messages, typing, activity]);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -311,7 +372,14 @@ export function ChatView() {
       setTyping(evt.isTyping);
       return;
     }
+    if (evt.type === 'activity') {
+      setActivity(evt.label);
+      return;
+    }
     setTyping(false);
+    if (evt.type === 'edit' || evt.type === 'message' || evt.type === 'media') {
+      setActivity(null);
+    }
     setMessages((prev) => {
       switch (evt.type) {
         case 'message':
@@ -656,362 +724,419 @@ export function ChatView() {
   }, [folder, sessionId, sessionsByFolder]);
 
   return (
-    <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)] relative">
-      {/* Sidebar */}
-      <aside
-        className={
-          'bg-[color:var(--bg-2,#14171d)] border-r border-[color:var(--border)] flex flex-col min-w-0 ' +
-          'fixed md:static inset-y-0 left-0 w-72 z-30 transform transition-transform duration-200 ' +
-          (drawerOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0')
-        }
-      >
-        <header className="px-3 py-3 flex items-center gap-2 border-b border-[color:var(--border)]">
-          <div className="text-sm font-semibold flex-1">Conversations</div>
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(false)}
-            className="md:hidden text-[color:var(--muted)] hover:text-[color:var(--fg)] px-2 text-lg"
-            aria-label="Close sidebar"
-          >
-            ✕
-          </button>
-        </header>
-        <nav className="flex-1 overflow-y-auto py-2">
-          {agents.map((a) => {
-            const sessions = sessionsByFolder[a.folder] || [];
-            const isCollapsed = collapsed.has(a.folder);
-            const isActiveAgent = folder === a.folder;
-            return (
-              <div key={a.folder} className="mb-1">
-                <div
-                  className="px-2 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-[color:var(--card)] mx-1 rounded-md"
-                  onClick={() => toggleCollapse(a.folder)}
-                >
-                  <span
-                    className="w-3 text-[10px] text-[color:var(--muted)] transition-transform"
-                    style={{
-                      transform: isCollapsed ? 'rotate(-90deg)' : 'none',
-                    }}
-                  >
-                    ▾
-                  </span>
-                  <span
-                    className="w-5 h-5 rounded-full grid place-items-center text-[10px] font-bold text-white shrink-0"
-                    style={{ background: avatarColor(a.folder) }}
-                  >
-                    {initials(a.name || a.folder)}
-                  </span>
-                  <span className="flex-1 text-[13px] font-medium truncate">
-                    {a.name || a.folder}
-                  </span>
-                  {isActiveAgent && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--accent)]" />
-                  )}
-                  <span className="text-[11px] text-[color:var(--muted)] bg-[color:var(--card)] rounded-full px-1.5">
-                    {sessions.length}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void newSession(a.folder);
-                    }}
-                    aria-label="New session"
-                    title="New session"
-                    className="text-[color:var(--muted)] hover:text-[color:var(--accent)] px-1 text-base leading-none"
-                  >
-                    ＋
-                  </button>
-                </div>
-                {!isCollapsed && (
-                  <div className="pl-1">
-                    {sessions.length === 0 && (
-                      <div className="px-10 py-1 text-[11px] text-[color:var(--muted)] italic">
-                        no sessions yet
-                      </div>
-                    )}
-                    {sessions.map((s) => {
-                      const active = a.folder === folder && s.id === sessionId;
-                      const isRenaming = renamingId === s.id;
-                      return (
-                        <div
-                          key={s.id}
-                          className={
-                            'group flex items-center gap-2 pl-10 pr-2 py-1 mx-1 rounded-md cursor-pointer ' +
-                            (active
-                              ? 'bg-[color:var(--accent)]/15'
-                              : 'hover:bg-[color:var(--card)]')
-                          }
-                          onClick={() =>
-                            !isRenaming && void switchTo(a.folder, s.id)
-                          }
-                          onDoubleClick={(e) => {
-                            e.preventDefault();
-                            setRenamingId(s.id);
-                            setRenameDraft(s.title || '');
-                          }}
-                        >
-                          {isRenaming ? (
-                            <input
-                              autoFocus
-                              value={renameDraft}
-                              onChange={(e) => setRenameDraft(e.target.value)}
-                              onBlur={() => commitRename(a.folder, s.id)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  void commitRename(a.folder, s.id);
-                                } else if (e.key === 'Escape') {
-                                  setRenamingId(null);
-                                }
-                              }}
-                              className="flex-1 bg-transparent border border-[color:var(--accent)] rounded px-1 text-[12.5px] focus:outline-none"
-                            />
-                          ) : (
-                            <span
-                              className={
-                                'flex-1 text-[12.5px] truncate ' +
-                                (active ? 'text-[color:var(--accent)]' : '')
-                              }
-                            >
-                              {s.title || (
-                                <span className="text-[color:var(--muted)] italic">
-                                  New chat
-                                </span>
-                              )}
-                            </span>
-                          )}
-                          <span className="text-[11px] text-[color:var(--muted)] shrink-0">
-                            {shortWhen(s.lastMessageAt || s.createdAt)}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void deleteSession(a.folder, s.id);
-                            }}
-                            className="opacity-0 group-hover:opacity-100 text-[color:var(--muted)] hover:text-red-400 text-xs shrink-0"
-                            aria-label="Archive session"
-                            title="Archive"
-                          >
-                            ⌫
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </nav>
-      </aside>
-      {drawerOpen && (
-        <div
-          className="md:hidden fixed inset-0 bg-black/40 z-20"
-          onClick={() => setDrawerOpen(false)}
-        />
-      )}
-
-      {/* Main pane */}
-      <section className="flex flex-col min-h-0">
-        <div className="border-b border-[color:var(--border)] px-3 py-2 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            className="md:hidden h-8 w-8 rounded-md border border-[color:var(--border)] inline-flex items-center justify-center text-[color:var(--muted)] hover:text-[color:var(--fg)]"
-            aria-label="Open sidebar"
-          >
-            ☰
-          </button>
-          {activeAgent && (
-            <span className="inline-flex items-center gap-1.5 bg-[color:var(--card)] border border-[color:var(--border)] rounded-full px-2 py-0.5 text-xs">
-              <span
-                className="w-4 h-4 rounded-full grid place-items-center text-[9px] font-bold text-white"
-                style={{ background: avatarColor(activeAgent.folder) }}
-              >
-                {initials(activeAgent.name || activeAgent.folder)}
-              </span>
-              <span>{activeAgent.name || activeAgent.folder}</span>
-            </span>
-          )}
-          <span className="text-sm font-medium truncate">
-            {activeSession?.title || (
-              <span className="text-[color:var(--muted)] italic">
-                {activeSession ? 'New chat' : 'No session'}
-              </span>
-            )}
-          </span>
-          <span className="flex-1" />
-          {typing && (
-            <span className="text-xs text-[color:var(--muted)]">… typing</span>
-          )}
-        </div>
-        <div
-          ref={scrollRef}
-          className="flex-1 overflow-y-auto px-3 py-3 space-y-2"
+    <>
+      <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)] relative">
+        {/* Sidebar */}
+        <aside
+          className={
+            'bg-[color:var(--bg-2,#14171d)] border-r border-[color:var(--border)] flex flex-col min-w-0 ' +
+            'fixed md:static inset-y-0 left-0 w-72 z-30 transform transition-transform duration-200 ' +
+            (drawerOpen
+              ? 'translate-x-0'
+              : '-translate-x-full md:translate-x-0')
+          }
         >
-          {loadingHistory && (
-            <div className="text-center text-xs text-[color:var(--muted)]">
-              loading history…
-            </div>
-          )}
-          {!loadingHistory && messages.length === 0 && (
-            <div className="h-full flex items-center justify-center text-center px-6">
-              <div className="text-[color:var(--muted)] text-sm">
-                {folder && sessionId ? (
-                  <>
-                    New conversation with{' '}
-                    <span className="font-medium">{folder}</span>.<br />
-                    Type a message below to start.
-                  </>
-                ) : (
-                  'Pick or start a conversation from the sidebar.'
-                )}
-              </div>
-            </div>
-          )}
-          {messages.map((m) => (
-            <Bubble key={m.id} m={m} />
-          ))}
-          {typing && messages.length > 0 && (
-            <div className="flex justify-start">
-              <div className="rounded-2xl rounded-bl-md bg-[color:var(--card)] border border-[color:var(--border)] px-3 py-2 text-sm text-[color:var(--muted)] animate-pulse">
-                …
-              </div>
-            </div>
-          )}
-        </div>
-        <form
-          className="border-t border-[color:var(--border)] p-2 flex gap-2 items-end"
-          style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            accept="image/*,video/*,audio/*,application/pdf,.zip,.txt,.md,.csv,.json"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void handleFile(f);
-              e.target.value = '';
-            }}
-          />
-          <button
-            type="button"
-            aria-label="Attach"
-            disabled={!folder || !sessionId || uploading || recording}
-            onClick={() => fileInputRef.current?.click()}
-            className="h-9 inline-flex items-center justify-center rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-3 text-sm leading-none transition-all duration-150 hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[color:var(--card)] disabled:hover:border-[color:var(--border)] disabled:active:scale-100"
-            title="Attach file"
-          >
-            📎
-          </button>
-          <button
-            type="button"
-            aria-label={recording ? 'Stop recording' : 'Record voice'}
-            disabled={!folder || !sessionId || uploading}
-            onClick={() =>
-              recording ? stopRecording() : void startRecording()
-            }
-            className={
-              'h-9 inline-flex items-center justify-center rounded-md border px-3 text-sm leading-none transition-all duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 ' +
-              (recording
-                ? 'border-red-500 bg-red-500/20 text-red-300 animate-pulse'
-                : 'border-[color:var(--border)] bg-[color:var(--card)] hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10')
-            }
-            title={recording ? 'Stop recording' : 'Record voice message'}
-          >
-            {recording ? '⏹' : '🎙'}
-          </button>
-          <div className="relative flex-1">
-            {pickerVisible && (
-              <div className="absolute bottom-full left-0 right-0 mb-1 max-h-60 overflow-y-auto rounded-md border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-10">
-                {pickerOptions.map((c, i) => (
-                  <button
-                    type="button"
-                    key={c.name}
-                    ref={(el) => {
-                      pickerItemRefs.current[i] = el;
-                    }}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      applyCommand(c.name);
-                    }}
-                    onMouseEnter={() => setPickerIndex(i)}
-                    className={
-                      'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline transition-colors duration-100 ' +
-                      (i === pickerIndex
-                        ? 'bg-[color:var(--accent)]/20'
-                        : 'hover:bg-white/5')
-                    }
+          <header className="px-3 py-3 flex items-center gap-2 border-b border-[color:var(--border)]">
+            <div className="text-base font-semibold flex-1">NanoClaw</div>
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(false)}
+              className="md:hidden text-[color:var(--muted)] hover:text-[color:var(--fg)] px-2 text-lg"
+              aria-label="Close sidebar"
+            >
+              ✕
+            </button>
+          </header>
+          <nav className="flex-1 overflow-y-auto py-2">
+            {agents.map((a) => {
+              const sessions = sessionsByFolder[a.folder] || [];
+              const isCollapsed = collapsed.has(a.folder);
+              const isActiveAgent = folder === a.folder;
+              return (
+                <div key={a.folder} className="mb-1">
+                  <div
+                    className="px-2 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-[color:var(--card)] mx-1 rounded-md"
+                    onClick={() => toggleCollapse(a.folder)}
                   >
-                    <span className="font-mono">/{c.name}</span>
-                    <span className="text-xs text-[color:var(--muted)] truncate">
-                      {c.description}
+                    <span
+                      className="w-3 text-[10px] text-[color:var(--muted)] transition-transform"
+                      style={{
+                        transform: isCollapsed ? 'rotate(-90deg)' : 'none',
+                      }}
+                    >
+                      ▾
                     </span>
-                  </button>
-                ))}
+                    <span
+                      className="w-5 h-5 rounded-full grid place-items-center text-[10px] font-bold text-white shrink-0"
+                      style={{ background: avatarColor(a.folder) }}
+                    >
+                      {initials(a.name || a.folder)}
+                    </span>
+                    <span className="flex-1 text-[13px] font-medium truncate">
+                      {a.name || a.folder}
+                    </span>
+                    {isActiveAgent && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--accent)]" />
+                    )}
+                    <span className="text-[11px] text-[color:var(--muted)] bg-[color:var(--card)] rounded-full px-1.5">
+                      {sessions.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void newSession(a.folder);
+                      }}
+                      aria-label="New session"
+                      title="New session"
+                      className="text-[color:var(--muted)] hover:text-[color:var(--accent)] px-1 text-base leading-none"
+                    >
+                      ＋
+                    </button>
+                  </div>
+                  {!isCollapsed && (
+                    <div className="pl-1">
+                      {sessions.length === 0 && (
+                        <div className="px-10 py-1 text-[11px] text-[color:var(--muted)] italic">
+                          no sessions yet
+                        </div>
+                      )}
+                      {sessions.map((s) => {
+                        const active =
+                          a.folder === folder && s.id === sessionId;
+                        const isRenaming = renamingId === s.id;
+                        return (
+                          <div
+                            key={s.id}
+                            className={
+                              'group flex items-center gap-2 pl-10 pr-2 py-1 mx-1 rounded-md cursor-pointer ' +
+                              (active
+                                ? 'bg-[color:var(--accent)]/15'
+                                : 'hover:bg-[color:var(--card)]')
+                            }
+                            onClick={() =>
+                              !isRenaming && void switchTo(a.folder, s.id)
+                            }
+                            onDoubleClick={(e) => {
+                              e.preventDefault();
+                              setRenamingId(s.id);
+                              setRenameDraft(s.title || '');
+                            }}
+                          >
+                            {isRenaming ? (
+                              <input
+                                autoFocus
+                                value={renameDraft}
+                                onChange={(e) => setRenameDraft(e.target.value)}
+                                onBlur={() => commitRename(a.folder, s.id)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    void commitRename(a.folder, s.id);
+                                  } else if (e.key === 'Escape') {
+                                    setRenamingId(null);
+                                  }
+                                }}
+                                className="flex-1 bg-transparent border border-[color:var(--accent)] rounded px-1 text-[12.5px] focus:outline-none"
+                              />
+                            ) : (
+                              <span
+                                className={
+                                  'flex-1 text-[12.5px] truncate ' +
+                                  (active ? 'text-[color:var(--accent)]' : '')
+                                }
+                              >
+                                {s.title || (
+                                  <span className="text-[color:var(--muted)] italic">
+                                    New chat
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                            <span className="text-[11px] text-[color:var(--muted)] shrink-0">
+                              {shortWhen(s.lastMessageAt || s.createdAt)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void deleteSession(a.folder, s.id);
+                              }}
+                              className="opacity-0 group-hover:opacity-100 text-[color:var(--muted)] hover:text-red-400 text-xs shrink-0"
+                              aria-label="Archive session"
+                              title="Archive"
+                            >
+                              ⌫
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </nav>
+          <div className="border-t border-[color:var(--border)] px-2 py-2 space-y-0.5">
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+              <span>Settings</span>
+            </button>
+            <Link
+              href="/admin"
+              className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+              </svg>
+              <span>Admin</span>
+            </Link>
+          </div>
+        </aside>
+        {drawerOpen && (
+          <div
+            className="md:hidden fixed inset-0 bg-black/40 z-20"
+            onClick={() => setDrawerOpen(false)}
+          />
+        )}
+
+        {/* Main pane */}
+        <section className="flex flex-col min-h-0">
+          <div className="border-b border-[color:var(--border)] px-3 py-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(true)}
+              className="md:hidden h-8 w-8 rounded-md border border-[color:var(--border)] inline-flex items-center justify-center text-[color:var(--muted)] hover:text-[color:var(--fg)]"
+              aria-label="Open sidebar"
+            >
+              ☰
+            </button>
+            {activeAgent && (
+              <span className="inline-flex items-center gap-1.5 bg-[color:var(--card)] border border-[color:var(--border)] rounded-full px-2 py-0.5 text-xs shrink-0">
+                <span
+                  className="w-4 h-4 rounded-full grid place-items-center text-[9px] font-bold text-white"
+                  style={{ background: avatarColor(activeAgent.folder) }}
+                >
+                  {initials(activeAgent.name || activeAgent.folder)}
+                </span>
+                <span className="truncate max-w-[8rem]">
+                  {activeAgent.name || activeAgent.folder}
+                </span>
+              </span>
+            )}
+            <span className="text-sm font-medium truncate flex-1 min-w-0">
+              {activeSession?.title || (
+                <span className="text-[color:var(--muted)] italic">
+                  {activeSession ? 'New chat' : 'No session'}
+                </span>
+              )}
+            </span>
+            {(activity || typing) && (
+              <span className="text-xs text-[color:var(--muted)] truncate max-w-[14rem]">
+                … {activity || 'typing'}
+              </span>
+            )}
+          </div>
+          <div
+            ref={scrollRef}
+            className="flex-1 overflow-y-auto px-3 py-3 space-y-2"
+          >
+            {loadingHistory && (
+              <div className="text-center text-xs text-[color:var(--muted)]">
+                loading history…
               </div>
             )}
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (pickerVisible) {
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    setPickerIndex((i) => (i + 1) % pickerOptions.length);
-                    return;
-                  }
-                  if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    setPickerIndex(
-                      (i) =>
-                        (i - 1 + pickerOptions.length) % pickerOptions.length,
-                    );
-                    return;
-                  }
-                  if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
-                    e.preventDefault();
-                    const pick = pickerOptions[pickerIndex];
-                    if (pick) applyCommand(pick.name);
-                    return;
-                  }
-                  if (e.key === 'Escape') {
-                    e.preventDefault();
-                    setInput('');
-                    return;
-                  }
-                }
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
-              rows={1}
-              placeholder={
-                folder && sessionId
-                  ? `Message ${activeAgent?.name || folder}…`
-                  : 'Pick or start a conversation'
-              }
-              className="w-full block min-h-9 resize-none overflow-y-auto bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-[color:var(--accent)] leading-5 align-bottom"
-            />
+            {!loadingHistory && messages.length === 0 && (
+              <div className="h-full flex items-center justify-center text-center px-6">
+                <div className="text-[color:var(--muted)] text-sm">
+                  {folder && sessionId ? (
+                    <>
+                      New conversation with{' '}
+                      <span className="font-medium">{folder}</span>.<br />
+                      Type a message below to start.
+                    </>
+                  ) : (
+                    'Pick or start a conversation from the sidebar.'
+                  )}
+                </div>
+              </div>
+            )}
+            {messages.map((m) => (
+              <Bubble key={m.id} m={m} />
+            ))}
+            {(activity || typing) && messages.length > 0 && (
+              <div className="flex justify-start">
+                <div className="rounded-2xl rounded-bl-md bg-[color:var(--card)] border border-[color:var(--border)] px-3 py-2 text-sm text-[color:var(--muted)] animate-pulse max-w-full truncate">
+                  {activity ? `… ${activity}` : '…'}
+                </div>
+              </div>
+            )}
           </div>
-          <button
-            type="submit"
-            disabled={!folder || !sessionId || !input.trim() || sending}
-            className="h-9 inline-flex items-center justify-center rounded-md bg-[color:var(--accent)] text-white px-4 text-sm leading-none transition-all duration-150 hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
+          <form
+            className="border-t border-[color:var(--border)] p-2 flex gap-2 items-end"
+            style={{
+              paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))',
+            }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void send();
+            }}
           >
-            Send
-          </button>
-        </form>
-      </section>
-    </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept="image/*,video/*,audio/*,application/pdf,.zip,.txt,.md,.csv,.json"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void handleFile(f);
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              aria-label="Attach"
+              disabled={!folder || !sessionId || uploading || recording}
+              onClick={() => fileInputRef.current?.click()}
+              className="h-9 inline-flex items-center justify-center rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-3 text-sm leading-none transition-all duration-150 hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[color:var(--card)] disabled:hover:border-[color:var(--border)] disabled:active:scale-100"
+              title="Attach file"
+            >
+              📎
+            </button>
+            <button
+              type="button"
+              aria-label={recording ? 'Stop recording' : 'Record voice'}
+              disabled={!folder || !sessionId || uploading}
+              onClick={() =>
+                recording ? stopRecording() : void startRecording()
+              }
+              className={
+                'h-9 inline-flex items-center justify-center rounded-md border px-3 text-sm leading-none transition-all duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 ' +
+                (recording
+                  ? 'border-red-500 bg-red-500/20 text-red-300 animate-pulse'
+                  : 'border-[color:var(--border)] bg-[color:var(--card)] hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10')
+              }
+              title={recording ? 'Stop recording' : 'Record voice message'}
+            >
+              {recording ? '⏹' : '🎙'}
+            </button>
+            <div className="relative flex-1 min-w-0">
+              {pickerVisible && (
+                <div className="absolute bottom-full left-0 right-0 mb-1 max-h-60 overflow-y-auto rounded-md border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-10">
+                  {pickerOptions.map((c, i) => (
+                    <button
+                      type="button"
+                      key={c.name}
+                      ref={(el) => {
+                        pickerItemRefs.current[i] = el;
+                      }}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        applyCommand(c.name);
+                      }}
+                      onMouseEnter={() => setPickerIndex(i)}
+                      className={
+                        'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline transition-colors duration-100 ' +
+                        (i === pickerIndex
+                          ? 'bg-[color:var(--accent)]/20'
+                          : 'hover:bg-white/5')
+                      }
+                    >
+                      <span className="font-mono">/{c.name}</span>
+                      <span className="text-xs text-[color:var(--muted)] truncate">
+                        {c.description}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (pickerVisible) {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setPickerIndex((i) => (i + 1) % pickerOptions.length);
+                      return;
+                    }
+                    if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setPickerIndex(
+                        (i) =>
+                          (i - 1 + pickerOptions.length) % pickerOptions.length,
+                      );
+                      return;
+                    }
+                    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                      e.preventDefault();
+                      const pick = pickerOptions[pickerIndex];
+                      if (pick) applyCommand(pick.name);
+                      return;
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setInput('');
+                      return;
+                    }
+                  }
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
+                rows={1}
+                placeholder={
+                  folder && sessionId
+                    ? `Message ${activeAgent?.name || folder}…`
+                    : 'Pick or start a conversation'
+                }
+                className="w-full block min-h-9 resize-none overflow-y-auto bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-[color:var(--accent)] leading-5 align-bottom"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={!folder || !sessionId || !input.trim() || sending}
+              className="h-9 inline-flex items-center justify-center rounded-md bg-[color:var(--accent)] text-white px-4 text-sm leading-none transition-all duration-150 hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
+            >
+              Send
+            </button>
+          </form>
+        </section>
+      </div>
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
+    </>
   );
 }

@@ -36,6 +36,7 @@ export interface Channel {
   isConnected(): boolean;
   disconnect(): Promise<void>;
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
+  setActivity?(jid: string, label: string | null): Promise<void>;
   reactToMessage?(jid: string, msgId: string, emoji: string): Promise<void>;
   sendAsAgent?(
     jid: string,

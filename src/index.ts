@@ -525,11 +525,16 @@ async function processMessage(msg: NewMessage): Promise<void> {
       // the final chunked pass handles long replies.
       let lastEditTime = 0;
       const STREAM_EDIT_LIMIT = 3500;
+      let textStarted = false;
       onText = (text: string) => {
         // Stop typing indicator once text starts appearing
         if (typingInterval) {
           clearInterval(typingInterval);
           typingInterval = undefined;
+        }
+        if (!textStarted) {
+          textStarted = true;
+          channel.setActivity?.(msg.chat_jid, null).catch(() => {});
         }
         if (stoppedStreamingEdits) return;
         if (text.length > STREAM_EDIT_LIMIT) {
@@ -544,6 +549,15 @@ async function processMessage(msg: NewMessage): Promise<void> {
           channel.editMessage!(msg.chat_jid, id, text).catch(() => {});
         });
       };
+      // Surface tool/thinking activity to channels that render it (web). For
+      // Telegram live mode this is a no-op since the channel doesn't implement
+      // setActivity.
+      if (channel.setActivity) {
+        onActivity = (label: string) => {
+          if (textStarted) return;
+          channel.setActivity!(msg.chat_jid, label).catch(() => {});
+        };
+      }
     }
   }
 
@@ -564,6 +578,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
   if (streamingMsgIdPromise) await streamingMsgIdPromise;
   if (!streamingMsgIdPromise && channel)
     await channel.setTyping?.(msg.chat_jid, false);
+  if (channel) await channel.setActivity?.(msg.chat_jid, null).catch(() => {});
 
   if (channel) {
     const cleaned = response ? stripInternalTags(response) : null;

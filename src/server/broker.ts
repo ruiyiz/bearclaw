@@ -7,6 +7,7 @@ export type WebOutboundEvent =
   | { type: 'edit'; jid: string; id: number; text: string; ts: number }
   | { type: 'delete'; jid: string; id: number }
   | { type: 'typing'; jid: string; isTyping: boolean }
+  | { type: 'activity'; jid: string; label: string | null }
   | {
       type: 'media';
       jid: string;
