@@ -9,6 +9,15 @@ html, body {
   height: 100%;
 }
 
+/* Prevent iOS Safari from auto-zooming on input focus (and leaving the page
+   stuck zoomed) when the focused field renders below 16px. Only apply on
+   touch devices so desktop UI keeps the tighter 14px form rhythm. */
+@media (pointer: coarse) {
+  input, textarea, select {
+    font-size: 16px;
+  }
+}
+
 .no-scrollbar {
   scrollbar-width: none;
 }
