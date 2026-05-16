@@ -125,6 +125,8 @@ export function ChatView() {
   const [pickerIndex, setPickerIndex] = useState(0);
   const pickerItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const justLoadedRef = useRef(true);
+  const prevMessageCountRef = useRef(0);
+  const bottomSpacerRef = useRef<HTMLDivElement | null>(null);
 
   const refreshSessions = useCallback(
     async (f: string): Promise<WebSession[]> => {
@@ -325,13 +327,65 @@ export function ChatView() {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (justLoadedRef.current) {
-      el.scrollTop = el.scrollHeight;
-      justLoadedRef.current = false;
-    } else {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    const prev = prevMessageCountRef.current;
+    prevMessageCountRef.current = messages.length;
+
+    // Keep the trailing spacer at least as tall as the scroll viewport so
+    // the latest bubble can always reach the top of the viewport. A
+    // CSS-only `min-h-[60dvh]` measures the page viewport, which can be
+    // smaller than the scroll container's actual height — when that
+    // happens the browser clamps scrollTop and the pin falls short.
+    if (bottomSpacerRef.current) {
+      bottomSpacerRef.current.style.minHeight = `${el.clientHeight}px`;
     }
-  }, [messages, typing, activity]);
+
+    // node.offsetTop measures from the nearest positioned ancestor, which
+    // in this layout is the grid wrapper above the chat header — not the
+    // scroll container. Use getBoundingClientRect deltas so we always
+    // resolve a position relative to the scroll viewport.
+    const relativeTop = (node: HTMLElement): number =>
+      node.getBoundingClientRect().top -
+      el.getBoundingClientRect().top +
+      el.scrollTop;
+
+    if (justLoadedRef.current) {
+      justLoadedRef.current = false;
+      if (messages.length > 0) {
+        const lastId = messages[messages.length - 1].id;
+        const node = el.querySelector<HTMLElement>(
+          `[data-msg-id="${CSS.escape(lastId)}"]`,
+        );
+        if (node) {
+          el.scrollTop = Math.max(
+            0,
+            relativeTop(node) + node.offsetHeight - el.clientHeight,
+          );
+          return;
+        }
+      }
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+
+    // New user message appended: pin it to the top, ChatGPT-style. The
+    // agent's reply bubble appears below and streams in without moving
+    // the viewport — if we pinned every append, the agent's first chunk
+    // would yank the user's own message off-screen.
+    if (messages.length > prev) {
+      const last = messages[messages.length - 1];
+      if (last.side === 'user') {
+        const node = el.querySelector<HTMLElement>(
+          `[data-msg-id="${CSS.escape(last.id)}"]`,
+        );
+        if (node) {
+          el.scrollTo({
+            top: Math.max(0, relativeTop(node) - 8),
+            behavior: 'smooth',
+          });
+        }
+      }
+    }
+  }, [messages]);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -990,7 +1044,9 @@ export function ChatView() {
               </div>
             )}
             {messages.map((m) => (
-              <Bubble key={m.id} m={m} />
+              <div key={m.id} data-msg-id={m.id}>
+                <Bubble m={m} />
+              </div>
             ))}
             {(activity || typing) && messages.length > 0 && (
               <div className="flex justify-start">
@@ -999,6 +1055,7 @@ export function ChatView() {
                 </div>
               </div>
             )}
+            {messages.length > 0 && <div ref={bottomSpacerRef} aria-hidden />}
           </div>
           <form
             className="border-t border-[color:var(--border)] p-2 flex gap-2 items-end"
