@@ -15,6 +15,7 @@ import {
   type BubbleData,
 } from '@/components/chat-bubble';
 import { SettingsModal } from '@/components/settings-modal';
+import { loadKeepFocusOnSend } from '@/lib/prefs';
 
 const TEXTAREA_MAX_PX = 240;
 const HISTORY_LIMIT = 200;
@@ -91,6 +92,30 @@ function pushUrl(folder: string, session: string): void {
   sp.set('session', session);
   const next = `${window.location.pathname}?${sp.toString()}`;
   window.history.replaceState({}, '', next);
+}
+
+// Ease-out cubic rAF scroll animation. Replaces scrollTo({behavior:'smooth'})
+// because iOS Safari ignores it on overflow containers when momentum scroll
+// or a layout shift is in flight.
+function animateScrollTop(
+  el: HTMLElement,
+  target: number,
+  duration = 250,
+): void {
+  const start = el.scrollTop;
+  const delta = target - start;
+  if (Math.abs(delta) < 1) {
+    el.scrollTop = target;
+    return;
+  }
+  const startTs = performance.now();
+  const step = (now: number) => {
+    const t = Math.min(1, (now - startTs) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.scrollTop = start + delta * eased;
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 export function ChatView() {
@@ -374,15 +399,18 @@ export function ChatView() {
     if (messages.length > prev) {
       const last = messages[messages.length - 1];
       if (last.side === 'user') {
-        const node = el.querySelector<HTMLElement>(
-          `[data-msg-id="${CSS.escape(last.id)}"]`,
-        );
-        if (node) {
-          el.scrollTo({
-            top: Math.max(0, relativeTop(node) - 8),
-            behavior: 'smooth',
-          });
-        }
+        // Defer one frame so the new bubble + resized spacer are laid out
+        // before we measure, then animate manually. iOS Safari does not
+        // reliably honour scrollTo({behavior:'smooth'}) on overflow
+        // containers — momentum scroll cancels it, or it silently no-ops.
+        requestAnimationFrame(() => {
+          const node = el.querySelector<HTMLElement>(
+            `[data-msg-id="${CSS.escape(last.id)}"]`,
+          );
+          if (!node) return;
+          const target = Math.max(0, relativeTop(node) - 8);
+          animateScrollTop(el, target, 280);
+        });
       }
     }
   }, [messages]);
@@ -631,6 +659,13 @@ export function ChatView() {
     const text = input.trim();
     setInput('');
     setSending(true);
+    // Restore textarea focus inside the same user-gesture tick. Tapping
+    // the Send button transfers focus to the button; on iOS that also
+    // dismisses the virtual keyboard. Refocusing synchronously keeps the
+    // composer hot for the next message. (When Enter submits, the
+    // textarea already has focus and this is a no-op.) Gated by the
+    // user-preference toggle in Settings.
+    if (loadKeepFocusOnSend()) textareaRef.current?.focus();
     setMessages((prev) => [
       ...prev,
       { id: `u-${Date.now()}`, side: 'user', text, ts: Date.now() },

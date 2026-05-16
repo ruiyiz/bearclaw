@@ -7,6 +7,11 @@ import {
   loadFont,
   saveFont,
 } from '@/lib/font';
+import {
+  KEEP_FOCUS_DEFAULT,
+  loadKeepFocusOnSend,
+  saveKeepFocusOnSend,
+} from '@/lib/prefs';
 
 interface Props {
   open: boolean;
@@ -15,10 +20,14 @@ interface Props {
 
 export function SettingsModal({ open, onClose }: Props) {
   const [font, setFont] = useState<string>(FONT_DEFAULT);
+  const [keepFocus, setKeepFocus] = useState<boolean>(KEEP_FOCUS_DEFAULT);
 
-  // Sync the picker with whatever is currently active when the dialog opens.
+  // Sync controls with the currently persisted values whenever the dialog
+  // opens, so changes made via other tabs / settings flows are reflected.
   useEffect(() => {
-    if (open) setFont(loadFont());
+    if (!open) return;
+    setFont(loadFont());
+    setKeepFocus(loadKeepFocusOnSend());
   }, [open]);
 
   useEffect(() => {
@@ -34,6 +43,12 @@ export function SettingsModal({ open, onClose }: Props) {
     setFont(id);
     applyFont(id);
     saveFont(id);
+  }
+
+  function toggleKeepFocus() {
+    const next = !keepFocus;
+    setKeepFocus(next);
+    saveKeepFocusOnSend(next);
   }
 
   if (!open) return null;
@@ -106,6 +121,44 @@ export function SettingsModal({ open, onClose }: Props) {
                 );
               })}
             </div>
+          </section>
+          <section>
+            <div className="text-xs uppercase tracking-wide text-[color:var(--muted)] mb-2">
+              Composer
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={keepFocus}
+              onClick={toggleKeepFocus}
+              className="w-full flex items-center gap-3 px-3 py-2 rounded-md border border-[color:var(--border)] hover:bg-[color:var(--card)] text-left transition-colors"
+            >
+              <span className="flex-1">
+                <div className="text-sm font-medium">
+                  Keep keyboard up after send
+                </div>
+                <div className="text-xs text-[color:var(--muted)]">
+                  Refocus the input after sending. On iPhone this keeps the
+                  on-screen keyboard from dismissing between messages.
+                </div>
+              </span>
+              <span
+                className={
+                  'relative w-9 h-5 rounded-full transition-colors shrink-0 ' +
+                  (keepFocus
+                    ? 'bg-[color:var(--accent)]'
+                    : 'bg-[color:var(--card)] border border-[color:var(--border)]')
+                }
+                aria-hidden="true"
+              >
+                <span
+                  className={
+                    'absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ' +
+                    (keepFocus ? 'translate-x-[18px]' : 'translate-x-0.5')
+                  }
+                />
+              </span>
+            </button>
           </section>
         </div>
         <footer className="px-5 py-3 border-t border-[color:var(--border)] flex justify-end">
