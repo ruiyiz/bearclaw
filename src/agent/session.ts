@@ -475,8 +475,15 @@ export class AgentSession {
         event?.type === 'content_block_delta' &&
         event?.delta?.type === 'text_delta'
       ) {
+        const firstDelta = head.streamText === '';
         head.streamText += event.delta.text || '';
         if (head.streamText.trim()) head.callbacks.onText(head.streamText);
+        // Bump activity to "Replying" the moment text generation starts, so
+        // progress-mode indicators don't stay stuck on "Thinking" while the
+        // model is actually emitting the reply.
+        if (firstDelta && head.callbacks.onActivity) {
+          head.callbacks.onActivity('Replying');
+        }
       }
     }
 

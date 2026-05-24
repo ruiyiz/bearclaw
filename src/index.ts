@@ -462,8 +462,9 @@ async function processMessage(msg: NewMessage): Promise<void> {
     // edit byte-for-byte, sidestepping Telegram's "message is not modified"
     // 400 on the first edit. Progress mode uses the activity indicator
     // directly so the dialog/hourglass don't flash before the first tick.
-    const initialPlaceholder =
-      TELEGRAM_STREAM_MODE === 'progress' ? `🔄 ${activity}… 0s` : '💬⏳​';
+    // Both modes start with the activity indicator. Live mode swaps it for
+    // streaming text once the first token lands.
+    const initialPlaceholder = `🔄 ${activity}… 0s`;
     streamingMsgIdPromise = channel
       .sendMessageWithId(msg.chat_jid, initialPlaceholder)
       .then((id) => {
@@ -520,20 +521,43 @@ async function processMessage(msg: NewMessage): Promise<void> {
         tick();
       };
     } else {
-      // Live mode: stream the assistant's text into the placeholder as
-      // deltas arrive. Throttle edits and gate past STREAM_EDIT_LIMIT so
-      // the final chunked pass handles long replies.
+      // Live mode: show the same activity indicator as progress mode until
+      // the first text token arrives, then stop the ticker and stream
+      // assistant text into the placeholder. Throttle edits and gate past
+      // STREAM_EDIT_LIMIT so the final chunked pass handles long replies.
+      const PROGRESS_TICK_MS = 1000;
+      const turnStart = Date.now();
+      activity = 'Thinking';
+      let textStarted = false;
+      const renderProgress = () => {
+        const sec = Math.max(1, Math.floor((Date.now() - turnStart) / 1000));
+        return `🔄 ${activity}… ${sec}s`;
+      };
+      const tick = () => {
+        if (textStarted) return;
+        const body = renderProgress();
+        if (body === lastProgressBody) return;
+        lastProgressBody = body;
+        streamingMsgIdPromise!.then((id) => {
+          if (id === undefined || progressTimer === undefined) return;
+          channel.editMessage!(msg.chat_jid, id, body).catch(() => {});
+        });
+      };
+      progressTimer = setInterval(tick, PROGRESS_TICK_MS);
+      setTimeout(() => {
+        if (progressTimer !== undefined) tick();
+      }, 250);
+
       let lastEditTime = 0;
       const STREAM_EDIT_LIMIT = 3500;
-      let textStarted = false;
       onText = (text: string) => {
-        // Stop typing indicator once text starts appearing
-        if (typingInterval) {
-          clearInterval(typingInterval);
-          typingInterval = undefined;
-        }
         if (!textStarted) {
           textStarted = true;
+          stopProgressDots();
+          if (typingInterval) {
+            clearInterval(typingInterval);
+            typingInterval = undefined;
+          }
           channel.setActivity?.(msg.chat_jid, null).catch(() => {});
         }
         if (stoppedStreamingEdits) return;
@@ -549,15 +573,12 @@ async function processMessage(msg: NewMessage): Promise<void> {
           channel.editMessage!(msg.chat_jid, id, text).catch(() => {});
         });
       };
-      // Surface tool/thinking activity to channels that render it (web). For
-      // Telegram live mode this is a no-op since the channel doesn't implement
-      // setActivity.
-      if (channel.setActivity) {
-        onActivity = (label: string) => {
-          if (textStarted) return;
-          channel.setActivity!(msg.chat_jid, label).catch(() => {});
-        };
-      }
+      onActivity = (label: string) => {
+        if (textStarted) return;
+        activity = label;
+        tick();
+        channel.setActivity?.(msg.chat_jid, label).catch(() => {});
+      };
     }
   }
 
