@@ -230,7 +230,7 @@ cat > ~/Library/LaunchAgents/com.nanoclaw.plist << EOF
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:${HOME_PATH}/.local/bin</string>
+        <string>${HOME_PATH}/.bun/bin:${HOME_PATH}/.orbstack/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${HOME_PATH}/.local/bin</string>
         <key>HOME</key>
         <string>${HOME_PATH}</string>
     </dict>

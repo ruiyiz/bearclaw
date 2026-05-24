@@ -25,16 +25,21 @@ claude --version
 ## 2. Configure Claude Authentication
 
 Ask the user:
+
 > Do you want to use your **Claude subscription** (Pro/Max) or an **Anthropic API key**?
 
 ### Option 1: Claude Subscription (Recommended)
 
 Tell the user:
+
 > Open another terminal window and run:
+>
 > ```
 > claude setup-token
 > ```
+>
 > A browser window will open for you to log in. Once authenticated, the token will be displayed in your terminal. Either:
+>
 > 1. Paste it here and I'll add it to `.env` for you, or
 > 2. Add it to `.env` yourself as `CLAUDE_CODE_OAUTH_TOKEN=<your-token>`
 
@@ -49,11 +54,13 @@ echo "CLAUDE_CODE_OAUTH_TOKEN=<token>" > .env
 Ask if they have an existing key to copy or need to create one.
 
 **Copy existing:**
+
 ```bash
 grep "^ANTHROPIC_API_KEY=" /path/to/source/.env > .env
 ```
 
 **Create new:**
+
 ```bash
 echo 'ANTHROPIC_API_KEY=' > .env
 ```
@@ -61,6 +68,7 @@ echo 'ANTHROPIC_API_KEY=' > .env
 Tell the user to add their key from https://console.anthropic.com/
 
 **Verify:**
+
 ```bash
 KEY=$(grep "^ANTHROPIC_API_KEY=" .env | cut -d= -f2)
 [ -n "$KEY" ] && echo "API key configured: ${KEY:0:10}...${KEY: -4}" || echo "Missing"
@@ -77,7 +85,9 @@ npm run auth
 ```
 
 Tell the user:
+
 > A QR code will appear. On your phone:
+>
 > 1. Open WhatsApp
 > 2. Tap **Settings → Linked Devices → Link a Device**
 > 3. Scan the QR code
@@ -89,11 +99,13 @@ If it says "Already authenticated", skip to the next step.
 ## 4. Configure Assistant Name
 
 Ask the user:
+
 > What trigger word do you want to use? (default: `Andy`)
 >
 > Messages starting with `@TriggerWord` will be sent to Claude.
 
 If they choose something other than `Andy`, set `ASSISTANT_NAME=NewName` in `~/.nanoclaw/.env`. Then update any "Andy" references in:
+
 1. `~/.nanoclaw/context/SOUL.md` (persona)
 2. `~/.nanoclaw/agents/main/IDENTITY.md` (main agent identity)
 3. `~/.nanoclaw/data/registered_agents.json` — set `"trigger": "@NewName"` when registering agents
@@ -109,6 +121,7 @@ Before registering your main channel, you need to understand an important securi
 > **Important: Your "main" channel is your admin control portal.**
 >
 > The main channel has elevated privileges:
+>
 > - Can see messages from ALL other registered groups
 > - Can manage and delete tasks across all groups
 > - Can write to global memory that all groups can read
@@ -119,6 +132,7 @@ Before registering your main channel, you need to understand an important securi
 > **Question:** Which setup will you use for your main channel?
 >
 > Options:
+>
 > 1. Personal chat (Message Yourself) - Recommended
 > 2. Solo WhatsApp group (just me)
 > 3. Group with other people (I understand the security implications)
@@ -128,22 +142,27 @@ If they choose option 3, ask a follow-up:
 > You've chosen a group with other people. This means everyone in that group will have admin privileges over NanoClaw.
 >
 > Are you sure you want to proceed? The other members will be able to:
+>
 > - Read messages from your other registered chats
 > - Schedule and manage tasks
 >
 > Options:
+>
 > 1. Yes, I understand and want to proceed
 > 2. No, let me use a personal chat or solo group instead
 
 ## 6. Register Main Channel
 
 Ask the user:
+
 > Do you want to use your **personal chat** (message yourself) or a **WhatsApp group** as your main control channel?
 
 For personal chat:
+
 > Send any message to yourself in WhatsApp (the "Message Yourself" chat). Tell me when done.
 
 For group:
+
 > Send any message in the WhatsApp group you want to use as your main channel. Tell me when done.
 
 After user confirms, start the app briefly to capture the message:
@@ -163,6 +182,7 @@ sqlite3 ~/.nanoclaw/store/messages.db "SELECT DISTINCT chat_jid FROM messages WH
 ```
 
 Create/update `~/.nanoclaw/data/registered_agents.json` using the JID from above and the assistant name from step 4:
+
 ```json
 {
   "JID_HERE": {
@@ -175,6 +195,7 @@ Create/update `~/.nanoclaw/data/registered_agents.json` using the JID from above
 ```
 
 Ensure the agent folder exists:
+
 ```bash
 mkdir -p ~/.nanoclaw/agents/main/logs
 ```
@@ -209,7 +230,7 @@ cat > ~/Library/LaunchAgents/com.nanoclaw.plist << EOF
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:${HOME_PATH}/.local/bin</string>
+        <string>${HOME_PATH}/.bun/bin:${HOME_PATH}/.orbstack/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${HOME_PATH}/.local/bin</string>
         <key>HOME</key>
         <string>${HOME_PATH}</string>
     </dict>
@@ -235,6 +256,7 @@ launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 ```
 
 Verify it's running:
+
 ```bash
 launchctl list | grep nanoclaw
 ```
@@ -242,9 +264,11 @@ launchctl list | grep nanoclaw
 ## 8. Test
 
 Tell the user (using the assistant name they configured):
+
 > Send `@ASSISTANT_NAME hello` in your registered chat.
 
 Check the logs:
+
 ```bash
 tail -f logs/nanoclaw.log
 ```
@@ -256,20 +280,24 @@ The user should receive a response in WhatsApp.
 **Service not starting**: Check `logs/nanoclaw.error.log`
 
 **Agent fails**:
+
 - Check agent logs: `cat ~/.nanoclaw/agents/main/logs/agent-*.log | tail -50`
 - Ensure `.env` has valid credentials
 
 **No response to messages**:
+
 - Verify the trigger pattern matches (e.g., `@AssistantName` at start of message)
 - Check that the chat JID is in `~/.nanoclaw/data/registered_agents.json`
 - Check `logs/nanoclaw.log` for errors
 
 **WhatsApp disconnected**:
+
 - The service will show a macOS notification
 - Run `npm run auth` to re-authenticate
 - Restart the service: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
 
 **Unload service**:
+
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
 ```
