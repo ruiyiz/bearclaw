@@ -87,6 +87,15 @@ export const WARM_START_BUDGET_BYTES = parseInt(
   10,
 );
 
+// Default model — used when no per-agent override is set in models.json.
+// Required: must be set in ~/.nanoclaw/.env (e.g. DEFAULT_MODEL=claude-sonnet-4-6).
+if (!process.env.DEFAULT_MODEL) {
+  throw new Error(
+    'DEFAULT_MODEL is required. Set it in ~/.nanoclaw/.env (e.g. DEFAULT_MODEL=claude-sonnet-4-6).',
+  );
+}
+export const DEFAULT_MODEL = process.env.DEFAULT_MODEL;
+
 // OpenAI key — used by image_generate (gpt-image-2). Long-term memory lives
 // in gbrain (separate process); nanoclaw doesn't embed anything itself.
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';

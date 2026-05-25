@@ -14,6 +14,7 @@ import {
 import {
   AGENT_TIMEOUT,
   CONTEXT_DIR,
+  DEFAULT_MODEL,
   RUN_DIR,
   TIMEZONE,
   WARM_START_BUDGET_BYTES,
@@ -28,7 +29,7 @@ import { Handler, RegisteredAgent } from '../types.js';
 import { loadUserMcpServers } from './mcp-config.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 
-export const DEFAULT_MODEL = 'claude-opus-4-7';
+export { DEFAULT_MODEL };
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export const DEFAULT_EFFORT: EffortLevel = 'low';
 export const EFFORT_LEVELS: EffortLevel[] = [
