@@ -63,8 +63,8 @@ import {
   getMessagesSince,
   getNewMessages,
   initDatabase,
+  incrementWebSessionTurnCount,
   setWebSessionSdkId,
-  setWebSessionTitleIfNull,
   storeChatMetadata,
   storeMessage,
   touchWebSession,
@@ -96,6 +96,7 @@ import {
 } from './types.js';
 import { loadJson, saveJson } from './utils/json.js';
 import { startDailyRollover } from './agent/daily-rollover.js';
+import { generateAndPersistTitle } from './agent/title-gen.js';
 import { logger } from './logger.js';
 import { initSubprocessManager } from './agent/subprocess-manager.js';
 import { startMaintenance } from './maintenance.js';
@@ -198,20 +199,6 @@ function touchWebSessionForJid(chatJid: string, timestamp: string): void {
   const sessionId = webSessionIdFromJid(chatJid);
   if (!folder || !sessionId) return;
   touchWebSession(folder, sessionId, timestamp);
-}
-
-// Auto-title: trim the first user message in a session to a label. Only writes
-// when the title column is still null, so subsequent prompts don't overwrite a
-// previously-set title.
-function maybeAutoTitle(msg: NewMessage): void {
-  if (!isWebJid(msg.chat_jid)) return;
-  const folder = webFolderFromJid(msg.chat_jid);
-  const sessionId = webSessionIdFromJid(msg.chat_jid);
-  if (!folder || !sessionId) return;
-  const text = msg.content.trim().replace(/\s+/g, ' ');
-  if (!text) return;
-  const title = text.length > 60 ? text.slice(0, 59) + '…' : text;
-  setWebSessionTitleIfNull(folder, sessionId, title);
 }
 
 // Resolves a chat_jid to its registered agent. Web composite jids
@@ -757,6 +744,25 @@ async function runAgent(
         const sessionId = webSessionIdFromJid(chatJid);
         if (folder && sessionId) {
           setWebSessionSdkId(folder, sessionId, turn.newSessionId);
+        }
+      }
+    }
+
+    // Title-gen: refresh at turn 1, 5, 20. Fire-and-forget so the user-visible
+    // reply path is unaffected. setWebSessionTitleAuto rechecks `title_manual`
+    // at write time so a concurrent manual rename is not overwritten.
+    if (turn.status === 'success' && isWebJid(chatJid)) {
+      const folder = webFolderFromJid(chatJid);
+      const sessionId = webSessionIdFromJid(chatJid);
+      if (folder && sessionId) {
+        const n = incrementWebSessionTurnCount(folder, sessionId);
+        if (n === 1 || n === 5 || n === 20) {
+          void generateAndPersistTitle(folder, sessionId).catch((err) =>
+            logger.warn(
+              { err, folder, sessionId, turn: n },
+              'Title-gen failed',
+            ),
+          );
         }
       }
     }
@@ -1537,7 +1543,6 @@ async function main(): Promise<void> {
     onMessage: (_chatJid, msg) => {
       storeMessage(msg);
       touchWebSessionForJid(msg.chat_jid, msg.timestamp);
-      maybeAutoTitle(msg);
       dispatchMessage(msg);
     },
     onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),

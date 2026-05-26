@@ -135,6 +135,8 @@ export function initDatabase(): void {
       last_message_at TEXT,
       pinned          INTEGER NOT NULL DEFAULT 0,
       archived        INTEGER NOT NULL DEFAULT 0,
+      title_manual    INTEGER NOT NULL DEFAULT 0,
+      turn_count      INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (folder, id)
     );
     CREATE INDEX IF NOT EXISTS idx_web_sessions_folder
@@ -146,6 +148,21 @@ export function initDatabase(): void {
   // Add sender_name column if it doesn't exist (migration for existing DBs)
   try {
     db.exec(`ALTER TABLE messages ADD COLUMN sender_name TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
+  try {
+    db.exec(
+      `ALTER TABLE web_sessions ADD COLUMN title_manual INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE web_sessions ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0`,
+    );
   } catch {
     /* column already exists */
   }
@@ -577,6 +594,8 @@ export interface WebSession {
   last_message_at: string | null;
   pinned: number;
   archived: number;
+  title_manual: number;
+  turn_count: number;
 }
 
 export function createWebSession(s: {
@@ -624,19 +643,47 @@ export function renameWebSession(
   title: string,
 ): void {
   db.prepare(
-    `UPDATE web_sessions SET title = ? WHERE folder = ? AND id = ?`,
+    `UPDATE web_sessions SET title = ?, title_manual = 1
+     WHERE folder = ? AND id = ?`,
   ).run(title, folder, id);
 }
 
-export function setWebSessionTitleIfNull(
+// LLM-generated title write. WHERE clause prevents overwriting a manually-set
+// title, so a user rename racing with an in-flight title-gen call is safe.
+export function setWebSessionTitleAuto(
   folder: string,
   id: string,
   title: string,
 ): void {
   db.prepare(
     `UPDATE web_sessions SET title = ?
-     WHERE folder = ? AND id = ? AND (title IS NULL OR title = '')`,
+     WHERE folder = ? AND id = ? AND title_manual = 0`,
   ).run(title, folder, id);
+}
+
+// Reset the manual-title lock so the next setWebSessionTitleAuto write lands.
+// Used by the explicit "regenerate title" UI action.
+export function clearWebSessionTitleManualFlag(
+  folder: string,
+  id: string,
+): void {
+  db.prepare(
+    `UPDATE web_sessions SET title_manual = 0 WHERE folder = ? AND id = ?`,
+  ).run(folder, id);
+}
+
+export function incrementWebSessionTurnCount(
+  folder: string,
+  id: string,
+): number {
+  const row = db
+    .prepare(
+      `UPDATE web_sessions SET turn_count = turn_count + 1
+       WHERE folder = ? AND id = ?
+       RETURNING turn_count`,
+    )
+    .get(folder, id) as { turn_count: number } | undefined;
+  return row?.turn_count ?? 0;
 }
 
 export function pinWebSession(

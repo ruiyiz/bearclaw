@@ -192,6 +192,12 @@ export const api = {
       'PATCH',
       { folder, title },
     ),
+  regenerateChatSessionTitle: (folder: string, id: string) =>
+    send<{ ok: boolean; title: string | null }>(
+      `/api/user/chat/sessions/${encodeURIComponent(id)}/regenerate-title`,
+      'POST',
+      { folder },
+    ),
   pinChatSession: (folder: string, id: string, pinned: boolean) =>
     send<{ ok: boolean }>(
       `/api/user/chat/sessions/${encodeURIComponent(id)}`,

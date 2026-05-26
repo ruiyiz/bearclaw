@@ -19,6 +19,7 @@ import { loadParsedTranscript } from '../agent/runner.js';
 import { commands as slashCommands } from '../commands/registry.js';
 import {
   archiveWebSession,
+  clearWebSessionTitleManualFlag,
   createWebSession,
   deleteWebSession,
   getMessagesByJid,
@@ -27,6 +28,7 @@ import {
   pinWebSession,
   renameWebSession,
 } from '../db.js';
+import { generateAndPersistTitle } from '../agent/title-gen.js';
 import { randomUUID } from 'node:crypto';
 import { transcribeAudio } from '../media/transcribe.js';
 import type { WebChannel } from '../channels/web.js';
@@ -515,6 +517,27 @@ add(
       archiveWebSession(body.folder, id, body.archived);
     }
     json(res, 200, { ok: true });
+  },
+);
+
+add(
+  'POST',
+  /^\/api\/user\/chat\/sessions\/([^/]+)\/regenerate-title$/,
+  async (req, res, url) => {
+    const id = decodeURIComponent(url.pathname.split('/').slice(-2, -1)[0]);
+    const body = (await readBody(req)) as { folder?: string };
+    if (!body.folder) return json(res, 400, { error: 'missing folder' });
+    const existing = getWebSession(body.folder, id);
+    if (!existing) return json(res, 404, { error: 'not found' });
+    clearWebSessionTitleManualFlag(body.folder, id);
+    try {
+      await generateAndPersistTitle(body.folder, id);
+    } catch (err) {
+      logger.warn({ err, folder: body.folder, id }, 'Regenerate-title failed');
+      return json(res, 500, { error: 'title-gen failed' });
+    }
+    const updated = getWebSession(body.folder, id);
+    json(res, 200, { ok: true, title: updated?.title ?? null });
   },
 );
 

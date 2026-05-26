@@ -131,6 +131,7 @@ export function ChatView() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [messages, setMessages] = useState<BubbleData[]>([]);
@@ -756,6 +757,25 @@ export function ChatView() {
     }
   }
 
+  async function regenerateTitle(f: string, id: string) {
+    setRegeneratingId(id);
+    try {
+      const res = await api.regenerateChatSessionTitle(f, id);
+      if (res.title) {
+        setSessionsByFolder((prev) => ({
+          ...prev,
+          [f]: (prev[f] || []).map((s) =>
+            s.id === id ? { ...s, title: res.title } : s,
+          ),
+        }));
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setRegeneratingId(null);
+    }
+  }
+
   async function deleteSession(f: string, id: string) {
     if (!confirm('Archive this conversation? It will be hidden from the list.'))
       return;
@@ -945,6 +965,24 @@ export function ChatView() {
                             <span className="text-[11px] text-[color:var(--muted)] shrink-0">
                               {shortWhen(s.lastMessageAt || s.createdAt)}
                             </span>
+                            <button
+                              type="button"
+                              disabled={regeneratingId === s.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void regenerateTitle(a.folder, s.id);
+                              }}
+                              className={
+                                'opacity-0 group-hover:opacity-100 text-[color:var(--muted)] hover:text-[color:var(--accent)] text-xs shrink-0 ' +
+                                (regeneratingId === s.id
+                                  ? 'animate-spin opacity-100'
+                                  : '')
+                              }
+                              aria-label="Regenerate title"
+                              title="Regenerate title"
+                            >
+                              ↻
+                            </button>
                             <button
                               type="button"
                               onClick={(e) => {
