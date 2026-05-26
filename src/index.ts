@@ -316,7 +316,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
   const isMainAgent = agent.folder === MAIN_AGENT_FOLDER;
 
   if (!isMainAgent) {
-    if (agent.trigger) {
+    if (agent.trigger && !content.startsWith('/')) {
       const triggerPattern = new RegExp(
         `^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
         'i',
@@ -330,7 +330,15 @@ async function processMessage(msg: NewMessage): Promise<void> {
     return;
   }
 
-  const cmdHead = content.split(/[\s@]/)[0];
+  if (agent.trigger) {
+    const stripTriggerRe = new RegExp(
+      `^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b\\s*`,
+      'i',
+    );
+    content = content.replace(stripTriggerRe, '');
+  }
+
+  const cmdHead = content.split(/\s+/)[0];
   if (cmdHead.startsWith('/')) {
     const cmd = commandMap.get(cmdHead.slice(1).toLowerCase());
     if (cmd) {
