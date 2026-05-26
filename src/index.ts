@@ -314,8 +314,11 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   let content = msg.content.trim();
   const isMainAgent = agent.folder === MAIN_AGENT_FOLDER;
+  // Web jids are per-folder dedicated threads — the UI already routes by
+  // folder, so no trigger prefix is needed.
+  const isWebJid = msg.chat_jid.startsWith('web:');
 
-  if (!isMainAgent) {
+  if (!isMainAgent && !isWebJid) {
     if (agent.trigger && !content.startsWith('/')) {
       const triggerPattern = new RegExp(
         `^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
