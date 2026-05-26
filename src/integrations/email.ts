@@ -16,7 +16,7 @@ import { logger } from '../logger.js';
 import { EmailMessage, RegisteredAgent } from '../types.js';
 import { loadJson, saveJson } from '../utils/json.js';
 
-const GOG_PATH = '/opt/homebrew/bin/gog';
+const GWS_PATH = 'gws';
 const MAX_PROCESSED_IDS = 1000;
 
 interface EmailState {
@@ -60,17 +60,17 @@ function saveEmailState(folder: string, processedIds: Set<string>): void {
   saveJson(stateFile(folder), { processedIds: trimmed });
 }
 
-function runGog(args: string[], stdin?: string): Promise<string> {
+function runGws(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile(
-      GOG_PATH,
+    execFile(
+      GWS_PATH,
       args,
       { timeout: 30000, maxBuffer: 10 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
           reject(
             new Error(
-              `gog ${args[0]} ${args[1] || ''} failed: ${stderr || err.message}`,
+              `gws ${args.slice(0, 3).join(' ')} failed: ${stderr || err.message}`,
             ),
           );
           return;
@@ -78,79 +78,111 @@ function runGog(args: string[], stdin?: string): Promise<string> {
         resolve(stdout);
       },
     );
-    if (stdin && child.stdin) {
-      child.stdin.write(stdin);
-      child.stdin.end();
-    }
   });
 }
 
+// gws helpers may prefix stdout with status lines ("Using keyring backend…",
+// "No messages found matching query: …"). Find the first JSON token; if none,
+// treat as an empty result.
+function parseJsonOutput<T>(raw: string): T | null {
+  const start = raw.search(/[{[]/);
+  if (start === -1) return null;
+  return JSON.parse(raw.slice(start)) as T;
+}
+
+interface TriageEntry {
+  id: string;
+  from: string;
+  subject?: string;
+  date?: string;
+}
+
+interface TriageResponse {
+  messages?: TriageEntry[];
+}
+
+interface ReadResponse {
+  thread_id: string;
+  from?: { name?: string | null; email?: string } | null;
+  subject?: string;
+  date?: string;
+  body_text?: string;
+}
+
 async function fetchUnreadEmails(address: string): Promise<EmailMessage[]> {
-  const output = await runGog([
+  const triageOut = await runGws([
     'gmail',
-    'messages',
-    'search',
+    '+triage',
+    '--query',
     `to:${address} is:unread`,
-    '--json',
-    '--no-input',
-    '--include-body',
-    '--max=10',
+    '--max',
+    '10',
+    '--format',
+    'json',
   ]);
 
-  const data = JSON.parse(output);
-  if (!data.messages || !Array.isArray(data.messages)) {
-    return [];
-  }
+  const triage = parseJsonOutput<TriageResponse>(triageOut);
+  if (!triage || !triage.messages || !Array.isArray(triage.messages)) return [];
 
-  return data.messages.map(
-    (m: {
-      id: string;
-      threadId: string;
-      from: string;
-      subject: string;
-      body: string;
-      date: string;
-    }) => ({
-      id: m.id,
-      threadId: m.threadId,
-      from: m.from,
-      subject: m.subject || '(no subject)',
-      body: m.body || '',
-      date: m.date || '',
-    }),
-  );
+  const out: EmailMessage[] = [];
+  for (const entry of triage.messages) {
+    try {
+      const readOut = await runGws([
+        'gmail',
+        '+read',
+        '--id',
+        entry.id,
+        '--headers',
+        '--format',
+        'json',
+      ]);
+      const read = parseJsonOutput<ReadResponse>(readOut);
+      if (!read) {
+        logger.warn({ id: entry.id }, 'Empty +read output, skipping');
+        continue;
+      }
+      const fromObj = read.from || null;
+      const fromStr = fromObj
+        ? fromObj.name
+          ? `${fromObj.name} <${fromObj.email ?? ''}>`
+          : (fromObj.email ?? '')
+        : entry.from;
+      out.push({
+        id: entry.id,
+        threadId: read.thread_id,
+        from: fromStr,
+        subject: read.subject || entry.subject || '(no subject)',
+        body: read.body_text || '',
+        date: read.date || entry.date || '',
+      });
+    } catch (err) {
+      logger.warn({ err, id: entry.id }, 'Failed to read email body, skipping');
+    }
+  }
+  return out;
 }
 
 async function markThreadRead(threadId: string): Promise<void> {
-  await runGog([
+  await runGws([
     'gmail',
-    'thread',
+    'users',
+    'threads',
     'modify',
-    threadId,
-    '--remove=UNREAD',
-    '--no-input',
+    '--params',
+    JSON.stringify({ userId: 'me', id: threadId }),
+    '--json',
+    JSON.stringify({ removeLabelIds: ['UNREAD'] }),
   ]);
 }
 
 export async function sendEmailReply(
   messageId: string,
-  to: string,
-  subject: string,
+  _to: string,
+  _subject: string,
   body: string,
 ): Promise<void> {
-  await runGog(
-    [
-      'gmail',
-      'send',
-      `--to=${to}`,
-      `--subject=${subject}`,
-      '--body-file=-',
-      `--reply-to-message-id=${messageId}`,
-      '--no-input',
-      '--json',
-    ],
-    body,
-  );
+  // gws +reply derives To/Subject/threading from the original message.
+  await runGws(['gmail', '+reply', '--message-id', messageId, '--body', body]);
 }
 
 function parseEmailAddress(from: string): string {
