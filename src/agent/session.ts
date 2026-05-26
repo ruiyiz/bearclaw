@@ -147,6 +147,7 @@ export class AgentSession {
   private turnQueue: PendingTurn[] = [];
   private sessionId: string | undefined;
   private closed = false;
+  private draining = false;
   private consumerError: Error | null = null;
   private lastInterruptedAt: number | null = null;
 
@@ -165,12 +166,29 @@ export class AgentSession {
     return this.closed;
   }
 
+  isDraining(): boolean {
+    return this.draining;
+  }
+
   hasPendingTurns(): boolean {
     return this.turnQueue.length > 0;
   }
 
   getSessionId(): string | undefined {
     return this.sessionId;
+  }
+
+  // Daily rollover marks the session for shutdown. The in-flight turn (if
+  // any) finishes naturally; new turns are rejected so callers spawn a fresh
+  // session in parallel. The final `result` suppresses its `newSessionId` so
+  // sessions.json isn't overwritten with the dead session's id.
+  markDrain(): void {
+    if (this.closed || this.draining) return;
+    this.draining = true;
+    logger.info({ group: this.agent.name }, 'AgentSession.markDrain');
+    if (this.turnQueue.length === 0) {
+      void this.close();
+    }
   }
 
   start(): void {
@@ -293,6 +311,14 @@ export class AgentSession {
         status: 'error',
         result: null,
         error: 'Session is closed',
+        sentMediaViaIpc: false,
+      };
+    }
+    if (this.draining) {
+      return {
+        status: 'error',
+        result: null,
+        error: 'Session is draining',
         sentMediaViaIpc: false,
       };
     }
@@ -537,8 +563,12 @@ export class AgentSession {
         sentMediaViaIpc: turn.sentMediaViaIpc,
         timedOut: turn.timedOut,
         interrupted: turn.interrupted,
-        newSessionId: this.sessionId,
+        newSessionId: this.draining ? undefined : this.sessionId,
       });
+
+      if (this.draining && this.turnQueue.length === 0) {
+        void this.close();
+      }
     }
   }
 }

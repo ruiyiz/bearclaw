@@ -1,13 +1,12 @@
 /**
- * Daily conversation archive (DB-sourced).
+ * Daily rollover: at 01:00 local each day, (1) flush yesterday's messages to
+ * `var/agents/{folder}/conversations/{date}.md` for gbrain ingestion, then
+ * (2) reset folder-keyed IM/email SDK sessions so the next message starts a
+ * fresh session with warm-start re-injection. Bounds daily token growth.
  *
- * One job: at 01:00 local each day, render yesterday's messages for every
- * registered agent folder into `var/agents/{folder}/conversations/{date}.md`.
- * gbrain's sync cron picks the files up, git-commits them, and runs
- * `gbrain sync --all` to ingest.
- *
- * Source moved from per-session checkpoints (gone) to the `messages` table.
- * The file boundary stays so gbrain's ingestion contract is unchanged.
+ * Web sessions (`web:<folder>:<sessionId>`) are not reset here — users manage
+ * those via the UI. Boot catch-up runs flush only; missed-01:00 reset is
+ * tolerated (sessions survive an extra day on rare process downtime).
  */
 
 import fs from 'fs';
@@ -17,9 +16,13 @@ import { TIMEZONE, agentVarDir } from '../config.js';
 import { getDb, getMessagesInRange, type StoredMessage } from '../db.js';
 import { logger } from '../logger.js';
 import type { RegisteredAgent } from '../types.js';
+import type { AgentSession } from './session.js';
 
-interface DailyFlushDeps {
+export interface DailyRolloverDeps {
   registeredAgents: () => Record<string, RegisteredAgent>;
+  streamingSessions: () => Map<string, AgentSession>;
+  sessions: () => Record<string, string>;
+  persistSessions: () => void;
 }
 
 function localDateString(d: Date): string {
@@ -130,7 +133,7 @@ async function flushFolder(
   );
 }
 
-async function flushAll(date: string, deps: DailyFlushDeps): Promise<void> {
+async function flushAll(date: string, deps: DailyRolloverDeps): Promise<void> {
   const registered = deps.registeredAgents();
   for (const folder of listFolders(registered)) {
     try {
@@ -141,15 +144,62 @@ async function flushAll(date: string, deps: DailyFlushDeps): Promise<void> {
   }
 }
 
-export function startDailyConversationFlush(deps: DailyFlushDeps): void {
+function resetFolderSessions(deps: DailyRolloverDeps): void {
+  const registered = deps.registeredAgents();
+  const live = deps.streamingSessions();
+  const sessionsMap = deps.sessions();
+
+  const folders = listFolders(registered);
+  let drained = 0;
+  let cleared = 0;
+
+  for (const folder of folders) {
+    // Map keys are chatJids. Folder-keyed entries use the bare folder name
+    // as the chatJid; web entries use `web:<folder>:<sessionId>` and are
+    // skipped. See `sessionKeyFor` in src/index.ts.
+    const session = live.get(folder);
+    if (session && !session.isClosed() && !session.isDraining()) {
+      session.markDrain();
+      live.delete(folder);
+      drained++;
+    }
+    if (sessionsMap[folder]) {
+      delete sessionsMap[folder];
+      cleared++;
+    }
+  }
+
+  if (drained > 0 || cleared > 0) {
+    deps.persistSessions();
+    logger.info(
+      { drained, cleared, folders: folders.length },
+      'Daily session reset complete',
+    );
+  }
+}
+
+async function runRollover(
+  date: string,
+  deps: DailyRolloverDeps,
+): Promise<void> {
+  await flushAll(date, deps);
+  try {
+    resetFolderSessions(deps);
+  } catch (err) {
+    logger.error({ err }, 'Daily session reset failed');
+  }
+}
+
+export function startDailyRollover(deps: DailyRolloverDeps): void {
   const fire = async () => {
     const date = yesterdayLocalString(new Date());
-    await flushAll(date, deps);
+    await runRollover(date, deps);
     setTimeout(fire, msUntilNextLocalHour(1));
   };
 
-  // Catch-up on boot: render yesterday's archive in case the service was
-  // down at 1am. Idempotent — overwriting the same file is fine.
+  // Boot catch-up: flush only. Flush is idempotent (same DB rows produce the
+  // same archive file). Session reset is intentionally NOT replayed on boot
+  // — it would destroy live sessions created since today's 01:00.
   void flushAll(yesterdayLocalString(new Date()), deps).catch((err) => {
     logger.error({ err }, 'Initial conversation flush failed');
   });
@@ -158,7 +208,7 @@ export function startDailyConversationFlush(deps: DailyFlushDeps): void {
   setTimeout(fire, wait);
   logger.info(
     { firstRunInMs: wait, hour: 1, tz: TIMEZONE },
-    'Daily conversation flush scheduled',
+    'Daily rollover scheduled',
   );
 }
 

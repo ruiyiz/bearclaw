@@ -95,7 +95,7 @@ import {
   Session,
 } from './types.js';
 import { loadJson, saveJson } from './utils/json.js';
-import { startDailyConversationFlush } from './agent/conversation-checkpoint.js';
+import { startDailyRollover } from './agent/daily-rollover.js';
 import { logger } from './logger.js';
 import { initSubprocessManager } from './agent/subprocess-manager.js';
 import { startMaintenance } from './maintenance.js';
@@ -692,7 +692,7 @@ function getOrCreateStreamingSession(
   chatJid: string,
 ): AgentSession {
   let session = streamingSessions.get(chatJid);
-  if (session && session.isClosed()) {
+  if (session && (session.isClosed() || session.isDraining())) {
     streamingSessions.delete(chatJid);
     session = undefined;
   }
@@ -1470,8 +1470,11 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
-  startDailyConversationFlush({
+  startDailyRollover({
     registeredAgents: () => registeredAgents,
+    streamingSessions: () => streamingSessions,
+    sessions: () => sessions,
+    persistSessions,
   });
   initSubprocessManager();
   startMaintenance();
