@@ -1,5 +1,6 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
 import { api } from '@/lib/api';
 
 export interface BubbleMedia {
@@ -150,17 +151,21 @@ function MediaPreview({ media }: { media: BubbleMedia }) {
 }
 
 export function MarkdownBody({ text, dark }: { text: string; dark: boolean }) {
+  const inlineCodeBg = dark ? 'bg-white/20' : 'bg-black/10';
   return (
     <div
       className={
         'chat-md ' +
         (dark
-          ? '[&_a]:text-white [&_a]:underline [&_code]:bg-white/20'
-          : '[&_a]:text-[color:var(--accent)] [&_a]:underline [&_code]:bg-black/10')
+          ? '[&_a]:text-white [&_a]:underline'
+          : '[&_a]:text-[color:var(--accent)] [&_a]:underline')
       }
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[
+          [rehypeHighlight, { detect: true, ignoreMissing: true }],
+        ]}
         components={{
           p: ({ children }) => (
             <p className="whitespace-pre-wrap [&:not(:last-child)]:mb-2">
@@ -179,17 +184,24 @@ export function MarkdownBody({ text, dark }: { text: string; dark: boolean }) {
           ),
           li: ({ children }) => <li className="mb-0.5">{children}</li>,
           code: ({ className, children, ...props }) => {
-            const isBlock = /language-/.test(className || '');
+            const isBlock = /(?:^|\s)(?:language-|hljs)/.test(className || '');
             if (isBlock) {
               return (
-                <pre className="bg-black/30 rounded-md p-2 my-2 overflow-x-auto text-xs">
-                  <code {...props}>{children}</code>
+                <pre className="my-2 overflow-x-auto text-xs">
+                  <code
+                    className={(className || '') + ' hljs block p-2 rounded-md'}
+                    {...props}
+                  >
+                    {children}
+                  </code>
                 </pre>
               );
             }
             return (
               <code
-                className="rounded px-1 py-0.5 text-[0.85em] font-mono"
+                className={
+                  'rounded px-1 py-0.5 text-[0.85em] font-mono ' + inlineCodeBg
+                }
                 {...props}
               >
                 {children}
@@ -215,6 +227,35 @@ export function MarkdownBody({ text, dark }: { text: string; dark: boolean }) {
             <blockquote className="border-l-2 border-current/40 pl-2 italic opacity-90 my-1">
               {children}
             </blockquote>
+          ),
+          table: ({ children }) => (
+            <div className="my-2 overflow-x-auto -mx-1">
+              <table className="min-w-full text-xs border-collapse">
+                {children}
+              </table>
+            </div>
+          ),
+          thead: ({ children }) => (
+            <thead className="border-b border-current/30">{children}</thead>
+          ),
+          tbody: ({ children }) => <tbody>{children}</tbody>,
+          tr: ({ children }) => (
+            <tr className="border-b border-current/15 last:border-0">
+              {children}
+            </tr>
+          ),
+          th: ({ children, style }) => (
+            <th
+              className="px-2 py-1 text-left font-semibold whitespace-nowrap align-bottom"
+              style={style}
+            >
+              {children}
+            </th>
+          ),
+          td: ({ children, style }) => (
+            <td className="px-2 py-1 align-top" style={style}>
+              {children}
+            </td>
           ),
         }}
       >

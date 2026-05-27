@@ -1,4 +1,5 @@
 import './globals.css';
+import 'highlight.js/styles/github-dark.css';
 import type { Metadata, Viewport } from 'next';
 import {
   Geist,
