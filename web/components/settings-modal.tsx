@@ -2,16 +2,30 @@
 import { useEffect, useState } from 'react';
 import {
   applyFont,
+  applyFontSize,
   FONT_DEFAULT,
   FONT_OPTIONS,
+  FONT_SIZE_DEFAULT,
+  FONT_SIZE_OPTIONS,
   loadFont,
+  loadFontSize,
   saveFont,
+  saveFontSize,
+  type FontSize,
 } from '@/lib/font';
 import {
   KEEP_FOCUS_DEFAULT,
   loadKeepFocusOnSend,
   saveKeepFocusOnSend,
 } from '@/lib/prefs';
+import {
+  applyTheme,
+  loadTheme,
+  saveTheme,
+  THEME_DEFAULT,
+  THEME_OPTIONS,
+  type ThemeMode,
+} from '@/lib/theme';
 
 interface Props {
   open: boolean;
@@ -20,14 +34,18 @@ interface Props {
 
 export function SettingsModal({ open, onClose }: Props) {
   const [font, setFont] = useState<string>(FONT_DEFAULT);
+  const [fontSize, setFontSize] = useState<FontSize>(FONT_SIZE_DEFAULT);
   const [keepFocus, setKeepFocus] = useState<boolean>(KEEP_FOCUS_DEFAULT);
+  const [theme, setTheme] = useState<ThemeMode>(THEME_DEFAULT);
 
   // Sync controls with the currently persisted values whenever the dialog
   // opens, so changes made via other tabs / settings flows are reflected.
   useEffect(() => {
     if (!open) return;
     setFont(loadFont());
+    setFontSize(loadFontSize());
     setKeepFocus(loadKeepFocusOnSend());
+    setTheme(loadTheme());
   }, [open]);
 
   useEffect(() => {
@@ -51,20 +69,41 @@ export function SettingsModal({ open, onClose }: Props) {
     saveKeepFocusOnSend(next);
   }
 
-  if (!open) return null;
+  function pickTheme(mode: ThemeMode) {
+    setTheme(mode);
+    applyTheme(mode);
+    saveTheme(mode);
+  }
+
+  function pickFontSize(id: FontSize) {
+    setFontSize(id);
+    applyFontSize(id);
+    saveFontSize(id);
+  }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="settings-title"
-    >
-      <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={onClose}
-      />
-      <div className="relative w-full max-w-md rounded-xl border border-[color:var(--border)] bg-[color:var(--bg-2,#14171d)] shadow-2xl">
+    <>
+      {/* Transparent click-catcher — no dim/blur so the chat behind stays
+          fully visible, giving real-time preview of theme/font/size. */}
+      {open && (
+        <div
+          className="fixed inset-0 z-40"
+          aria-hidden="true"
+          onClick={onClose}
+        />
+      )}
+      <aside
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="settings-title"
+        aria-hidden={!open}
+        className={
+          'fixed top-0 right-0 h-dvh w-[22rem] max-w-[90vw] z-50 ' +
+          'bg-[color:var(--bg-2,#14171d)] border-l border-[color:var(--border)] shadow-2xl ' +
+          'flex flex-col transform transition-transform duration-200 ' +
+          (open ? 'translate-x-0' : 'translate-x-full pointer-events-none')
+        }
+      >
         <header className="flex items-center justify-between px-5 py-3 border-b border-[color:var(--border)]">
           <h2 id="settings-title" className="text-base font-semibold">
             Settings
@@ -78,7 +117,57 @@ export function SettingsModal({ open, onClose }: Props) {
             ✕
           </button>
         </header>
-        <div className="px-5 py-4 space-y-4">
+        <div className="px-5 py-4 space-y-4 flex-1 overflow-y-auto">
+          <section>
+            <div className="text-xs uppercase tracking-wide text-[color:var(--muted)] mb-2">
+              Theme
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {THEME_OPTIONS.map((opt) => {
+                const active = theme === opt.id;
+                return (
+                  <button
+                    type="button"
+                    key={opt.id}
+                    onClick={() => pickTheme(opt.id)}
+                    className={
+                      'px-3 py-2 rounded-md border text-sm font-medium transition-colors ' +
+                      (active
+                        ? 'border-[color:var(--accent)] bg-[color:var(--accent)]/10 text-[color:var(--fg)]'
+                        : 'border-[color:var(--border)] text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)]')
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+          <section>
+            <div className="text-xs uppercase tracking-wide text-[color:var(--muted)] mb-2">
+              Font size
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {FONT_SIZE_OPTIONS.map((opt) => {
+                const active = fontSize === opt.id;
+                return (
+                  <button
+                    type="button"
+                    key={opt.id}
+                    onClick={() => pickFontSize(opt.id)}
+                    className={
+                      'px-2 py-2 rounded-md border text-sm font-medium transition-colors ' +
+                      (active
+                        ? 'border-[color:var(--accent)] bg-[color:var(--accent)]/10 text-[color:var(--fg)]'
+                        : 'border-[color:var(--border)] text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)]')
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
           <section>
             <div className="text-xs uppercase tracking-wide text-[color:var(--muted)] mb-2">
               Font
@@ -170,7 +259,7 @@ export function SettingsModal({ open, onClose }: Props) {
             Done
           </button>
         </footer>
-      </div>
-    </div>
+      </aside>
+    </>
   );
 }

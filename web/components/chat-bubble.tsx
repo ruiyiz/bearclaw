@@ -1,3 +1,5 @@
+'use client';
+import { useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -13,13 +15,9 @@ export interface BubbleData {
   id: string;
   side: 'user' | 'agent';
   text: string;
-  // ms-epoch; 0 = unknown.
   ts: number;
   remoteId?: number;
   media?: BubbleMedia;
-  // Short label shown next to the timestamp (e.g. "telegram", "imessage").
-  // Set when rendering cross-channel views so the user knows where each
-  // message came from.
   channelLabel?: string;
 }
 
@@ -34,9 +32,6 @@ export function channelLabelFromJid(jid: string): string {
 
 const MEDIA_TAG_RE = /^\[(Photo|Video|Audio|Document):\s+([^\]]+?)\](.*)$/s;
 
-// Parse a Telegram-style `[Photo: /abs/path]{ caption}` tag out of stored
-// message content so historical media bubbles can be re-rendered. Returns
-// `null` when no on-disk media path is referenced.
 export function parseMediaTag(
   content: string,
   folder: string,
@@ -79,17 +74,24 @@ export function formatTimestamp(ts: number): string {
   });
 }
 
-export function Bubble({ m }: { m: BubbleData }) {
+export interface BubbleProps {
+  m: BubbleData;
+  onRegenerate?: () => void;
+}
+
+export function Bubble({ m, onRegenerate }: BubbleProps) {
   const own = m.side === 'user';
   const time = formatTimestamp(m.ts);
   return (
-    <div className={'flex flex-col ' + (own ? 'items-end' : 'items-start')}>
+    <div
+      className={'group flex flex-col ' + (own ? 'items-end' : 'items-start')}
+    >
       <div
         className={
-          'max-w-[85%] rounded-2xl px-3 py-2 text-sm break-words ' +
+          'text-sm break-words ' +
           (own
-            ? 'bg-[color:var(--accent)] text-white rounded-br-md'
-            : 'bg-[color:var(--card)] border border-[color:var(--border)] rounded-bl-md')
+            ? 'max-w-[85%] rounded-2xl rounded-br-md px-3 py-2 bg-[color:var(--accent)] text-white'
+            : 'w-full px-0 py-1')
         }
       >
         {m.media?.url && <MediaPreview media={m.media} />}
@@ -99,12 +101,118 @@ export function Bubble({ m }: { m: BubbleData }) {
           <span>…</span>
         )}
       </div>
-      {(time || m.channelLabel) && (
-        <span className="text-[10px] text-[color:var(--muted)] mt-0.5 px-1 flex gap-1.5 items-center">
+      {!own && m.text ? (
+        <AssistantActions
+          text={m.text}
+          onRegenerate={onRegenerate}
+          time={time}
+          channelLabel={m.channelLabel}
+        />
+      ) : (
+        (time || m.channelLabel) && (
+          <span className="text-[10px] text-[color:var(--muted)] mt-0.5 px-1 flex gap-1.5 items-center opacity-0 group-hover:opacity-100 transition-opacity">
+            {time && <span>{time}</span>}
+            {m.channelLabel && (
+              <span className="rounded-sm border border-[color:var(--border)] px-1 text-[9px] uppercase tracking-wide">
+                {m.channelLabel}
+              </span>
+            )}
+          </span>
+        )
+      )}
+    </div>
+  );
+}
+
+function AssistantActions({
+  text,
+  onRegenerate,
+  time,
+  channelLabel,
+}: {
+  text: string;
+  onRegenerate?: () => void;
+  time?: string;
+  channelLabel?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      },
+      () => {},
+    );
+  }
+  return (
+    <div className="mt-1 px-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity w-full">
+      <button
+        type="button"
+        onClick={copy}
+        title={copied ? 'Copied' : 'Copy message'}
+        aria-label="Copy message"
+        className="h-7 w-7 inline-flex items-center justify-center rounded-md text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)]"
+      >
+        {copied ? (
+          <svg
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        ) : (
+          <svg
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="9" y="9" width="13" height="13" rx="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+        )}
+      </button>
+      {onRegenerate && (
+        <button
+          type="button"
+          onClick={onRegenerate}
+          title="Resend last message"
+          aria-label="Resend last message"
+          className="h-7 w-7 inline-flex items-center justify-center rounded-md text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)]"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="23 4 23 10 17 10" />
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+          </svg>
+        </button>
+      )}
+      {(time || channelLabel) && (
+        <span className="ml-auto text-[10px] text-[color:var(--muted)] flex gap-1.5 items-center">
           {time && <span>{time}</span>}
-          {m.channelLabel && (
+          {channelLabel && (
             <span className="rounded-sm border border-[color:var(--border)] px-1 text-[9px] uppercase tracking-wide">
-              {m.channelLabel}
+              {channelLabel}
             </span>
           )}
         </span>
@@ -150,6 +258,81 @@ function MediaPreview({ media }: { media: BubbleMedia }) {
   );
 }
 
+function CodeBlock({
+  className,
+  children,
+  ...props
+}: {
+  className?: string;
+  children?: React.ReactNode;
+}) {
+  const codeRef = useRef<HTMLElement>(null);
+  const [copied, setCopied] = useState(false);
+  const lang = (className || '').match(/language-(\S+)/)?.[1] || 'text';
+  function copy() {
+    const text = codeRef.current?.textContent || '';
+    if (!text || !navigator.clipboard) return;
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      },
+      () => {},
+    );
+  }
+  return (
+    <div className="my-2 rounded-lg overflow-hidden border border-current/10 text-xs">
+      <div className="flex items-center justify-between px-3 py-1 bg-black/40 text-[10px] uppercase tracking-wide text-zinc-300">
+        <span>{lang}</span>
+        <button
+          type="button"
+          onClick={copy}
+          className="inline-flex items-center gap-1 hover:text-white transition-colors"
+        >
+          {copied ? (
+            <svg
+              viewBox="0 0 24 24"
+              width="12"
+              height="12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          ) : (
+            <svg
+              viewBox="0 0 24 24"
+              width="12"
+              height="12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="9" y="9" width="13" height="13" rx="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+          )}
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <pre className="overflow-x-auto">
+        <code
+          ref={codeRef}
+          className={(className || '') + ' hljs block p-3'}
+          {...props}
+        >
+          {children}
+        </code>
+      </pre>
+    </div>
+  );
+}
+
 export function MarkdownBody({ text, dark }: { text: string; dark: boolean }) {
   const inlineCodeBg = dark ? 'bg-white/20' : 'bg-black/10';
   return (
@@ -187,14 +370,9 @@ export function MarkdownBody({ text, dark }: { text: string; dark: boolean }) {
             const isBlock = /(?:^|\s)(?:language-|hljs)/.test(className || '');
             if (isBlock) {
               return (
-                <pre className="my-2 overflow-x-auto text-xs">
-                  <code
-                    className={(className || '') + ' hljs block p-2 rounded-md'}
-                    {...props}
-                  >
-                    {children}
-                  </code>
-                </pre>
+                <CodeBlock className={className} {...props}>
+                  {children}
+                </CodeBlock>
               );
             }
             return (
@@ -215,13 +393,15 @@ export function MarkdownBody({ text, dark }: { text: string; dark: boolean }) {
             </a>
           ),
           h1: ({ children }) => (
-            <h1 className="text-base font-semibold mt-1 mb-1">{children}</h1>
+            <h1 className="text-[1.2em] font-semibold mt-1 mb-1">{children}</h1>
           ),
           h2: ({ children }) => (
-            <h2 className="text-sm font-semibold mt-1 mb-1">{children}</h2>
+            <h2 className="text-[1.1em] font-semibold mt-1 mb-1">{children}</h2>
           ),
           h3: ({ children }) => (
-            <h3 className="text-sm font-semibold mt-1 mb-1">{children}</h3>
+            <h3 className="text-[1.05em] font-semibold mt-1 mb-1">
+              {children}
+            </h3>
           ),
           blockquote: ({ children }) => (
             <blockquote className="border-l-2 border-current/40 pl-2 italic opacity-90 my-1">

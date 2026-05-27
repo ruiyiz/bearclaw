@@ -31,6 +31,8 @@ import {
 } from './config.js';
 import {
   AvailableGroup,
+  DEFAULT_EFFORT,
+  DEFAULT_MODEL,
   runContainerAgent,
   writeAgentsSnapshot,
   writeHandlersSnapshot,
@@ -1568,6 +1570,32 @@ async function main(): Promise<void> {
       const agent = ensureWebAgent(folder);
       registerAgent(jid, agent);
     },
+    getAgentModel: (folder: string) => agentModels[folder],
+    setAgentModel: (folder: string, model: string) => {
+      agentModels[folder] = model;
+      saveJson(path.join(DATA_DIR, 'models.json'), agentModels);
+      // Push to any live streaming session for this agent so the change
+      // takes effect on the next turn without recreating the session.
+      for (const [jid, session] of streamingSessions.entries()) {
+        const reg = registeredAgents[jid];
+        if (reg && reg.folder === folder && !session.isClosed()) {
+          void session.setModel(model);
+        }
+      }
+    },
+    getAgentEffort: (folder: string) => agentEfforts[folder],
+    setAgentEffort: (folder: string, effort: string) => {
+      agentEfforts[folder] = effort;
+      saveJson(path.join(DATA_DIR, 'efforts.json'), agentEfforts);
+      for (const [jid, session] of streamingSessions.entries()) {
+        const reg = registeredAgents[jid];
+        if (reg && reg.folder === folder && !session.isClosed()) {
+          void session.setEffort(effort as EffortLevel);
+        }
+      }
+    },
+    defaultModel: DEFAULT_MODEL,
+    defaultEffort: DEFAULT_EFFORT,
   });
   // Auto-wire the main agent so first-load chat works without manual setup.
   if (!registeredAgents[`web:${MAIN_AGENT_FOLDER}`]) {

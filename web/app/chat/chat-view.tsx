@@ -19,7 +19,25 @@ import { loadKeepFocusOnSend } from '@/lib/prefs';
 
 const TEXTAREA_MAX_PX = 240;
 const HISTORY_LIMIT = 200;
-const COLLAPSED_KEY = 'nc.chat.collapsedAgents';
+
+interface ModelOption {
+  id: string;
+  label: string;
+}
+const MODEL_OPTIONS: ModelOption[] = [
+  { id: 'claude-opus-4-7', label: 'Opus 4.7' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+];
+const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+type EffortLevel = (typeof EFFORT_OPTIONS)[number];
+
+function modelLabel(id: string): string {
+  return MODEL_OPTIONS.find((m) => m.id === id)?.label || id;
+}
+function effortLabel(id: string): string {
+  return id.charAt(0).toUpperCase() + id.slice(1);
+}
 
 function rowToBubble(m: ChatMessage, folder: string): BubbleData {
   const parsed = parseMediaTag(m.content, folder);
@@ -33,7 +51,6 @@ function rowToBubble(m: ChatMessage, folder: string): BubbleData {
 }
 
 function avatarColor(folder: string): string {
-  // Stable hue from folder name. Used for the round agent badge.
   let h = 0;
   for (const c of folder) h = (h * 31 + c.charCodeAt(0)) | 0;
   const hue = Math.abs(h) % 360;
@@ -44,36 +61,6 @@ function initials(name: string): string {
   const parts = name.trim().split(/\s+/);
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return name.slice(0, 2).toUpperCase();
-}
-
-function shortWhen(iso: string | null): string {
-  if (!iso) return '';
-  const then = Date.parse(iso);
-  if (Number.isNaN(then)) return '';
-  const diffMin = (Date.now() - then) / 60000;
-  if (diffMin < 1) return 'now';
-  if (diffMin < 60) return `${Math.floor(diffMin)}m`;
-  if (diffMin < 24 * 60) return `${Math.floor(diffMin / 60)}h`;
-  return `${Math.floor(diffMin / (60 * 24))}d`;
-}
-
-function loadCollapsed(): Set<string> {
-  if (typeof window === 'undefined') return new Set();
-  try {
-    const raw = window.localStorage.getItem(COLLAPSED_KEY);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
-    return new Set(
-      Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [],
-    );
-  } catch {
-    return new Set();
-  }
-}
-
-function saveCollapsed(s: Set<string>): void {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...s]));
 }
 
 function urlState(): { folder: string | null; session: string | null } {
@@ -94,9 +81,6 @@ function pushUrl(folder: string, session: string): void {
   window.history.replaceState({}, '', next);
 }
 
-// Ease-out cubic rAF scroll animation. Replaces scrollTo({behavior:'smooth'})
-// because iOS Safari ignores it on overflow containers when momentum scroll
-// or a layout shift is in flight.
 function animateScrollTop(
   el: HTMLElement,
   target: number,
@@ -125,9 +109,10 @@ export function ChatView() {
   >({});
   const [folder, setFolder] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(() =>
-    loadCollapsed(),
-  );
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [composerMenu, setComposerMenu] = useState<boolean>(false);
+  // model/effort reflect the active agent's persisted setting (server source).
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -139,6 +124,7 @@ export function ChatView() {
   const [typing, setTyping] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -163,8 +149,6 @@ export function ChatView() {
     [],
   );
 
-  // Boot: load agents, snap to URL state if any, otherwise default to the main
-  // folder + its most-recent session (or auto-create one).
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -177,8 +161,6 @@ export function ChatView() {
         setAgents(agentsD.agents);
         setCommands(cmdsD.commands);
 
-        // Prefetch sessions for every agent so the sidebar renders fully on
-        // first paint. Cheap (one row per session per folder).
         const sessionEntries = await Promise.all(
           agentsD.agents.map(async (a) => {
             try {
@@ -207,8 +189,6 @@ export function ChatView() {
           const list = byFolder[initialFolder] || [];
           initialSession = list[0]?.id || null;
           if (!initialSession) {
-            // Bootstrap an empty session so the composer has somewhere to
-            // write. New users land on a fresh thread.
             const created = await api.createChatSession(initialFolder);
             if (cancelled) return;
             initialSession = created.id;
@@ -242,8 +222,21 @@ export function ChatView() {
     };
   }, []);
 
-  // History reload when folder/session changes, plus a refetch on tab
-  // foreground so we catch anything the broker fanned out during a blackout.
+  // Close any open popovers on outside click.
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      if (!t.closest('[data-popover]')) {
+        setMenuFor(null);
+        setComposerMenu(false);
+        setAgentPickerOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, []);
+
   const reloadHistory = useCallback(
     (f: string, s: string, opts: { showSpinner: boolean }) => {
       let cancelled = false;
@@ -279,12 +272,6 @@ export function ChatView() {
     return cancel;
   }, [folder, sessionId, reloadHistory]);
 
-  // SSE stream keyed to the active composite jid. Browser auto-reconnect goes
-  // through a Next.js prod proxy and sometimes never re-establishes a fresh
-  // backend subscription after the backend restarts (zero broker listeners on
-  // the new process). We force a fresh EventSource on every error / hidden →
-  // visible transition / focus / pageshow, and refetch history on reopen so
-  // anything fanned out during the blackout still surfaces.
   useEffect(() => {
     if (!folder || !sessionId) return;
     let closed = false;
@@ -309,9 +296,6 @@ export function ChatView() {
         }
       };
       es.onerror = () => {
-        // Browser auto-reconnect can wedge behind some prod proxies; tear
-        // the socket down and retry ourselves. The history refetch on
-        // reopen catches anything fanned out during the blackout.
         es.close();
         if (closed) return;
         retryTimer = setTimeout(() => {
@@ -356,19 +340,10 @@ export function ChatView() {
     const prev = prevMessageCountRef.current;
     prevMessageCountRef.current = messages.length;
 
-    // Keep the trailing spacer at least as tall as the scroll viewport so
-    // the latest bubble can always reach the top of the viewport. A
-    // CSS-only `min-h-[60dvh]` measures the page viewport, which can be
-    // smaller than the scroll container's actual height — when that
-    // happens the browser clamps scrollTop and the pin falls short.
     if (bottomSpacerRef.current) {
       bottomSpacerRef.current.style.minHeight = `${el.clientHeight}px`;
     }
 
-    // node.offsetTop measures from the nearest positioned ancestor, which
-    // in this layout is the grid wrapper above the chat header — not the
-    // scroll container. Use getBoundingClientRect deltas so we always
-    // resolve a position relative to the scroll viewport.
     const relativeTop = (node: HTMLElement): number =>
       node.getBoundingClientRect().top -
       el.getBoundingClientRect().top +
@@ -393,17 +368,9 @@ export function ChatView() {
       return;
     }
 
-    // New user message appended: pin it to the top, ChatGPT-style. The
-    // agent's reply bubble appears below and streams in without moving
-    // the viewport — if we pinned every append, the agent's first chunk
-    // would yank the user's own message off-screen.
     if (messages.length > prev) {
       const last = messages[messages.length - 1];
       if (last.side === 'user') {
-        // Defer one frame so the new bubble + resized spacer are laid out
-        // before we measure, then animate manually. iOS Safari does not
-        // reliably honour scrollTo({behavior:'smooth'}) on overflow
-        // containers — momentum scroll cancels it, or it silently no-ops.
         requestAnimationFrame(() => {
           const node = el.querySelector<HTMLElement>(
             `[data-msg-id="${CSS.escape(last.id)}"]`,
@@ -655,26 +622,15 @@ export function ChatView() {
     setRecording(false);
   }
 
-  async function send() {
-    if (!folder || !sessionId || !input.trim() || sending) return;
-    const text = input.trim();
-    setInput('');
+  async function sendText(text: string) {
+    if (!folder || !sessionId || !text.trim()) return;
     setSending(true);
-    // Restore textarea focus inside the same user-gesture tick. Tapping
-    // the Send button transfers focus to the button; on iOS that also
-    // dismisses the virtual keyboard. Refocusing synchronously keeps the
-    // composer hot for the next message. (When Enter submits, the
-    // textarea already has focus and this is a no-op.) Gated by the
-    // user-preference toggle in Settings.
-    if (loadKeepFocusOnSend()) textareaRef.current?.focus();
     setMessages((prev) => [
       ...prev,
       { id: `u-${Date.now()}`, side: 'user', text, ts: Date.now() },
     ]);
     try {
       await api.chat(folder, sessionId, text);
-      // Server auto-titles on first user message; refresh the sidebar entry
-      // so the title chip stops saying "New chat".
       void refreshSessions(folder).catch(() => {});
     } catch (e) {
       setMessages((prev) => [
@@ -689,6 +645,14 @@ export function ChatView() {
     } finally {
       setSending(false);
     }
+  }
+
+  async function send() {
+    if (!input.trim() || sending) return;
+    const text = input.trim();
+    setInput('');
+    if (loadKeepFocusOnSend()) textareaRef.current?.focus();
+    await sendText(text);
   }
 
   async function switchTo(f: string, s: string) {
@@ -719,27 +683,9 @@ export function ChatView() {
       setSessionId(created.id);
       pushUrl(f, created.id);
       setDrawerOpen(false);
-      // Ensure the agent group is expanded so the new session is visible.
-      setCollapsed((prev) => {
-        if (!prev.has(f)) return prev;
-        const next = new Set(prev);
-        next.delete(f);
-        saveCollapsed(next);
-        return next;
-      });
     } catch {
       /* ignore */
     }
-  }
-
-  function toggleCollapse(f: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(f)) next.delete(f);
-      else next.add(f);
-      saveCollapsed(next);
-      return next;
-    });
   }
 
   async function commitRename(f: string, id: string) {
@@ -754,6 +700,52 @@ export function ChatView() {
       }));
     } catch {
       /* ignore */
+    }
+  }
+
+  async function updateActiveAgentModel(model: string) {
+    if (!folder) return;
+    setAgents((prev) =>
+      prev.map((a) => (a.folder === folder ? { ...a, model } : a)),
+    );
+    setComposerMenu(false);
+    try {
+      await api.updateAgent(folder, { model });
+    } catch {
+      /* ignore — UI will re-sync on next userAgents fetch */
+    }
+  }
+
+  async function updateActiveAgentEffort(effort: EffortLevel) {
+    if (!folder) return;
+    setAgents((prev) =>
+      prev.map((a) => (a.folder === folder ? { ...a, effort } : a)),
+    );
+    setComposerMenu(false);
+    try {
+      await api.updateAgent(folder, { effort });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function togglePin(f: string, s: WebSession) {
+    const next = !s.pinned;
+    setSessionsByFolder((prev) => ({
+      ...prev,
+      [f]: (prev[f] || []).map((row) =>
+        row.id === s.id ? { ...row, pinned: next } : row,
+      ),
+    }));
+    try {
+      await api.pinChatSession(f, s.id, next);
+    } catch {
+      setSessionsByFolder((prev) => ({
+        ...prev,
+        [f]: (prev[f] || []).map((row) =>
+          row.id === s.id ? { ...row, pinned: !next } : row,
+        ),
+      }));
     }
   }
 
@@ -832,222 +824,78 @@ export function ChatView() {
     );
   }, [folder, sessionId, sessionsByFolder]);
 
+  const sessionsForActive = useMemo(() => {
+    if (!folder) return [] as WebSession[];
+    return sessionsByFolder[folder] || [];
+  }, [folder, sessionsByFolder]);
+
+  const pinnedSessions = useMemo(
+    () => sessionsForActive.filter((s) => s.pinned),
+    [sessionsForActive],
+  );
+  const recentSessions = useMemo(
+    () => sessionsForActive.filter((s) => !s.pinned),
+    [sessionsForActive],
+  );
+
+  const lastUserTextBeforeAgent = useCallback(
+    (agentIdx: number): string | null => {
+      for (let i = agentIdx - 1; i >= 0; i--) {
+        if (messages[i].side === 'user' && messages[i].text)
+          return messages[i].text;
+      }
+      return null;
+    },
+    [messages],
+  );
+
+  function handleScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    setScrolled(el.scrollTop > 2);
+  }
+
   return (
     <>
       <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)] relative">
-        {/* Sidebar */}
-        <aside
-          className={
-            'bg-[color:var(--bg-2,#14171d)] border-r border-[color:var(--border)] flex flex-col min-w-0 ' +
-            'fixed md:static inset-y-0 left-0 w-72 z-30 transform transition-transform duration-200 ' +
-            (drawerOpen
-              ? 'translate-x-0'
-              : '-translate-x-full md:translate-x-0')
-          }
-        >
-          <header className="px-3 py-3 flex items-center gap-2 border-b border-[color:var(--border)]">
-            <div className="text-base font-semibold flex-1">NanoClaw</div>
-            <button
-              type="button"
-              onClick={() => setDrawerOpen(false)}
-              className="md:hidden text-[color:var(--muted)] hover:text-[color:var(--fg)] px-2 text-lg"
-              aria-label="Close sidebar"
-            >
-              ✕
-            </button>
-          </header>
-          <nav className="flex-1 overflow-y-auto py-2">
-            {agents.map((a) => {
-              const sessions = sessionsByFolder[a.folder] || [];
-              const isCollapsed = collapsed.has(a.folder);
-              const isActiveAgent = folder === a.folder;
-              return (
-                <div key={a.folder} className="mb-1">
-                  <div
-                    className="px-2 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-[color:var(--card)] mx-1 rounded-md"
-                    onClick={() => toggleCollapse(a.folder)}
-                  >
-                    <span
-                      className="w-3 text-[10px] text-[color:var(--muted)] transition-transform"
-                      style={{
-                        transform: isCollapsed ? 'rotate(-90deg)' : 'none',
-                      }}
-                    >
-                      ▾
-                    </span>
-                    <span
-                      className="w-5 h-5 rounded-full grid place-items-center text-[10px] font-bold text-white shrink-0"
-                      style={{ background: avatarColor(a.folder) }}
-                    >
-                      {initials(a.name || a.folder)}
-                    </span>
-                    <span className="flex-1 text-[13px] font-medium truncate">
-                      {a.name || a.folder}
-                    </span>
-                    {isActiveAgent && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--accent)]" />
-                    )}
-                    <span className="text-[11px] text-[color:var(--muted)] bg-[color:var(--card)] rounded-full px-1.5">
-                      {sessions.length}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void newSession(a.folder);
-                      }}
-                      aria-label="New session"
-                      title="New session"
-                      className="text-[color:var(--muted)] hover:text-[color:var(--accent)] px-1 text-base leading-none"
-                    >
-                      ＋
-                    </button>
-                  </div>
-                  {!isCollapsed && (
-                    <div className="pl-1">
-                      {sessions.length === 0 && (
-                        <div className="px-10 py-1 text-[11px] text-[color:var(--muted)] italic">
-                          no sessions yet
-                        </div>
-                      )}
-                      {sessions.map((s) => {
-                        const active =
-                          a.folder === folder && s.id === sessionId;
-                        const isRenaming = renamingId === s.id;
-                        return (
-                          <div
-                            key={s.id}
-                            className={
-                              'group flex items-center gap-2 pl-10 pr-2 py-1 mx-1 rounded-md cursor-pointer ' +
-                              (active
-                                ? 'bg-[color:var(--accent)]/15'
-                                : 'hover:bg-[color:var(--card)]')
-                            }
-                            onClick={() =>
-                              !isRenaming && void switchTo(a.folder, s.id)
-                            }
-                            onDoubleClick={(e) => {
-                              e.preventDefault();
-                              setRenamingId(s.id);
-                              setRenameDraft(s.title || '');
-                            }}
-                          >
-                            {isRenaming ? (
-                              <input
-                                autoFocus
-                                value={renameDraft}
-                                onChange={(e) => setRenameDraft(e.target.value)}
-                                onBlur={() => commitRename(a.folder, s.id)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    void commitRename(a.folder, s.id);
-                                  } else if (e.key === 'Escape') {
-                                    setRenamingId(null);
-                                  }
-                                }}
-                                className="flex-1 bg-transparent border border-[color:var(--accent)] rounded px-1 text-[12.5px] focus:outline-none"
-                              />
-                            ) : (
-                              <span
-                                className={
-                                  'flex-1 text-[12.5px] truncate ' +
-                                  (active ? 'text-[color:var(--accent)]' : '')
-                                }
-                              >
-                                {s.title || (
-                                  <span className="text-[color:var(--muted)] italic">
-                                    New chat
-                                  </span>
-                                )}
-                              </span>
-                            )}
-                            <span className="text-[11px] text-[color:var(--muted)] shrink-0">
-                              {shortWhen(s.lastMessageAt || s.createdAt)}
-                            </span>
-                            <button
-                              type="button"
-                              disabled={regeneratingId === s.id}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                void regenerateTitle(a.folder, s.id);
-                              }}
-                              className={
-                                'opacity-0 group-hover:opacity-100 text-[color:var(--muted)] hover:text-[color:var(--accent)] text-xs shrink-0 ' +
-                                (regeneratingId === s.id
-                                  ? 'animate-spin opacity-100'
-                                  : '')
-                              }
-                              aria-label="Regenerate title"
-                              title="Regenerate title"
-                            >
-                              ↻
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                void deleteSession(a.folder, s.id);
-                              }}
-                              className="opacity-0 group-hover:opacity-100 text-[color:var(--muted)] hover:text-red-400 text-xs shrink-0"
-                              aria-label="Archive session"
-                              title="Archive"
-                            >
-                              ⌫
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </nav>
-          <div className="border-t border-[color:var(--border)] px-2 py-2 space-y-0.5">
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(true)}
-              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="16"
-                height="16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-              <span>Settings</span>
-            </button>
-            <Link
-              href="/admin"
-              className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="16"
-                height="16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M12 20h9" />
-                <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-              </svg>
-              <span>Admin</span>
-            </Link>
-          </div>
-        </aside>
+        <SidebarPane
+          agents={agents}
+          activeAgent={activeAgent}
+          folder={folder}
+          sessionId={sessionId}
+          pinnedSessions={pinnedSessions}
+          recentSessions={recentSessions}
+          agentPickerOpen={agentPickerOpen}
+          setAgentPickerOpen={setAgentPickerOpen}
+          menuFor={menuFor}
+          setMenuFor={setMenuFor}
+          drawerOpen={drawerOpen}
+          setDrawerOpen={setDrawerOpen}
+          setSettingsOpen={setSettingsOpen}
+          renamingId={renamingId}
+          setRenamingId={setRenamingId}
+          renameDraft={renameDraft}
+          setRenameDraft={setRenameDraft}
+          regeneratingId={regeneratingId}
+          switchTo={switchTo}
+          newSession={newSession}
+          commitRename={commitRename}
+          regenerateTitle={regenerateTitle}
+          deleteSession={deleteSession}
+          togglePin={togglePin}
+          setFolder={(f) => {
+            setFolder(f);
+            const list = sessionsByFolder[f] || [];
+            const next = list[0]?.id || null;
+            if (next) {
+              setSessionId(next);
+              pushUrl(f, next);
+            } else {
+              void newSession(f);
+            }
+          }}
+        />
+
         {drawerOpen && (
           <div
             className="md:hidden fixed inset-0 bg-black/40 z-20"
@@ -1055,83 +903,93 @@ export function ChatView() {
           />
         )}
 
-        {/* Main pane */}
-        <section className="flex flex-col min-h-0">
-          <div className="border-b border-[color:var(--border)] px-3 py-2 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setDrawerOpen(true)}
-              className="md:hidden h-8 w-8 rounded-md border border-[color:var(--border)] inline-flex items-center justify-center text-[color:var(--muted)] hover:text-[color:var(--fg)]"
-              aria-label="Open sidebar"
-            >
-              ☰
-            </button>
-            {activeAgent && (
-              <span className="inline-flex items-center gap-1.5 bg-[color:var(--card)] border border-[color:var(--border)] rounded-full px-2 py-0.5 text-xs shrink-0">
-                <span
-                  className="w-4 h-4 rounded-full grid place-items-center text-[9px] font-bold text-white"
-                  style={{ background: avatarColor(activeAgent.folder) }}
-                >
-                  {initials(activeAgent.name || activeAgent.folder)}
-                </span>
-                <span className="truncate max-w-[8rem]">
-                  {activeAgent.name || activeAgent.folder}
-                </span>
-              </span>
-            )}
-            <span className="text-sm font-medium truncate flex-1 min-w-0">
-              {activeSession?.title || (
-                <span className="text-[color:var(--muted)] italic">
-                  {activeSession ? 'New chat' : 'No session'}
-                </span>
-              )}
-            </span>
-            {(activity || typing) && (
-              <span className="text-xs text-[color:var(--muted)] truncate max-w-[14rem]">
-                … {activity || 'typing'}
-              </span>
-            )}
-          </div>
+        <section className="flex flex-col min-h-0 relative">
           <div
             ref={scrollRef}
-            className="flex-1 overflow-y-auto px-3 py-3 space-y-2"
+            onScroll={handleScroll}
+            className="flex-1 overflow-y-auto"
           >
-            {loadingHistory && (
-              <div className="text-center text-xs text-[color:var(--muted)]">
-                loading history…
+            <div
+              className={
+                'sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-[color:var(--bg)]/70 px-3 md:px-6 lg:px-10 py-2 flex items-center gap-2 transition-[border-color] duration-200 ' +
+                (scrolled
+                  ? 'border-b border-[color:var(--border)]'
+                  : 'border-b border-transparent')
+              }
+            >
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(true)}
+                className="md:hidden h-8 w-8 rounded-md border border-[color:var(--border)] inline-flex items-center justify-center text-[color:var(--muted)] hover:text-[color:var(--fg)]"
+                aria-label="Open sidebar"
+              >
+                ☰
+              </button>
+              <span className="text-sm font-medium truncate flex-1 min-w-0">
+                {activeSession?.title || (
+                  <span className="text-[color:var(--muted)] italic">
+                    {activeSession ? 'New chat' : 'No session'}
+                  </span>
+                )}
+              </span>
+              {(activity || typing) && (
+                <span className="text-[11px] text-[color:var(--muted)] truncate max-w-[14rem]">
+                  … {activity || 'typing'}
+                </span>
+              )}
+            </div>
+            <div className="px-3 md:px-6 lg:px-10 py-3">
+              <div className="max-w-3xl mx-auto space-y-3">
+                {loadingHistory && (
+                  <div className="text-center text-[11px] text-[color:var(--muted)]">
+                    loading history…
+                  </div>
+                )}
+                {!loadingHistory && messages.length === 0 && (
+                  <div className="min-h-[50dvh] flex items-center justify-center text-center px-6">
+                    <div className="text-[color:var(--muted)] text-sm">
+                      {folder && sessionId ? (
+                        <>
+                          New conversation with{' '}
+                          <span className="font-medium">
+                            {activeAgent?.name || folder}
+                          </span>
+                          .<br />
+                          Type a message below to start.
+                        </>
+                      ) : (
+                        'Pick or start a conversation from the sidebar.'
+                      )}
+                    </div>
+                  </div>
+                )}
+                {messages.map((m, idx) => {
+                  let onRegen: (() => void) | undefined;
+                  if (m.side === 'agent') {
+                    const prevUser = lastUserTextBeforeAgent(idx);
+                    if (prevUser) onRegen = () => void sendText(prevUser);
+                  }
+                  return (
+                    <div key={m.id} data-msg-id={m.id}>
+                      <Bubble m={m} onRegenerate={onRegen} />
+                    </div>
+                  );
+                })}
+                {(activity || typing) && messages.length > 0 && (
+                  <div className="flex justify-start">
+                    <div className="text-sm text-[color:var(--muted)] animate-pulse px-1">
+                      {activity ? `… ${activity}` : '…'}
+                    </div>
+                  </div>
+                )}
+                {messages.length > 0 && (
+                  <div ref={bottomSpacerRef} aria-hidden />
+                )}
               </div>
-            )}
-            {!loadingHistory && messages.length === 0 && (
-              <div className="h-full flex items-center justify-center text-center px-6">
-                <div className="text-[color:var(--muted)] text-sm">
-                  {folder && sessionId ? (
-                    <>
-                      New conversation with{' '}
-                      <span className="font-medium">{folder}</span>.<br />
-                      Type a message below to start.
-                    </>
-                  ) : (
-                    'Pick or start a conversation from the sidebar.'
-                  )}
-                </div>
-              </div>
-            )}
-            {messages.map((m) => (
-              <div key={m.id} data-msg-id={m.id}>
-                <Bubble m={m} />
-              </div>
-            ))}
-            {(activity || typing) && messages.length > 0 && (
-              <div className="flex justify-start">
-                <div className="rounded-2xl rounded-bl-md bg-[color:var(--card)] border border-[color:var(--border)] px-3 py-2 text-sm text-[color:var(--muted)] animate-pulse max-w-full truncate">
-                  {activity ? `… ${activity}` : '…'}
-                </div>
-              </div>
-            )}
-            {messages.length > 0 && <div ref={bottomSpacerRef} aria-hidden />}
+            </div>
           </div>
           <form
-            className="border-t border-[color:var(--border)] p-2 flex gap-2 items-end"
+            className="px-3 md:px-6 lg:px-10 pt-2"
             style={{
               paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))',
             }}
@@ -1151,115 +1009,243 @@ export function ChatView() {
                 e.target.value = '';
               }}
             />
-            <button
-              type="button"
-              aria-label="Attach"
-              disabled={!folder || !sessionId || uploading || recording}
-              onClick={() => fileInputRef.current?.click()}
-              className="h-9 inline-flex items-center justify-center rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-3 text-sm leading-none transition-all duration-150 hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[color:var(--card)] disabled:hover:border-[color:var(--border)] disabled:active:scale-100"
-              title="Attach file"
-            >
-              📎
-            </button>
-            <button
-              type="button"
-              aria-label={recording ? 'Stop recording' : 'Record voice'}
-              disabled={!folder || !sessionId || uploading}
-              onClick={() =>
-                recording ? stopRecording() : void startRecording()
-              }
-              className={
-                'h-9 inline-flex items-center justify-center rounded-md border px-3 text-sm leading-none transition-all duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 ' +
-                (recording
-                  ? 'border-red-500 bg-red-500/20 text-red-300 animate-pulse'
-                  : 'border-[color:var(--border)] bg-[color:var(--card)] hover:border-[color:var(--accent)] hover:bg-[color:var(--accent)]/10')
-              }
-              title={recording ? 'Stop recording' : 'Record voice message'}
-            >
-              {recording ? '⏹' : '🎙'}
-            </button>
-            <div className="relative flex-1 min-w-0">
-              {pickerVisible && (
-                <div className="absolute bottom-full left-0 right-0 mb-1 max-h-60 overflow-y-auto rounded-md border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-10">
-                  {pickerOptions.map((c, i) => (
-                    <button
-                      type="button"
-                      key={c.name}
-                      ref={(el) => {
-                        pickerItemRefs.current[i] = el;
-                      }}
-                      onMouseDown={(e) => {
+            <div className="max-w-3xl mx-auto">
+              <div
+                data-popover
+                className="relative rounded-3xl bg-[color:var(--card)] border border-[color:var(--border)] focus-within:border-[color:var(--accent)]/60 transition-colors px-3 pt-3 pb-2 shadow-sm"
+              >
+                {pickerVisible && (
+                  <div className="absolute bottom-full left-0 right-0 mb-2 max-h-60 overflow-y-auto rounded-2xl border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-10">
+                    {pickerOptions.map((c, i) => (
+                      <button
+                        type="button"
+                        key={c.name}
+                        ref={(el) => {
+                          pickerItemRefs.current[i] = el;
+                        }}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          applyCommand(c.name);
+                        }}
+                        onMouseEnter={() => setPickerIndex(i)}
+                        className={
+                          'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline transition-colors duration-100 ' +
+                          (i === pickerIndex
+                            ? 'bg-[color:var(--accent)]/20'
+                            : 'hover:bg-white/5')
+                        }
+                      >
+                        <span className="font-mono">/{c.name}</span>
+                        <span className="text-xs text-[color:var(--muted)] truncate">
+                          {c.description}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (pickerVisible) {
+                      if (e.key === 'ArrowDown') {
                         e.preventDefault();
-                        applyCommand(c.name);
-                      }}
-                      onMouseEnter={() => setPickerIndex(i)}
-                      className={
-                        'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline transition-colors duration-100 ' +
-                        (i === pickerIndex
-                          ? 'bg-[color:var(--accent)]/20'
-                          : 'hover:bg-white/5')
+                        setPickerIndex((i) => (i + 1) % pickerOptions.length);
+                        return;
                       }
+                      if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setPickerIndex(
+                          (i) =>
+                            (i - 1 + pickerOptions.length) %
+                            pickerOptions.length,
+                        );
+                        return;
+                      }
+                      if (
+                        e.key === 'Tab' ||
+                        (e.key === 'Enter' && !e.shiftKey)
+                      ) {
+                        e.preventDefault();
+                        const pick = pickerOptions[pickerIndex];
+                        if (pick) applyCommand(pick.name);
+                        return;
+                      }
+                      if (e.key === 'Escape') {
+                        e.preventDefault();
+                        setInput('');
+                        return;
+                      }
+                    }
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void send();
+                    }
+                  }}
+                  rows={1}
+                  placeholder={
+                    folder && sessionId
+                      ? `Message ${activeAgent?.name || folder}…`
+                      : 'Pick or start a conversation'
+                  }
+                  className="w-full block min-h-[24px] resize-none overflow-y-auto bg-transparent border-0 px-1 text-sm focus:outline-none leading-6 placeholder:text-[color:var(--muted)]"
+                />
+                <div className="mt-1 flex items-center gap-1 flex-wrap">
+                  <button
+                    type="button"
+                    aria-label="Attach file"
+                    title="Attach file"
+                    disabled={!folder || !sessionId || uploading || recording}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="h-8 w-8 inline-flex items-center justify-center rounded-full text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-white/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="18"
+                      height="18"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
                     >
-                      <span className="font-mono">/{c.name}</span>
-                      <span className="text-xs text-[color:var(--muted)] truncate">
-                        {c.description}
-                      </span>
-                    </button>
-                  ))}
+                      <line x1="12" y1="5" x2="12" y2="19" />
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={recording ? 'Stop recording' : 'Record voice'}
+                    title={
+                      recording ? 'Stop recording' : 'Record voice message'
+                    }
+                    disabled={!folder || !sessionId || uploading}
+                    onClick={() =>
+                      recording ? stopRecording() : void startRecording()
+                    }
+                    className={
+                      'h-8 w-8 inline-flex items-center justify-center rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed ' +
+                      (recording
+                        ? 'text-red-400 bg-red-500/15 animate-pulse'
+                        : 'text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-white/5')
+                    }
+                  >
+                    {recording ? (
+                      <svg
+                        viewBox="0 0 24 24"
+                        width="14"
+                        height="14"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <rect x="6" y="6" width="12" height="12" rx="1" />
+                      </svg>
+                    ) : (
+                      <svg
+                        viewBox="0 0 24 24"
+                        width="18"
+                        height="18"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <rect x="9" y="3" width="6" height="12" rx="3" />
+                        <path d="M5 11a7 7 0 0 0 14 0" />
+                        <line x1="12" y1="18" x2="12" y2="22" />
+                      </svg>
+                    )}
+                  </button>
+                  <div className="flex-1" />
+                  {activeAgent && (
+                    <div className="relative" data-popover>
+                      <button
+                        type="button"
+                        onClick={() => setComposerMenu((v) => !v)}
+                        className="h-7 inline-flex items-center gap-1 rounded-full px-2.5 text-[11px] text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-white/5 border border-[color:var(--border)] transition-colors"
+                      >
+                        <span>
+                          {modelLabel(activeAgent.model)}
+                          <span className="opacity-60"> · </span>
+                          {effortLabel(activeAgent.effort)}
+                        </span>
+                        <svg
+                          viewBox="0 0 24 24"
+                          width="10"
+                          height="10"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                      </button>
+                      {composerMenu && folder && (
+                        <div className="absolute bottom-full right-0 mb-2 min-w-[12rem] rounded-xl border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-20 py-1">
+                          <div className="px-3 pt-1 pb-1 text-[10px] uppercase tracking-wider text-[color:var(--muted)]">
+                            Model
+                          </div>
+                          {MODEL_OPTIONS.map((opt) => (
+                            <MenuItem
+                              key={opt.id}
+                              label={opt.label}
+                              active={activeAgent.model === opt.id}
+                              onClick={() => {
+                                void updateActiveAgentModel(opt.id);
+                              }}
+                            />
+                          ))}
+                          <div className="h-px my-1 bg-[color:var(--border)]" />
+                          <div className="px-3 pt-1 pb-1 text-[10px] uppercase tracking-wider text-[color:var(--muted)]">
+                            Effort
+                          </div>
+                          {EFFORT_OPTIONS.map((opt) => (
+                            <MenuItem
+                              key={opt}
+                              label={effortLabel(opt)}
+                              active={activeAgent.effort === opt}
+                              onClick={() => {
+                                void updateActiveAgentEffort(opt);
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    type="submit"
+                    aria-label="Send"
+                    disabled={!folder || !sessionId || !input.trim() || sending}
+                    className="h-8 w-8 inline-flex items-center justify-center rounded-full bg-[color:var(--accent)] text-white transition-all duration-150 hover:brightness-110 active:scale-95 disabled:bg-[color:var(--border)] disabled:text-[color:var(--muted)] disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="16"
+                      height="16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <line x1="12" y1="19" x2="12" y2="5" />
+                      <polyline points="5 12 12 5 19 12" />
+                    </svg>
+                  </button>
                 </div>
-              )}
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (pickerVisible) {
-                    if (e.key === 'ArrowDown') {
-                      e.preventDefault();
-                      setPickerIndex((i) => (i + 1) % pickerOptions.length);
-                      return;
-                    }
-                    if (e.key === 'ArrowUp') {
-                      e.preventDefault();
-                      setPickerIndex(
-                        (i) =>
-                          (i - 1 + pickerOptions.length) % pickerOptions.length,
-                      );
-                      return;
-                    }
-                    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
-                      e.preventDefault();
-                      const pick = pickerOptions[pickerIndex];
-                      if (pick) applyCommand(pick.name);
-                      return;
-                    }
-                    if (e.key === 'Escape') {
-                      e.preventDefault();
-                      setInput('');
-                      return;
-                    }
-                  }
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    void send();
-                  }
-                }}
-                rows={1}
-                placeholder={
-                  folder && sessionId
-                    ? `Message ${activeAgent?.name || folder}…`
-                    : 'Pick or start a conversation'
-                }
-                className="w-full block min-h-9 resize-none overflow-y-auto bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-[color:var(--accent)] leading-5 align-bottom"
-              />
+              </div>
+              <div className="text-center text-[10px] text-[color:var(--muted)] mt-1.5 px-2">
+                NanoClaw is AI and can make mistakes. Verify important info.
+              </div>
             </div>
-            <button
-              type="submit"
-              disabled={!folder || !sessionId || !input.trim() || sending}
-              className="h-9 inline-flex items-center justify-center rounded-md bg-[color:var(--accent)] text-white px-4 text-sm leading-none transition-all duration-150 hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
-            >
-              Send
-            </button>
           </form>
         </section>
       </div>
@@ -1268,5 +1254,465 @@ export function ChatView() {
         onClose={() => setSettingsOpen(false)}
       />
     </>
+  );
+}
+
+interface SidebarProps {
+  agents: UserAgent[];
+  activeAgent: UserAgent | null;
+  folder: string | null;
+  sessionId: string | null;
+  pinnedSessions: WebSession[];
+  recentSessions: WebSession[];
+  agentPickerOpen: boolean;
+  setAgentPickerOpen: (v: boolean) => void;
+  menuFor: string | null;
+  setMenuFor: (v: string | null) => void;
+  drawerOpen: boolean;
+  setDrawerOpen: (v: boolean) => void;
+  setSettingsOpen: (v: boolean) => void;
+  renamingId: string | null;
+  setRenamingId: (v: string | null) => void;
+  renameDraft: string;
+  setRenameDraft: (v: string) => void;
+  regeneratingId: string | null;
+  switchTo: (f: string, s: string) => void;
+  newSession: (f: string) => void;
+  commitRename: (f: string, id: string) => void;
+  regenerateTitle: (f: string, id: string) => void;
+  deleteSession: (f: string, id: string) => void;
+  togglePin: (f: string, s: WebSession) => void;
+  setFolder: (f: string) => void;
+}
+
+function SidebarPane(p: SidebarProps) {
+  return (
+    <aside
+      className={
+        'bg-[color:var(--bg-2,#14171d)] border-r border-[color:var(--border)] flex flex-col min-w-0 ' +
+        'fixed md:static inset-y-0 left-0 w-72 z-30 transform transition-transform duration-200 ' +
+        (p.drawerOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0')
+      }
+    >
+      <header className="px-3 py-3 flex items-center gap-2 border-b border-[color:var(--border)]">
+        <div className="text-base font-semibold flex-1">NanoClaw</div>
+        <button
+          type="button"
+          onClick={() => p.setDrawerOpen(false)}
+          className="md:hidden text-[color:var(--muted)] hover:text-[color:var(--fg)] px-2 text-lg"
+          aria-label="Close sidebar"
+        >
+          ✕
+        </button>
+      </header>
+
+      {/* Agent picker */}
+      <div className="px-2 pt-2 pb-1 relative" data-popover>
+        <button
+          type="button"
+          onClick={() => p.setAgentPickerOpen(!p.agentPickerOpen)}
+          className="w-full flex items-center gap-2 px-2 py-2 rounded-md hover:bg-[color:var(--card)] transition-colors"
+        >
+          {p.activeAgent && (
+            <span
+              className="w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white shrink-0"
+              style={{ background: avatarColor(p.activeAgent.folder) }}
+            >
+              {initials(p.activeAgent.name || p.activeAgent.folder)}
+            </span>
+          )}
+          <span className="flex-1 text-sm font-medium truncate text-left">
+            {p.activeAgent?.name || p.activeAgent?.folder || 'Pick agent'}
+          </span>
+          <svg
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="text-[color:var(--muted)]"
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        {p.agentPickerOpen && (
+          <div className="absolute left-2 right-2 top-full mt-1 z-20 rounded-md border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg py-1 max-h-72 overflow-y-auto">
+            {p.agents.map((a) => {
+              const active = a.folder === p.folder;
+              return (
+                <button
+                  type="button"
+                  key={a.folder}
+                  onClick={() => {
+                    p.setFolder(a.folder);
+                    p.setAgentPickerOpen(false);
+                  }}
+                  className={
+                    'w-full flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-white/5 ' +
+                    (active ? 'text-[color:var(--accent)]' : '')
+                  }
+                >
+                  <span
+                    className="w-5 h-5 rounded-full grid place-items-center text-[9px] font-bold text-white shrink-0"
+                    style={{ background: avatarColor(a.folder) }}
+                  >
+                    {initials(a.name || a.folder)}
+                  </span>
+                  <span className="flex-1 truncate text-left">
+                    {a.name || a.folder}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* New chat button */}
+      <div className="px-2 pb-2">
+        <button
+          type="button"
+          onClick={() => p.folder && p.newSession(p.folder)}
+          disabled={!p.folder}
+          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors disabled:opacity-50"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span>New chat</span>
+        </button>
+      </div>
+
+      <nav className="flex-1 overflow-y-auto py-1">
+        {p.pinnedSessions.length > 0 && (
+          <SessionGroup
+            label="Starred"
+            sessions={p.pinnedSessions}
+            {...p}
+            folder={p.folder!}
+          />
+        )}
+        {p.recentSessions.length > 0 && (
+          <SessionGroup
+            label="Recents"
+            sessions={p.recentSessions}
+            {...p}
+            folder={p.folder!}
+          />
+        )}
+        {p.folder &&
+          p.pinnedSessions.length === 0 &&
+          p.recentSessions.length === 0 && (
+            <div className="px-3 py-3 text-[11px] text-[color:var(--muted)] italic">
+              no chats yet
+            </div>
+          )}
+      </nav>
+
+      <div className="border-t border-[color:var(--border)] px-2 py-2 space-y-0.5">
+        <button
+          type="button"
+          onClick={() => p.setSettingsOpen(true)}
+          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+          <span>Settings</span>
+        </button>
+        <Link
+          href="/admin"
+          className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+          </svg>
+          <span>Admin</span>
+        </Link>
+      </div>
+    </aside>
+  );
+}
+
+function MenuItem({
+  icon,
+  label,
+  onClick,
+  disabled,
+  danger,
+  active,
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={
+        'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-white/5 disabled:opacity-50 ' +
+        (danger ? 'text-red-400 ' : active ? 'text-[color:var(--accent)] ' : '')
+      }
+    >
+      {icon && <span className="opacity-70 shrink-0">{icon}</span>}
+      <span className="flex-1 truncate">{label}</span>
+    </button>
+  );
+}
+
+interface SessionGroupProps extends SidebarProps {
+  label: string;
+  sessions: WebSession[];
+  folder: string;
+}
+
+function SessionGroup(p: SessionGroupProps) {
+  return (
+    <div className="mb-2">
+      <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-[color:var(--muted)]">
+        {p.label}
+      </div>
+      {p.sessions.map((s) => (
+        <SessionRow key={s.id} s={s} {...p} />
+      ))}
+    </div>
+  );
+}
+
+interface SessionRowProps extends SidebarProps {
+  s: WebSession;
+  folder: string;
+}
+
+function SessionRow(p: SessionRowProps) {
+  const { s } = p;
+  const active = p.folder === s.folder && p.sessionId === s.id;
+  const isRenaming = p.renamingId === s.id;
+  const menuOpen = p.menuFor === s.id;
+  return (
+    <div
+      className={
+        'group flex items-center gap-1 pl-3 pr-1 py-1 mx-1 rounded-md cursor-pointer relative ' +
+        (active
+          ? 'bg-[color:var(--accent)]/15'
+          : 'hover:bg-[color:var(--card)]')
+      }
+      onClick={() => !isRenaming && p.switchTo(p.folder, s.id)}
+      onDoubleClick={(e) => {
+        e.preventDefault();
+        p.setRenamingId(s.id);
+        p.setRenameDraft(s.title || '');
+      }}
+    >
+      {isRenaming ? (
+        <input
+          autoFocus
+          value={p.renameDraft}
+          onChange={(e) => p.setRenameDraft(e.target.value)}
+          onBlur={() => p.commitRename(p.folder, s.id)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              p.commitRename(p.folder, s.id);
+            } else if (e.key === 'Escape') {
+              p.setRenamingId(null);
+            }
+          }}
+          className="flex-1 bg-transparent border border-[color:var(--accent)] rounded px-1 text-[12.5px] focus:outline-none"
+        />
+      ) : (
+        <span
+          className={
+            'flex-1 min-w-0 text-[12.5px] overflow-hidden whitespace-nowrap ' +
+            (active ? 'text-[color:var(--accent)]' : '')
+          }
+          style={{
+            maskImage:
+              'linear-gradient(to right, black 0, black 85%, transparent 100%)',
+            WebkitMaskImage:
+              'linear-gradient(to right, black 0, black 85%, transparent 100%)',
+          }}
+        >
+          {s.title || (
+            <span className="text-[color:var(--muted)] italic">New chat</span>
+          )}
+        </span>
+      )}
+      {!isRenaming && (
+        <div className="relative" data-popover>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              p.setMenuFor(menuOpen ? null : s.id);
+            }}
+            aria-label="More actions"
+            className={
+              'h-5 w-5 inline-flex items-center justify-center rounded text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-white/10 transition-opacity ' +
+              (active || menuOpen
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100')
+            }
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="14"
+              height="14"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="5" r="1.5" />
+              <circle cx="12" cy="12" r="1.5" />
+              <circle cx="12" cy="19" r="1.5" />
+            </svg>
+          </button>
+          {menuOpen && (
+            <div
+              className="absolute right-0 top-full mt-1 z-20 min-w-[10rem] rounded-md border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg py-1 text-sm"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MenuItem
+                onClick={() => {
+                  p.togglePin(p.folder, s);
+                  p.setMenuFor(null);
+                }}
+                icon={
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="13"
+                    height="13"
+                    fill={s.pinned ? 'currentColor' : 'none'}
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                  </svg>
+                }
+                label={s.pinned ? 'Unstar' : 'Star'}
+              />
+              <MenuItem
+                onClick={() => {
+                  p.setRenamingId(s.id);
+                  p.setRenameDraft(s.title || '');
+                  p.setMenuFor(null);
+                }}
+                icon={
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="13"
+                    height="13"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                  </svg>
+                }
+                label="Rename"
+              />
+              <MenuItem
+                disabled={p.regeneratingId === s.id}
+                onClick={() => {
+                  p.regenerateTitle(p.folder, s.id);
+                  p.setMenuFor(null);
+                }}
+                icon={
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="13"
+                    height="13"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className={p.regeneratingId === s.id ? 'animate-spin' : ''}
+                  >
+                    <polyline points="23 4 23 10 17 10" />
+                    <polyline points="1 20 1 14 7 14" />
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                  </svg>
+                }
+                label={
+                  p.regeneratingId === s.id
+                    ? 'Regenerating…'
+                    : 'Regenerate title'
+                }
+              />
+              <div className="h-px my-1 bg-[color:var(--border)]" />
+              <MenuItem
+                onClick={() => {
+                  p.deleteSession(p.folder, s.id);
+                  p.setMenuFor(null);
+                }}
+                danger
+                icon={
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="13"
+                    height="13"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="21 8 21 21 3 21 3 8" />
+                    <rect x="1" y="3" width="22" height="5" />
+                    <line x1="10" y1="12" x2="14" y2="12" />
+                  </svg>
+                }
+                label="Archive"
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

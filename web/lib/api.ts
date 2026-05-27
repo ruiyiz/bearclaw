@@ -59,6 +59,8 @@ export interface UserAgent {
   name: string;
   trigger: string;
   webJid: string;
+  model: string;
+  effort: string;
 }
 
 export interface SlashCommand {
@@ -154,7 +156,17 @@ async function send<T>(
 export const api = {
   // user
   userAgents: () =>
-    get<{ agents: UserAgent[]; main: string }>('/api/user/agents'),
+    get<{
+      agents: UserAgent[];
+      main: string;
+      defaults: { model: string; effort: string };
+    }>('/api/user/agents'),
+  updateAgent: (folder: string, body: { model?: string; effort?: string }) =>
+    send<{ ok: boolean; model: string; effort: string }>(
+      `/api/user/agents/${encodeURIComponent(folder)}`,
+      'PATCH',
+      body,
+    ),
   chat: (folder: string, sessionId: string, text: string) =>
     send<{ ok: boolean; jid: string; sessionId: string }>(
       '/api/user/chat',

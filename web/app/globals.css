@@ -2,7 +2,6 @@
 
 :root {
   color-scheme: light dark;
-  --app-font: var(--font-geist);
 }
 
 html, body {
@@ -26,15 +25,23 @@ html, body {
 }
 
 body {
-  font-family: var(--app-font), ui-sans-serif, system-ui, -apple-system,
-    'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
   background: var(--bg);
   color: var(--fg);
+}
+
+/* Chat-only font + size. UI stays at its defaults. The body boot script
+   sets --chat-font and --chat-font-size on <body>; .chat-md (the
+   MarkdownBody wrapper on every chat message) consumes them. */
+.chat-md {
+  font-family: var(--chat-font);
+  font-size: var(--chat-font-size, 0.875rem);
+  line-height: 1.5;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0b0d10;
+    --bg-2: #14171d;
     --fg: #e6e8eb;
     --muted: #9aa0a6;
     --card: #15181c;
@@ -46,10 +53,34 @@ body {
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #ffffff;
+    --bg-2: #f3f4f6;
     --fg: #111418;
     --muted: #5f6368;
     --card: #f6f8fa;
     --border: #e3e6ea;
     --accent: #3457dc;
   }
+}
+
+/* Explicit theme overrides win over media query via attribute specificity. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b0d10;
+  --bg-2: #14171d;
+  --fg: #e6e8eb;
+  --muted: #9aa0a6;
+  --card: #15181c;
+  --border: #232830;
+  --accent: #7aa2f7;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-2: #f3f4f6;
+  --fg: #111418;
+  --muted: #5f6368;
+  --card: #f6f8fa;
+  --border: #e3e6ea;
+  --accent: #3457dc;
 }

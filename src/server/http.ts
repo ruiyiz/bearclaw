@@ -57,6 +57,12 @@ export interface HttpServerOpts {
   webChannel: WebChannel;
   registeredAgents: () => Record<string, RegisteredAgent>;
   registerWebAgent: (folder: string) => void;
+  getAgentModel: (folder: string) => string | undefined;
+  setAgentModel: (folder: string, model: string) => void;
+  getAgentEffort: (folder: string) => string | undefined;
+  setAgentEffort: (folder: string, effort: string) => void;
+  defaultModel: string;
+  defaultEffort: string;
 }
 
 const DEFAULT_PORT = parseInt(process.env.NANOCLAW_HTTP_PORT || '7878', 10);
@@ -268,8 +274,29 @@ add('GET', /^\/api\/user\/agents$/, (_req, res, _url, opts) => {
       name: a.name,
       trigger: a.trigger,
       webJid: `web:${a.folder}`,
+      model: opts.getAgentModel(a.folder) || opts.defaultModel,
+      effort: opts.getAgentEffort(a.folder) || opts.defaultEffort,
     })),
     main: MAIN_AGENT_FOLDER,
+    defaults: { model: opts.defaultModel, effort: opts.defaultEffort },
+  });
+});
+
+add('PATCH', /^\/api\/user\/agents\/([^/]+)$/, async (req, res, _url, opts) => {
+  const m = _url.pathname.match(/^\/api\/user\/agents\/([^/]+)$/);
+  const folder = m ? decodeURIComponent(m[1]) : '';
+  if (!folder) return json(res, 400, { error: 'missing folder' });
+  const body = (await readBody(req)) as { model?: string; effort?: string };
+  if (typeof body.model === 'string' && body.model.length > 0) {
+    opts.setAgentModel(folder, body.model);
+  }
+  if (typeof body.effort === 'string' && body.effort.length > 0) {
+    opts.setAgentEffort(folder, body.effort);
+  }
+  json(res, 200, {
+    ok: true,
+    model: opts.getAgentModel(folder) || opts.defaultModel,
+    effort: opts.getAgentEffort(folder) || opts.defaultEffort,
   });
 });
 

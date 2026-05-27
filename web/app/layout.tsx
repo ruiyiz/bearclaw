@@ -5,7 +5,9 @@ import {
   Geist,
   IBM_Plex_Sans,
   Inter,
+  Lora,
   Manrope,
+  Source_Serif_4,
   Space_Grotesk,
 } from 'next/font/google';
 import { ServiceWorkerRegister } from './sw-register';
@@ -36,8 +38,18 @@ const plex = IBM_Plex_Sans({
   variable: '--font-plex',
   display: 'swap',
 });
+const sourceSerif = Source_Serif_4({
+  subsets: ['latin'],
+  variable: '--font-source-serif',
+  display: 'swap',
+});
+const lora = Lora({
+  subsets: ['latin'],
+  variable: '--font-lora',
+  display: 'swap',
+});
 
-const fontVars = [geist, spaceGrotesk, inter, manrope, plex]
+const fontVars = [geist, spaceGrotesk, inter, manrope, plex, sourceSerif, lora]
   .map((f) => f.variable)
   .join(' ');
 
@@ -65,9 +77,11 @@ export const viewport: Viewport = {
   viewportFit: 'cover',
 };
 
-// Apply saved font choice before paint so the page doesn't flash with the
-// default font and then re-flow when the client effect catches up.
-const FONT_BOOT_SCRIPT = `try{var v=localStorage.getItem('nc.font');if(v){document.documentElement.style.setProperty('--app-font','var(--font-'+v+')');}}catch(e){}`;
+// Apply saved theme before paint so the page doesn't flash. Chat-only font +
+// size are applied on body after <body> exists, because the next/font
+// `--font-*` CSS variables are scoped to <body>.
+const HEAD_BOOT_SCRIPT = `try{var t=localStorage.getItem('nc.theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}`;
+const BODY_BOOT_SCRIPT = `try{var v=localStorage.getItem('nc.font')||'geist';document.body.style.setProperty('--chat-font',"var(--font-"+v+"), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif");var s=localStorage.getItem('nc.fontSize')||'md';var px={sm:13,md:14,lg:16,xl:18}[s]||14;document.body.style.setProperty('--chat-font-size',px+'px');}catch(e){}`;
 
 export default function RootLayout({
   children,
@@ -77,9 +91,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <script dangerouslySetInnerHTML={{ __html: FONT_BOOT_SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: HEAD_BOOT_SCRIPT }} />
       </head>
       <body className={`${fontVars} h-dvh flex flex-col overflow-hidden`}>
+        <script dangerouslySetInnerHTML={{ __html: BODY_BOOT_SCRIPT }} />
         <ServiceWorkerRegister />
         {children}
       </body>
