@@ -4,7 +4,9 @@ import os from 'os';
 import path from 'path';
 
 import {
+  AGENTS_DIR,
   CONFIG_DIR,
+  CONTEXT_DIR,
   DATA_DIR,
   SKILLS_DIR as NANOCLAW_SKILLS_DIR,
   agentVarDir,
@@ -477,6 +479,139 @@ export function readSkillContent(skillPath: string): string {
   } catch {
     return '(unable to read file)';
   }
+}
+
+// ─── Context files ──────────────────────────────────────────────────────────
+
+export type ContextScope = 'shared' | 'agent';
+
+export interface ContextFile {
+  scope: ContextScope;
+  folder: string | null; // null for shared
+  name: string;
+  path: string;
+  size: number;
+  modifiedAt: string;
+}
+
+export interface ContextListing {
+  shared: ContextFile[];
+  agents: Array<{ folder: string; files: ContextFile[] }>;
+}
+
+const NAME_RE = /^[A-Za-z0-9._-]+\.md$/;
+const FOLDER_RE = /^[A-Za-z0-9._-]+$/;
+
+function statContextFile(
+  scope: ContextScope,
+  folder: string | null,
+  name: string,
+  full: string,
+): ContextFile {
+  const st = fs.statSync(full);
+  return {
+    scope,
+    folder,
+    name,
+    path: full,
+    size: st.size,
+    modifiedAt: st.mtime.toISOString(),
+  };
+}
+
+function listMarkdownIn(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md'))
+    .map((e) => e.name)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+export function listContextFiles(): ContextListing {
+  const shared = listMarkdownIn(CONTEXT_DIR).map((n) =>
+    statContextFile('shared', null, n, path.join(CONTEXT_DIR, n)),
+  );
+  const agents: Array<{ folder: string; files: ContextFile[] }> = [];
+  if (fs.existsSync(AGENTS_DIR)) {
+    const entries = fs
+      .readdirSync(AGENTS_DIR, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of entries) {
+      const agentDir = path.join(AGENTS_DIR, e.name);
+      const files = listMarkdownIn(agentDir).map((n) =>
+        statContextFile('agent', e.name, n, path.join(agentDir, n)),
+      );
+      agents.push({ folder: e.name, files });
+    }
+  }
+  return { shared, agents };
+}
+
+function resolveContextPath(
+  scope: ContextScope,
+  folder: string | null,
+  name: string,
+): string {
+  if (!NAME_RE.test(name)) throw new Error('invalid filename');
+  if (scope === 'shared') {
+    return path.join(CONTEXT_DIR, name);
+  }
+  if (!folder || !FOLDER_RE.test(folder)) throw new Error('invalid folder');
+  const agentDir = path.join(AGENTS_DIR, folder);
+  if (!fs.existsSync(agentDir) || !fs.statSync(agentDir).isDirectory()) {
+    throw new Error('agent folder not found');
+  }
+  return path.join(agentDir, name);
+}
+
+export function readContextFile(
+  scope: ContextScope,
+  folder: string | null,
+  name: string,
+): { content: string; modifiedAt: string } {
+  const full = resolveContextPath(scope, folder, name);
+  const st = fs.statSync(full);
+  const content = fs.readFileSync(full, 'utf-8');
+  return { content, modifiedAt: st.mtime.toISOString() };
+}
+
+export function writeContextFile(
+  scope: ContextScope,
+  folder: string | null,
+  name: string,
+  content: string,
+): { modifiedAt: string } {
+  const full = resolveContextPath(scope, folder, name);
+  const dir = path.dirname(full);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${full}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, content, 'utf-8');
+  fs.renameSync(tmp, full);
+  const st = fs.statSync(full);
+  return { modifiedAt: st.mtime.toISOString() };
+}
+
+export function createContextFile(
+  scope: ContextScope,
+  folder: string | null,
+  name: string,
+  content = '',
+): { modifiedAt: string } {
+  const full = resolveContextPath(scope, folder, name);
+  if (fs.existsSync(full)) throw new Error('file already exists');
+  return writeContextFile(scope, folder, name, content);
+}
+
+export function deleteContextFile(
+  scope: ContextScope,
+  folder: string | null,
+  name: string,
+): void {
+  const full = resolveContextPath(scope, folder, name);
+  if (!fs.existsSync(full)) throw new Error('file not found');
+  fs.unlinkSync(full);
 }
 
 // ─── Heartbeat ──────────────────────────────────────────────────────────────

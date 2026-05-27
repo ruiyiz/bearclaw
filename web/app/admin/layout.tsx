@@ -15,6 +15,7 @@ export default function AdminLayout({
           { href: '/admin/events', label: 'Events' },
           { href: '/admin/handlers', label: 'Handlers' },
           { href: '/admin/agents', label: 'Agents' },
+          { href: '/admin/context', label: 'Context' },
           { href: '/admin/health', label: 'Health' },
           { href: '/admin/heartbeat', label: 'Heartbeat' },
           { href: '/admin/transcripts', label: 'Transcripts' },

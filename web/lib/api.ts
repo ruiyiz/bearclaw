@@ -104,6 +104,22 @@ export interface TranscriptMessage {
   content: string;
 }
 
+export type ContextScope = 'shared' | 'agent';
+
+export interface ContextFile {
+  scope: ContextScope;
+  folder: string | null;
+  name: string;
+  path: string;
+  size: number;
+  modifiedAt: string;
+}
+
+export interface ContextListing {
+  shared: ContextFile[];
+  agents: Array<{ folder: string; files: ContextFile[] }>;
+}
+
 function readCookie(name: string): string | null {
   if (typeof document === 'undefined') return null;
   for (const part of document.cookie.split(';')) {
@@ -293,6 +309,54 @@ export const api = {
     get<{ messages: TranscriptMessage[] }>(
       `/api/admin/transcripts/messages?folder=${encodeURIComponent(folder)}&sessionId=${encodeURIComponent(sessionId)}`,
     ),
+  contextList: () => get<ContextListing>('/api/admin/context'),
+  contextRead: (scope: ContextScope, folder: string | null, name: string) => {
+    const p = new URLSearchParams({ scope, name });
+    if (scope === 'agent' && folder) p.set('folder', folder);
+    return get<{
+      scope: ContextScope;
+      folder: string | null;
+      name: string;
+      content: string;
+      modifiedAt: string;
+    }>(`/api/admin/context/file?${p.toString()}`);
+  },
+  contextWrite: (
+    scope: ContextScope,
+    folder: string | null,
+    name: string,
+    content: string,
+  ) => {
+    const p = new URLSearchParams({ scope, name });
+    if (scope === 'agent' && folder) p.set('folder', folder);
+    return send<{ ok: boolean; modifiedAt: string }>(
+      `/api/admin/context/file?${p.toString()}`,
+      'PUT',
+      { content },
+    );
+  },
+  contextCreate: (
+    scope: ContextScope,
+    folder: string | null,
+    name: string,
+    content = '',
+  ) => {
+    const p = new URLSearchParams({ scope, name });
+    if (scope === 'agent' && folder) p.set('folder', folder);
+    return send<{ ok: boolean; modifiedAt: string }>(
+      `/api/admin/context/file?${p.toString()}`,
+      'POST',
+      { content },
+    );
+  },
+  contextDelete: (scope: ContextScope, folder: string | null, name: string) => {
+    const p = new URLSearchParams({ scope, name });
+    if (scope === 'agent' && folder) p.set('folder', folder);
+    return send<{ ok: boolean }>(
+      `/api/admin/context/file?${p.toString()}`,
+      'DELETE',
+    );
+  },
   health: () => get<{ checks: HealthCheck[] }>('/api/admin/health'),
   heartbeat: (folder: string, lines = 40) =>
     get<{ folder: string; log: string }>(

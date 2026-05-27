@@ -42,13 +42,19 @@ import {
   getRecentEvents,
   getRecentHandlerLogs,
   getRegisteredAgents,
+  createContextFile,
+  deleteContextFile,
   installSkill,
+  listContextFiles,
   pauseHandler,
+  readContextFile,
   resumeHandler,
   runHealthChecks,
   syncInstalledSkills,
   uninstallSkill,
+  writeContextFile,
   deleteHandler as adminDeleteHandler,
+  type ContextScope,
 } from '../admin/data.js';
 import type { RegisteredAgent } from '../types.js';
 import { loadJson, saveJson } from '../utils/json.js';
@@ -239,6 +245,76 @@ add('GET', /^\/api\/admin\/heartbeat$/, (_req, res, url) => {
   const folder = url.searchParams.get('folder') || MAIN_AGENT_FOLDER;
   const lines = parseInt(url.searchParams.get('lines') || '40', 10);
   json(res, 200, { folder, log: getHeartbeatLogTail(folder, lines) });
+});
+
+add('GET', /^\/api\/admin\/context$/, (_req, res) => {
+  json(res, 200, listContextFiles());
+});
+
+function parseContextQuery(url: URL): {
+  scope: ContextScope;
+  folder: string | null;
+  name: string;
+} | null {
+  const scope = url.searchParams.get('scope');
+  const name = url.searchParams.get('name') || '';
+  const folder = url.searchParams.get('folder');
+  if (scope !== 'shared' && scope !== 'agent') return null;
+  if (!name) return null;
+  return { scope, folder: scope === 'agent' ? folder : null, name };
+}
+
+add('GET', /^\/api\/admin\/context\/file$/, (_req, res, url) => {
+  const q = parseContextQuery(url);
+  if (!q) return json(res, 400, { error: 'missing fields' });
+  try {
+    json(res, 200, {
+      scope: q.scope,
+      folder: q.folder,
+      name: q.name,
+      ...readContextFile(q.scope, q.folder, q.name),
+    });
+  } catch (err) {
+    json(res, 400, { error: String(err) });
+  }
+});
+
+add('POST', /^\/api\/admin\/context\/file$/, async (req, res, url) => {
+  const q = parseContextQuery(url);
+  if (!q) return json(res, 400, { error: 'missing fields' });
+  const body = (await readBody(req)) as { content?: string };
+  const content = typeof body.content === 'string' ? body.content : '';
+  try {
+    const meta = createContextFile(q.scope, q.folder, q.name, content);
+    json(res, 201, { ok: true, ...meta });
+  } catch (err) {
+    json(res, 400, { error: String(err) });
+  }
+});
+
+add('DELETE', /^\/api\/admin\/context\/file$/, (_req, res, url) => {
+  const q = parseContextQuery(url);
+  if (!q) return json(res, 400, { error: 'missing fields' });
+  try {
+    deleteContextFile(q.scope, q.folder, q.name);
+    json(res, 200, { ok: true });
+  } catch (err) {
+    json(res, 400, { error: String(err) });
+  }
+});
+
+add('PUT', /^\/api\/admin\/context\/file$/, async (req, res, url) => {
+  const q = parseContextQuery(url);
+  if (!q) return json(res, 400, { error: 'missing fields' });
+  const body = (await readBody(req)) as { content?: string };
+  if (typeof body.content !== 'string')
+    return json(res, 400, { error: 'missing content' });
+  try {
+    const meta = writeContextFile(q.scope, q.folder, q.name, body.content);
+    json(res, 200, { ok: true, ...meta });
+  } catch (err) {
+    json(res, 400, { error: String(err) });
+  }
 });
 
 add('GET', /^\/api\/admin\/config$/, (_req, res) => {
