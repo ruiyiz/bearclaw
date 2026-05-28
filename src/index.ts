@@ -1570,6 +1570,53 @@ async function main(): Promise<void> {
       const agent = ensureWebAgent(folder);
       registerAgent(jid, agent);
     },
+    addRegisteredAgent: (jid: string, agent: RegisteredAgent) => {
+      registerAgent(jid, agent);
+    },
+    updateRegisteredAgent: (jid, patch) => {
+      const existing = registeredAgents[jid];
+      if (!existing) return null;
+      const next: RegisteredAgent = { ...existing };
+      if (typeof patch.name === 'string') next.name = patch.name;
+      if (typeof patch.trigger === 'string') next.trigger = patch.trigger;
+      if (typeof patch.primary === 'boolean') next.primary = patch.primary;
+      registeredAgents[jid] = next;
+      saveJson(
+        path.join(CONFIG_DIR, 'registered_agents.json'),
+        registeredAgents,
+      );
+      logger.info(
+        { jid, name: next.name, folder: next.folder },
+        'Agent entry updated',
+      );
+      return next;
+    },
+    removeRegisteredAgent: (jid: string) => {
+      if (!registeredAgents[jid]) return;
+      delete registeredAgents[jid];
+      saveJson(
+        path.join(CONFIG_DIR, 'registered_agents.json'),
+        registeredAgents,
+      );
+      logger.info({ jid }, 'Agent unwired');
+    },
+    removeRegisteredAgentsByFolder: (folder: string) => {
+      const removed: string[] = [];
+      for (const jid of Object.keys(registeredAgents)) {
+        if (registeredAgents[jid].folder === folder) {
+          delete registeredAgents[jid];
+          removed.push(jid);
+        }
+      }
+      if (removed.length > 0) {
+        saveJson(
+          path.join(CONFIG_DIR, 'registered_agents.json'),
+          registeredAgents,
+        );
+      }
+      logger.info({ folder, count: removed.length }, 'Agent removed (jids)');
+      return removed;
+    },
     getAgentModel: (folder: string) => agentModels[folder],
     setAgentModel: (folder: string, model: string) => {
       agentModels[folder] = model;

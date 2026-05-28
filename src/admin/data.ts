@@ -5,10 +5,13 @@ import path from 'path';
 
 import {
   AGENTS_DIR,
+  AGENTS_VAR_DIR,
   CONFIG_DIR,
   CONTEXT_DIR,
   DATA_DIR,
+  MAIN_AGENT_FOLDER,
   SKILLS_DIR as NANOCLAW_SKILLS_DIR,
+  agentDir,
   agentVarDir,
 } from '../config.js';
 import { loadJson } from '../utils/json.js';
@@ -107,15 +110,194 @@ export function getRecentHandlerLogs(limit = 100): HandlerRunLog[] {
 
 // ─── Agents ─────────────────────────────────────────────────────────────────
 
-export function getRegisteredAgents(): RegisteredAgent[] {
-  const filePath = path.join(CONFIG_DIR, 'registered_agents.json');
+const REGISTERED_AGENTS_PATH = path.join(CONFIG_DIR, 'registered_agents.json');
+const AGENT_FOLDER_RE = /^[A-Za-z0-9._-]+$/;
+
+function loadRegisteredAgents(): Record<string, RegisteredAgent> {
   const raw = loadJson<Record<string, RegisteredAgent> | RegisteredAgent[]>(
-    filePath,
-    [],
+    REGISTERED_AGENTS_PATH,
+    {},
   );
-  if (Array.isArray(raw)) return raw;
-  // File is an object keyed by JID — convert to array
+  if (Array.isArray(raw)) {
+    const out: Record<string, RegisteredAgent> = {};
+    for (const a of raw) {
+      const { jid: _jid, ...rest } = a as RegisteredAgent & { jid?: string };
+      if (_jid) out[_jid] = rest as RegisteredAgent;
+    }
+    return out;
+  }
+  return raw;
+}
+
+export function getRegisteredAgents(): RegisteredAgent[] {
+  const raw = loadRegisteredAgents();
   return Object.entries(raw).map(([jid, agent]) => ({ ...agent, jid }));
+}
+
+// ─── Channels available for wiring ──────────────────────────────────────────
+
+export type ChannelKind =
+  | 'web'
+  | 'whatsapp-dm'
+  | 'whatsapp-group'
+  | 'telegram'
+  | 'imessage';
+
+export interface AvailableChannel {
+  jid: string;
+  name: string;
+  kind: ChannelKind;
+  lastActivity: string | null;
+}
+
+function classifyJid(jid: string): ChannelKind | null {
+  if (jid.startsWith('web:')) return 'web';
+  if (jid.startsWith('tg:')) return 'telegram';
+  if (jid.startsWith('imsg:')) return 'imessage';
+  if (jid.endsWith('@g.us')) return 'whatsapp-group';
+  if (jid.endsWith('@s.whatsapp.net')) return 'whatsapp-dm';
+  return null;
+}
+
+// Validates a manually-entered channel jid. Accepts the shapes the router
+// knows how to route: tg:<id>, imsg:<id>, web:<folder>, <id>@g.us,
+// <id>@s.whatsapp.net. Returns the trimmed jid or null when malformed.
+export function normalizeChannelJid(raw: string): string | null {
+  const jid = raw.trim();
+  if (!jid) return null;
+  if (/^tg:-?\d+$/.test(jid)) return jid;
+  if (/^imsg:.+$/.test(jid)) return jid;
+  if (/^web:[A-Za-z0-9._-]+$/.test(jid)) return jid;
+  if (/^\d+@g\.us$/.test(jid)) return jid;
+  if (/^\d+@s\.whatsapp\.net$/.test(jid)) return jid;
+  return null;
+}
+
+export function getAvailableChannels(): AvailableChannel[] {
+  const registered = new Set(Object.keys(loadRegisteredAgents()));
+  const db = openDb();
+  try {
+    const rows = db
+      .prepare(
+        `SELECT jid, name, last_message_time FROM chats
+         WHERE jid != '__group_sync__'
+         ORDER BY last_message_time DESC`,
+      )
+      .all() as Array<{
+      jid: string;
+      name: string;
+      last_message_time: string;
+    }>;
+    const out: AvailableChannel[] = [];
+    for (const r of rows) {
+      if (registered.has(r.jid)) continue;
+      const kind = classifyJid(r.jid);
+      if (!kind) continue;
+      // Web threads (web:<folder>:<sessionId>) each get a chats row, but web
+      // wiring is per-folder via the dedicated "Web" option — never per
+      // session. Keep them out of the chat picker.
+      if (kind === 'web') continue;
+      out.push({
+        jid: r.jid,
+        name: r.name || r.jid,
+        kind,
+        lastActivity: r.last_message_time,
+      });
+    }
+    return out;
+  } finally {
+    db.close();
+  }
+}
+
+// ─── Agent folder management ────────────────────────────────────────────────
+
+function validateFolder(folder: string): void {
+  if (!folder || !AGENT_FOLDER_RE.test(folder)) {
+    throw new Error(
+      'invalid folder (allowed: letters, digits, dot, dash, underscore)',
+    );
+  }
+}
+
+const DEFAULT_IDENTITY = (name: string): string =>
+  `# ${name}\n\nDescribe this agent's identity, role, and behaviour here.\n`;
+
+export interface CreateAgentFolderOpts {
+  folder: string;
+  displayName: string;
+  templateFolder?: string;
+}
+
+export function agentFolderExists(folder: string): boolean {
+  try {
+    return fs.statSync(agentDir(folder)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export function listAgentFolders(): string[] {
+  if (!fs.existsSync(AGENTS_DIR)) return [];
+  return fs
+    .readdirSync(AGENTS_DIR, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+export function createAgentFolder(opts: CreateAgentFolderOpts): void {
+  validateFolder(opts.folder);
+  if (opts.templateFolder) validateFolder(opts.templateFolder);
+  const dest = agentDir(opts.folder);
+  if (fs.existsSync(dest)) {
+    throw new Error(`agent folder already exists: ${opts.folder}`);
+  }
+  fs.mkdirSync(dest, { recursive: true });
+  if (opts.templateFolder) {
+    const src = agentDir(opts.templateFolder);
+    if (!fs.existsSync(src)) {
+      throw new Error(`template folder not found: ${opts.templateFolder}`);
+    }
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.toLowerCase().endsWith('.md')) continue;
+      fs.copyFileSync(path.join(src, entry.name), path.join(dest, entry.name));
+    }
+  } else {
+    fs.writeFileSync(
+      path.join(dest, 'IDENTITY.md'),
+      DEFAULT_IDENTITY(opts.displayName),
+    );
+  }
+}
+
+export function deleteAgentFolderDir(
+  folder: string,
+  opts: { includeVar?: boolean } = {},
+): void {
+  validateFolder(folder);
+  if (folder === MAIN_AGENT_FOLDER) {
+    throw new Error('cannot delete main agent folder');
+  }
+  const dest = agentDir(folder);
+  if (fs.existsSync(dest)) {
+    fs.rmSync(dest, { recursive: true, force: true });
+  }
+  if (opts.includeVar) {
+    const varDest = path.join(AGENTS_VAR_DIR, folder);
+    if (fs.existsSync(varDest)) {
+      fs.rmSync(varDest, { recursive: true, force: true });
+    }
+  }
+}
+
+// Shape of an in-place patch for a registered agent entry. The runtime owns
+// persistence — see HttpServerOpts.updateRegisteredAgent in src/server/http.ts.
+export interface AgentEntryPatch {
+  name?: string;
+  trigger?: string;
+  primary?: boolean;
 }
 
 // ─── Health checks ──────────────────────────────────────────────────────────

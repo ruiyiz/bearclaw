@@ -10,6 +10,7 @@ import {
   CONFIG_DIR,
   DATA_DIR,
   MAIN_AGENT_FOLDER,
+  agentDir,
   agentVarDir,
 } from '../config.js';
 import { logger } from '../logger.js';
@@ -34,18 +35,23 @@ import { transcribeAudio } from '../media/transcribe.js';
 import type { WebChannel } from '../channels/web.js';
 import {
   addSkillSource,
+  agentFolderExists,
+  createAgentFolder,
+  deleteAgentFolderDir,
   getAllHandlers as adminListHandlers,
   getAllSkillSources,
+  getAvailableChannels,
   getAvailableSkillsForSource,
   getHeartbeatLogTail,
   getInstalledSkills,
   getRecentEvents,
   getRecentHandlerLogs,
-  getRegisteredAgents,
   createContextFile,
   deleteContextFile,
   installSkill,
+  listAgentFolders,
   listContextFiles,
+  normalizeChannelJid,
   pauseHandler,
   readContextFile,
   resumeHandler,
@@ -54,6 +60,7 @@ import {
   uninstallSkill,
   writeContextFile,
   deleteHandler as adminDeleteHandler,
+  type AgentEntryPatch,
   type ContextScope,
 } from '../admin/data.js';
 import type { RegisteredAgent } from '../types.js';
@@ -63,6 +70,15 @@ export interface HttpServerOpts {
   webChannel: WebChannel;
   registeredAgents: () => Record<string, RegisteredAgent>;
   registerWebAgent: (folder: string) => void;
+  // Admin-driven mutations. Each callback persists to registered_agents.json
+  // and updates the in-memory router map.
+  addRegisteredAgent: (jid: string, agent: RegisteredAgent) => void;
+  updateRegisteredAgent: (
+    jid: string,
+    patch: AgentEntryPatch,
+  ) => RegisteredAgent | null;
+  removeRegisteredAgent: (jid: string) => void;
+  removeRegisteredAgentsByFolder: (folder: string) => string[];
   getAgentModel: (folder: string) => string | undefined;
   setAgentModel: (folder: string, model: string) => void;
   getAgentEffort: (folder: string) => string | undefined;
@@ -233,9 +249,165 @@ add('DELETE', /^\/api\/admin\/handlers\/([^/]+)$/, async (_req, res, url) => {
   json(res, 200, { ok: true });
 });
 
-add('GET', /^\/api\/admin\/agents$/, (_req, res) => {
-  json(res, 200, { agents: getRegisteredAgents() });
+add('GET', /^\/api\/admin\/agents$/, (_req, res, _url, opts) => {
+  const regs = opts.registeredAgents();
+  const agents = Object.entries(regs).map(([jid, a]) => ({ ...a, jid }));
+  json(res, 200, { agents });
 });
+
+add('GET', /^\/api\/admin\/agents\/channels$/, (_req, res) => {
+  json(res, 200, { channels: getAvailableChannels() });
+});
+
+add('GET', /^\/api\/admin\/agents\/folders$/, (_req, res) => {
+  json(res, 200, { folders: listAgentFolders() });
+});
+
+interface CreateAgentBody {
+  folder?: string;
+  name?: string;
+  templateFolder?: string;
+}
+
+add('POST', /^\/api\/admin\/agents$/, async (req, res, _url, opts) => {
+  const body = (await readBody(req)) as CreateAgentBody;
+  const folder = (body.folder || '').trim();
+  const name = (body.name || '').trim() || folder;
+  if (!folder) return json(res, 400, { error: 'missing folder' });
+  if (agentFolderExists(folder)) {
+    return json(res, 409, { error: 'folder already exists' });
+  }
+  try {
+    createAgentFolder({
+      folder,
+      displayName: name,
+      templateFolder: body.templateFolder,
+    });
+  } catch (err) {
+    return json(res, 400, { error: String(err) });
+  }
+  // Every new agent gets a web channel so it's immediately reachable in the
+  // web UI. Other channels are wired afterward via "+ Channel". Web threads
+  // route by folder, never by trigger — keep the trigger empty here.
+  const wiredJid = `web:${folder}`;
+  opts.addRegisteredAgent(wiredJid, {
+    name,
+    folder,
+    trigger: '',
+    added_at: new Date().toISOString(),
+  });
+  json(res, 201, { ok: true, folder, wiredJid });
+});
+
+interface WireAgentBody {
+  folder?: string;
+  jid?: string;
+  name?: string;
+  trigger?: string;
+  primary?: boolean;
+}
+
+add('POST', /^\/api\/admin\/agents\/wire$/, async (req, res, _url, opts) => {
+  const body = (await readBody(req)) as WireAgentBody;
+  const folder = (body.folder || '').trim();
+  const jid = normalizeChannelJid(body.jid || '');
+  if (!folder || !jid) {
+    return json(res, 400, { error: 'missing folder or invalid jid' });
+  }
+  if (!agentFolderExists(folder)) {
+    return json(res, 400, { error: 'unknown agent folder' });
+  }
+  const existing = opts.registeredAgents()[jid];
+  if (existing) {
+    return json(res, 409, { error: `jid already wired to ${existing.folder}` });
+  }
+  const sibling = Object.values(opts.registeredAgents()).find(
+    (a) => a.folder === folder,
+  );
+  const name = (body.name || '').trim() || sibling?.name || folder;
+  // Web threads route by folder, never by trigger — force it empty regardless
+  // of what the caller sent.
+  const trigger = jid.startsWith('web:')
+    ? ''
+    : typeof body.trigger === 'string'
+      ? body.trigger
+      : (sibling?.trigger ?? '');
+  const agent: RegisteredAgent = {
+    name,
+    folder,
+    trigger,
+    added_at: new Date().toISOString(),
+    ...(body.primary ? { primary: true } : {}),
+  };
+  opts.addRegisteredAgent(jid, agent);
+  json(res, 201, { ok: true, jid, agent });
+});
+
+add('PATCH', /^\/api\/admin\/agents\/by-jid$/, async (req, res, _url, opts) => {
+  const body = (await readBody(req)) as {
+    jid?: string;
+    name?: string;
+    trigger?: string;
+    primary?: boolean;
+  };
+  const jid = (body.jid || '').trim();
+  if (!jid) return json(res, 400, { error: 'missing jid' });
+  if (!opts.registeredAgents()[jid]) {
+    return json(res, 404, { error: 'unknown jid' });
+  }
+  const next = opts.updateRegisteredAgent(jid, {
+    name: body.name,
+    trigger: body.trigger,
+    primary: body.primary,
+  });
+  if (!next) return json(res, 404, { error: 'unknown jid' });
+  json(res, 200, { ok: true, jid, agent: next });
+});
+
+add('DELETE', /^\/api\/admin\/agents\/by-jid$/, async (req, res, url, opts) => {
+  const jid = (url.searchParams.get('jid') || '').trim();
+  if (!jid) return json(res, 400, { error: 'missing jid' });
+  if (!opts.registeredAgents()[jid]) {
+    return json(res, 404, { error: 'unknown jid' });
+  }
+  opts.removeRegisteredAgent(jid);
+  json(res, 200, { ok: true });
+});
+
+add(
+  'DELETE',
+  /^\/api\/admin\/agents\/by-folder$/,
+  async (req, res, url, opts) => {
+    const folder = (url.searchParams.get('folder') || '').trim();
+    const deleteFiles = url.searchParams.get('deleteFiles') === '1';
+    const deleteVar = url.searchParams.get('deleteVar') === '1';
+    if (!folder) return json(res, 400, { error: 'missing folder' });
+    if (folder === MAIN_AGENT_FOLDER) {
+      return json(res, 400, { error: 'cannot delete main agent' });
+    }
+    const removed = opts.removeRegisteredAgentsByFolder(folder);
+    let filesDeleted = false;
+    if (deleteFiles) {
+      try {
+        deleteAgentFolderDir(folder, { includeVar: deleteVar });
+        filesDeleted = true;
+      } catch (err) {
+        return json(res, 200, {
+          ok: true,
+          unwired: removed,
+          filesDeleted: false,
+          fileError: String(err),
+        });
+      }
+    }
+    json(res, 200, {
+      ok: true,
+      unwired: removed,
+      filesDeleted,
+      folderPath: agentDir(folder),
+    });
+  },
+);
 
 add('GET', /^\/api\/admin\/health$/, (_req, res) => {
   json(res, 200, { checks: runHealthChecks() });
@@ -808,13 +980,13 @@ export function persistRegisteredAgentsHelper(): {
       const all = loadJson<Record<string, RegisteredAgent>>(registeredPath, {});
       const jid = `web:${folder}`;
       if (all[jid]) return all[jid];
-      // Inherit trigger/name from any existing registration for this folder.
+      // Inherit name from any existing registration for this folder. Web
+      // threads route by folder, never by trigger — leave it empty.
       const sibling = Object.values(all).find((a) => a.folder === folder);
       const agent: RegisteredAgent = {
         name: sibling?.name || folder,
         folder,
-        trigger:
-          sibling?.trigger || (folder === MAIN_AGENT_FOLDER ? '' : folder),
+        trigger: '',
         added_at: new Date().toISOString(),
       };
       all[jid] = agent;

@@ -52,6 +52,23 @@ export interface RegisteredAgent {
   folder: string;
   trigger: string;
   added_at: string;
+  primary?: boolean;
+  requiresTrigger?: boolean;
+  email?: { address: string; interval?: string };
+}
+
+export type ChannelKind =
+  | 'web'
+  | 'whatsapp-dm'
+  | 'whatsapp-group'
+  | 'telegram'
+  | 'imessage';
+
+export interface AvailableChannel {
+  jid: string;
+  name: string;
+  kind: ChannelKind;
+  lastActivity: string | null;
 }
 
 export interface UserAgent {
@@ -301,6 +318,62 @@ export const api = {
       'DELETE',
     ),
   agents: () => get<{ agents: RegisteredAgent[] }>('/api/admin/agents'),
+  agentChannels: () =>
+    get<{ channels: AvailableChannel[] }>('/api/admin/agents/channels'),
+  agentFolders: () => get<{ folders: string[] }>('/api/admin/agents/folders'),
+  createAgent: (body: {
+    folder: string;
+    name: string;
+    templateFolder?: string;
+  }) =>
+    send<{ ok: boolean; folder: string; wiredJid: string }>(
+      '/api/admin/agents',
+      'POST',
+      body,
+    ),
+  wireAgent: (body: {
+    folder: string;
+    jid: string;
+    name?: string;
+    trigger?: string;
+    primary?: boolean;
+  }) =>
+    send<{ ok: boolean; jid: string; agent: RegisteredAgent }>(
+      '/api/admin/agents/wire',
+      'POST',
+      body,
+    ),
+  updateAgentEntry: (body: {
+    jid: string;
+    name?: string;
+    trigger?: string;
+    primary?: boolean;
+  }) =>
+    send<{ ok: boolean; jid: string; agent: RegisteredAgent }>(
+      '/api/admin/agents/by-jid',
+      'PATCH',
+      body,
+    ),
+  unwireAgent: (jid: string) =>
+    send<{ ok: boolean }>(
+      `/api/admin/agents/by-jid?jid=${encodeURIComponent(jid)}`,
+      'DELETE',
+    ),
+  deleteAgent: (
+    folder: string,
+    opts?: { deleteFiles?: boolean; deleteVar?: boolean },
+  ) => {
+    const params = new URLSearchParams({ folder });
+    if (opts?.deleteFiles) params.set('deleteFiles', '1');
+    if (opts?.deleteVar) params.set('deleteVar', '1');
+    return send<{
+      ok: boolean;
+      unwired: string[];
+      filesDeleted: boolean;
+      fileError?: string;
+      folderPath: string;
+    }>(`/api/admin/agents/by-folder?${params.toString()}`, 'DELETE');
+  },
   transcriptSessions: (folder: string, limit = 50) =>
     get<{ sessions: TranscriptSession[] }>(
       `/api/admin/transcripts/sessions?folder=${encodeURIComponent(folder)}&limit=${limit}`,
