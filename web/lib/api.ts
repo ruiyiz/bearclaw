@@ -354,6 +354,12 @@ export const api = {
       'PATCH',
       body,
     ),
+  renameAgent: (folder: string, name: string) =>
+    send<{ ok: boolean; folder: string; name: string; updated: string[] }>(
+      '/api/admin/agents/by-folder',
+      'PATCH',
+      { folder, name },
+    ),
   unwireAgent: (jid: string) =>
     send<{ ok: boolean }>(
       `/api/admin/agents/by-jid?jid=${encodeURIComponent(jid)}`,

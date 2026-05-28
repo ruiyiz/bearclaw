@@ -1617,6 +1617,26 @@ async function main(): Promise<void> {
       logger.info({ folder, count: removed.length }, 'Agent removed (jids)');
       return removed;
     },
+    setAgentDisplayName: (folder: string, name: string) => {
+      const updated: string[] = [];
+      for (const [jid, a] of Object.entries(registeredAgents)) {
+        if (a.folder === folder) {
+          a.name = name;
+          updated.push(jid);
+        }
+      }
+      if (updated.length > 0) {
+        saveJson(
+          path.join(CONFIG_DIR, 'registered_agents.json'),
+          registeredAgents,
+        );
+        logger.info(
+          { folder, name, count: updated.length },
+          'Agent display name set',
+        );
+      }
+      return updated;
+    },
     getAgentModel: (folder: string) => agentModels[folder],
     setAgentModel: (folder: string, model: string) => {
       agentModels[folder] = model;

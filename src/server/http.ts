@@ -79,6 +79,7 @@ export interface HttpServerOpts {
   ) => RegisteredAgent | null;
   removeRegisteredAgent: (jid: string) => void;
   removeRegisteredAgentsByFolder: (folder: string) => string[];
+  setAgentDisplayName: (folder: string, name: string) => string[];
   getAgentModel: (folder: string) => string | undefined;
   setAgentModel: (folder: string, model: string) => void;
   getAgentEffort: (folder: string) => string | undefined;
@@ -363,6 +364,24 @@ add('PATCH', /^\/api\/admin\/agents\/by-jid$/, async (req, res, _url, opts) => {
   if (!next) return json(res, 404, { error: 'unknown jid' });
   json(res, 200, { ok: true, jid, agent: next });
 });
+
+add(
+  'PATCH',
+  /^\/api\/admin\/agents\/by-folder$/,
+  async (req, res, _url, opts) => {
+    const body = (await readBody(req)) as { folder?: string; name?: string };
+    const folder = (body.folder || '').trim();
+    const name = (body.name || '').trim();
+    if (!folder || !name) {
+      return json(res, 400, { error: 'missing folder or name' });
+    }
+    const updated = opts.setAgentDisplayName(folder, name);
+    if (updated.length === 0) {
+      return json(res, 404, { error: 'unknown agent folder' });
+    }
+    json(res, 200, { ok: true, folder, name, updated });
+  },
+);
 
 add('DELETE', /^\/api\/admin\/agents\/by-jid$/, async (req, res, url, opts) => {
   const jid = (url.searchParams.get('jid') || '').trim();

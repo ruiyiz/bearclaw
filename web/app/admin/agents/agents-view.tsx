@@ -57,6 +57,7 @@ export function AgentsView() {
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [wireFor, setWireFor] = useState<AgentGroup | null>(null);
+  const [renameGroup, setRenameGroup] = useState<AgentGroup | null>(null);
   const [editEntry, setEditEntry] = useState<RegisteredAgent | null>(null);
   const [deleteGroup, setDeleteGroup] = useState<AgentGroup | null>(null);
 
@@ -125,6 +126,12 @@ export function AgentsView() {
                 </div>
               </div>
               <div className="flex gap-1">
+                <button
+                  onClick={() => setRenameGroup(g)}
+                  className="text-xs px-2 py-1 rounded-md border border-[color:var(--border)] hover:border-[color:var(--accent)]"
+                >
+                  Rename
+                </button>
                 <button
                   onClick={() => setWireFor(g)}
                   className="text-xs px-2 py-1 rounded-md border border-[color:var(--border)] hover:border-[color:var(--accent)]"
@@ -205,6 +212,16 @@ export function AgentsView() {
           onClose={() => setShowCreate(false)}
           onDone={async () => {
             setShowCreate(false);
+            await reload();
+          }}
+        />
+      )}
+      {renameGroup && (
+        <RenameAgentModal
+          group={renameGroup}
+          onClose={() => setRenameGroup(null)}
+          onDone={async () => {
+            setRenameGroup(null);
             await reload();
           }}
         />
@@ -290,6 +307,66 @@ function Field({
       </div>
       {children}
     </label>
+  );
+}
+
+function RenameAgentModal({
+  group,
+  onClose,
+  onDone,
+}: {
+  group: AgentGroup;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState(group.name);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.renameAgent(group.folder, name.trim());
+      onDone();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Rename ${group.folder}`} onClose={onClose}>
+      <div className="text-xs text-[color:var(--muted)]">
+        Applies to all {group.entries.length} channel
+        {group.entries.length === 1 ? '' : 's'} of this agent.
+      </div>
+      <Field label="Display name">
+        <input
+          className={inputCls}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoFocus
+        />
+      </Field>
+      {err && <div className="text-xs text-red-500">{err}</div>}
+      <div className="flex justify-end gap-2 pt-1">
+        <button
+          onClick={onClose}
+          className="text-xs px-3 py-1.5 rounded-md border border-[color:var(--border)]"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={submit}
+          disabled={busy || !name.trim()}
+          className="text-xs px-3 py-1.5 rounded-md bg-[color:var(--accent)] text-white disabled:opacity-40"
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
