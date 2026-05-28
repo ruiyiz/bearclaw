@@ -18,7 +18,40 @@ import { SettingsModal } from '@/components/settings-modal';
 import { loadKeepFocusOnSend } from '@/lib/prefs';
 
 const TEXTAREA_MAX_PX = 240;
+const TEXTAREA_MIN_PX = 24;
+const TEXTAREA_WELCOME_MIN_PX = 56;
 const HISTORY_LIMIT = 200;
+
+function greetingForHour(hour: number): string {
+  if (hour < 5) return 'Good night';
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+const WELCOME_MESSAGES: string[] = [
+  '{tod}. What are we hatching?',
+  '{tod}. Where do we begin?',
+  '{tod}. Plot the next move.',
+  'Ahoy. Ready to dig in?',
+  "What's on your mind?",
+  'Yo. State the mission.',
+  'Awaiting instructions.',
+  'The cave is warm. Step in.',
+  'Ready to think out loud?',
+  '{tod}. Brew something with me.',
+  'Quiet here. What shall we stir up?',
+  'Sharpen your thoughts. I am listening.',
+  '{tod}. Throw an idea at the wall.',
+  "Let's make something weird.",
+];
+
+function pickWelcomeMessage(): string {
+  const idx = Math.floor(Math.random() * WELCOME_MESSAGES.length);
+  const template = WELCOME_MESSAGES[idx];
+  const tod = greetingForHour(new Date().getHours());
+  return template.replace('{tod}', tod);
+}
 
 interface ModelOption {
   id: string;
@@ -72,11 +105,12 @@ function urlState(): { folder: string | null; session: string | null } {
   };
 }
 
-function pushUrl(folder: string, session: string): void {
+function pushUrl(folder: string, session: string | null): void {
   if (typeof window === 'undefined') return;
   const sp = new URLSearchParams(window.location.search);
   sp.set('folder', folder);
-  sp.set('session', session);
+  if (session) sp.set('session', session);
+  else sp.delete('session');
   const next = `${window.location.pathname}?${sp.toString()}`;
   window.history.replaceState({}, '', next);
 }
@@ -139,6 +173,7 @@ export function ChatView() {
   const justLoadedRef = useRef(true);
   const prevMessageCountRef = useRef(0);
   const bottomSpacerRef = useRef<HTMLDivElement | null>(null);
+  const skipReloadForRef = useRef<string | null>(null);
 
   const refreshSessions = useCallback(
     async (f: string): Promise<WebSession[]> => {
@@ -183,36 +218,9 @@ export function ChatView() {
           agentsD.agents[0]?.folder ||
           null;
         if (!initialFolder) return;
-
-        let initialSession = wanted.session;
-        if (!initialSession) {
-          const list = byFolder[initialFolder] || [];
-          initialSession = list[0]?.id || null;
-          if (!initialSession) {
-            const created = await api.createChatSession(initialFolder);
-            if (cancelled) return;
-            initialSession = created.id;
-            setSessionsByFolder((prev) => ({
-              ...prev,
-              [initialFolder]: [
-                {
-                  id: created.id,
-                  folder: created.folder,
-                  title: created.title,
-                  sdkSessionId: null,
-                  createdAt: new Date().toISOString(),
-                  lastMessageAt: null,
-                  pinned: false,
-                  archived: false,
-                },
-                ...(prev[initialFolder] || []),
-              ],
-            }));
-          }
-        }
         setFolder(initialFolder);
-        setSessionId(initialSession);
-        pushUrl(initialFolder, initialSession);
+        setSessionId(null);
+        pushUrl(initialFolder, null);
       } catch {
         /* unauthed redirects via api helpers */
       }
@@ -263,8 +271,13 @@ export function ChatView() {
   );
 
   useEffect(() => {
+    setScrolled(false);
     if (!folder || !sessionId) {
       setMessages([]);
+      return;
+    }
+    if (skipReloadForRef.current === sessionId) {
+      skipReloadForRef.current = null;
       return;
     }
     justLoadedRef.current = true;
@@ -410,12 +423,21 @@ export function ChatView() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  const welcomeMode = !loadingHistory && messages.length === 0 && !!folder;
+
+  const welcomeMessage = useMemo(
+    () => pickWelcomeMessage(),
+    [folder, sessionId],
+  );
+
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
+    const minPx = welcomeMode ? TEXTAREA_WELCOME_MIN_PX : TEXTAREA_MIN_PX;
     ta.style.height = 'auto';
-    ta.style.height = Math.min(ta.scrollHeight, TEXTAREA_MAX_PX) + 'px';
-  }, [input]);
+    ta.style.height =
+      Math.max(minPx, Math.min(ta.scrollHeight, TEXTAREA_MAX_PX)) + 'px';
+  }, [input, welcomeMode]);
 
   function applyStreamEvent(evt: ChatStreamEvent) {
     if (evt.type === 'typing') {
@@ -495,8 +517,40 @@ export function ChatView() {
     return btoa(bin);
   }
 
+  const ensureSession = useCallback(
+    async (f: string): Promise<string | null> => {
+      if (sessionId) return sessionId;
+      try {
+        const created = await api.createChatSession(f);
+        const row: WebSession = {
+          id: created.id,
+          folder: created.folder,
+          title: created.title,
+          sdkSessionId: null,
+          createdAt: new Date().toISOString(),
+          lastMessageAt: null,
+          pinned: false,
+          archived: false,
+        };
+        setSessionsByFolder((prev) => ({
+          ...prev,
+          [f]: [row, ...(prev[f] || [])],
+        }));
+        skipReloadForRef.current = created.id;
+        setSessionId(created.id);
+        pushUrl(f, created.id);
+        return created.id;
+      } catch {
+        return null;
+      }
+    },
+    [sessionId],
+  );
+
   async function handleFile(file: File) {
-    if (!folder || !sessionId || uploading) return;
+    if (!folder || uploading) return;
+    const sid = await ensureSession(folder);
+    if (!sid) return;
     setUploading(true);
     const kind = kindForMime(file.type || '');
     const previewUrl = URL.createObjectURL(file);
@@ -515,7 +569,7 @@ export function ChatView() {
       const dataB64 = await fileToBase64(file);
       await api.chatUpload({
         folder,
-        sessionId,
+        sessionId: sid,
         kind,
         fileName: file.name,
         mimeType: file.type,
@@ -537,7 +591,9 @@ export function ChatView() {
   }
 
   async function startRecording() {
-    if (!folder || !sessionId || recording) return;
+    if (!folder || recording) return;
+    const sid = await ensureSession(folder);
+    if (!sid) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mime = MediaRecorder.isTypeSupported('audio/webm')
@@ -568,7 +624,7 @@ export function ChatView() {
           const dataB64 = await fileToBase64(blob);
           const res = await api.chatUpload({
             folder: folder!,
-            sessionId: sessionId!,
+            sessionId: sid,
             kind: 'voice',
             fileName: `voice.${mime.includes('webm') ? 'webm' : 'm4a'}`,
             mimeType: mime,
@@ -623,14 +679,16 @@ export function ChatView() {
   }
 
   async function sendText(text: string) {
-    if (!folder || !sessionId || !text.trim()) return;
+    if (!folder || !text.trim()) return;
     setSending(true);
     setMessages((prev) => [
       ...prev,
       { id: `u-${Date.now()}`, side: 'user', text, ts: Date.now() },
     ]);
     try {
-      await api.chat(folder, sessionId, text);
+      const sid = await ensureSession(folder);
+      if (!sid) throw new Error('failed to create session');
+      await api.chat(folder, sid, text);
       void refreshSessions(folder).catch(() => {});
     } catch (e) {
       setMessages((prev) => [
@@ -656,6 +714,8 @@ export function ChatView() {
   }
 
   async function switchTo(f: string, s: string) {
+    setScrolled(false);
+    setMessages([]);
     setFolder(f);
     setSessionId(s);
     pushUrl(f, s);
@@ -663,29 +723,12 @@ export function ChatView() {
   }
 
   async function newSession(f: string) {
-    try {
-      const created = await api.createChatSession(f);
-      const row: WebSession = {
-        id: created.id,
-        folder: created.folder,
-        title: created.title,
-        sdkSessionId: null,
-        createdAt: new Date().toISOString(),
-        lastMessageAt: null,
-        pinned: false,
-        archived: false,
-      };
-      setSessionsByFolder((prev) => ({
-        ...prev,
-        [f]: [row, ...(prev[f] || [])],
-      }));
-      setFolder(f);
-      setSessionId(created.id);
-      pushUrl(f, created.id);
-      setDrawerOpen(false);
-    } catch {
-      /* ignore */
-    }
+    setScrolled(false);
+    setMessages([]);
+    setFolder(f);
+    setSessionId(null);
+    pushUrl(f, null);
+    setDrawerOpen(false);
   }
 
   async function commitRename(f: string, id: string) {
@@ -855,6 +898,267 @@ export function ChatView() {
     setScrolled(el.scrollTop > 2);
   }
 
+  const composerForm = (
+    <form
+      className="px-3 md:px-6 lg:px-10 pt-2"
+      style={{
+        paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))',
+      }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void send();
+      }}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        accept="image/*,video/*,audio/*,application/pdf,.zip,.txt,.md,.csv,.json"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void handleFile(f);
+          e.target.value = '';
+        }}
+      />
+      <div className="max-w-3xl mx-auto">
+        <div
+          data-popover
+          className="relative rounded-3xl bg-[color:var(--card)] border border-[color:var(--border)] focus-within:border-[color:var(--accent)]/60 transition-colors px-3 pt-3 pb-2 shadow-sm"
+        >
+          {pickerVisible && (
+            <div className="absolute bottom-full left-0 right-0 mb-2 max-h-60 overflow-y-auto rounded-2xl border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-10">
+              {pickerOptions.map((c, i) => (
+                <button
+                  type="button"
+                  key={c.name}
+                  ref={(el) => {
+                    pickerItemRefs.current[i] = el;
+                  }}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    applyCommand(c.name);
+                  }}
+                  onMouseEnter={() => setPickerIndex(i)}
+                  className={
+                    'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline transition-colors duration-100 ' +
+                    (i === pickerIndex
+                      ? 'bg-[color:var(--accent)]/20'
+                      : 'hover:bg-white/5')
+                  }
+                >
+                  <span className="font-mono">/{c.name}</span>
+                  <span className="text-xs text-[color:var(--muted)] truncate">
+                    {c.description}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (pickerVisible) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setPickerIndex((i) => (i + 1) % pickerOptions.length);
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setPickerIndex(
+                    (i) =>
+                      (i - 1 + pickerOptions.length) % pickerOptions.length,
+                  );
+                  return;
+                }
+                if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                  e.preventDefault();
+                  const pick = pickerOptions[pickerIndex];
+                  if (pick) applyCommand(pick.name);
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setInput('');
+                  return;
+                }
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            rows={welcomeMode ? 2 : 1}
+            placeholder={
+              folder
+                ? `Message ${activeAgent?.name || folder}…`
+                : 'Pick or start a conversation'
+            }
+            className="w-full block resize-none overflow-y-auto bg-transparent border-0 px-1 text-sm focus:outline-none leading-6 placeholder:text-[color:var(--muted)]"
+            style={{
+              minHeight: welcomeMode
+                ? `${TEXTAREA_WELCOME_MIN_PX}px`
+                : `${TEXTAREA_MIN_PX}px`,
+            }}
+          />
+          <div className="mt-1 flex items-center gap-1 flex-wrap">
+            <button
+              type="button"
+              aria-label="Attach file"
+              title="Attach file"
+              disabled={!folder || uploading || recording}
+              onClick={() => fileInputRef.current?.click()}
+              className="h-8 w-8 inline-flex items-center justify-center rounded-full text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-white/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="18"
+                height="18"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              aria-label={recording ? 'Stop recording' : 'Record voice'}
+              title={recording ? 'Stop recording' : 'Record voice message'}
+              disabled={!folder || uploading}
+              onClick={() =>
+                recording ? stopRecording() : void startRecording()
+              }
+              className={
+                'h-8 w-8 inline-flex items-center justify-center rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed ' +
+                (recording
+                  ? 'text-red-400 bg-red-500/15 animate-pulse'
+                  : 'text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-white/5')
+              }
+            >
+              {recording ? (
+                <svg
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                </svg>
+              ) : (
+                <svg
+                  viewBox="0 0 24 24"
+                  width="18"
+                  height="18"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="9" y="3" width="6" height="12" rx="3" />
+                  <path d="M5 11a7 7 0 0 0 14 0" />
+                  <line x1="12" y1="18" x2="12" y2="22" />
+                </svg>
+              )}
+            </button>
+            <div className="flex-1" />
+            {activeAgent && (
+              <div className="relative" data-popover>
+                <button
+                  type="button"
+                  onClick={() => setComposerMenu((v) => !v)}
+                  className="h-7 inline-flex items-center gap-1 rounded-full px-2.5 text-[11px] text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-white/5 border border-[color:var(--border)] transition-colors"
+                >
+                  <span>
+                    {modelLabel(activeAgent.model)}
+                    <span className="opacity-60"> · </span>
+                    {effortLabel(activeAgent.effort)}
+                  </span>
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="10"
+                    height="10"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+                {composerMenu && folder && (
+                  <div className="absolute bottom-full right-0 mb-2 min-w-[12rem] rounded-xl border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-20 py-1">
+                    <div className="px-3 pt-1 pb-1 text-[10px] uppercase tracking-wider text-[color:var(--muted)]">
+                      Model
+                    </div>
+                    {MODEL_OPTIONS.map((opt) => (
+                      <MenuItem
+                        key={opt.id}
+                        label={opt.label}
+                        active={activeAgent.model === opt.id}
+                        onClick={() => {
+                          void updateActiveAgentModel(opt.id);
+                        }}
+                      />
+                    ))}
+                    <div className="h-px my-1 bg-[color:var(--border)]" />
+                    <div className="px-3 pt-1 pb-1 text-[10px] uppercase tracking-wider text-[color:var(--muted)]">
+                      Effort
+                    </div>
+                    {EFFORT_OPTIONS.map((opt) => (
+                      <MenuItem
+                        key={opt}
+                        label={effortLabel(opt)}
+                        active={activeAgent.effort === opt}
+                        onClick={() => {
+                          void updateActiveAgentEffort(opt);
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <button
+              type="submit"
+              aria-label="Send"
+              disabled={!folder || !input.trim() || sending}
+              className="h-8 w-8 inline-flex items-center justify-center rounded-full bg-[color:var(--accent)] text-white transition-all duration-150 hover:brightness-110 active:scale-95 disabled:bg-[color:var(--border)] disabled:text-[color:var(--muted)] disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <line x1="12" y1="19" x2="12" y2="5" />
+                <polyline points="5 12 12 5 19 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div className="text-center text-[10px] text-[color:var(--muted)] mt-1.5 px-2">
+          NanoClaw is AI and can make mistakes. Verify important info.
+        </div>
+      </div>
+    </form>
+  );
+
   return (
     <>
       <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)] relative">
@@ -885,14 +1189,8 @@ export function ChatView() {
           togglePin={togglePin}
           setFolder={(f) => {
             setFolder(f);
-            const list = sessionsByFolder[f] || [];
-            const next = list[0]?.id || null;
-            if (next) {
-              setSessionId(next);
-              pushUrl(f, next);
-            } else {
-              void newSession(f);
-            }
+            setSessionId(null);
+            pushUrl(f, null);
           }}
         />
 
@@ -904,349 +1202,123 @@ export function ChatView() {
         )}
 
         <section className="flex flex-col min-h-0 relative">
-          <div
-            ref={scrollRef}
-            onScroll={handleScroll}
-            className="flex-1 overflow-y-auto"
-          >
-            <div
-              className={
-                'sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-[color:var(--bg)]/70 px-3 md:px-6 lg:px-10 py-2 flex items-center gap-2 transition-[border-color] duration-200 ' +
-                (scrolled
-                  ? 'border-b border-[color:var(--border)]'
-                  : 'border-b border-transparent')
-              }
-            >
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(true)}
-                className="md:hidden h-8 w-8 rounded-md border border-[color:var(--border)] inline-flex items-center justify-center text-[color:var(--muted)] hover:text-[color:var(--fg)]"
-                aria-label="Open sidebar"
+          {(() => {
+            const pageHeader = (
+              <div
+                className={
+                  'sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-[color:var(--bg)]/70 px-3 md:px-6 lg:px-10 py-2 flex items-center gap-2 ' +
+                  (welcomeMode
+                    ? 'border-b border-transparent'
+                    : scrolled
+                      ? 'border-b border-[color:var(--border)] transition-[border-color] duration-200'
+                      : 'border-b border-transparent transition-[border-color] duration-200')
+                }
               >
-                ☰
-              </button>
-              <span className="text-sm font-medium truncate flex-1 min-w-0">
-                {activeSession?.title || (
-                  <span className="text-[color:var(--muted)] italic">
-                    {activeSession ? 'New chat' : 'No session'}
+                <button
+                  type="button"
+                  onClick={() => setDrawerOpen(true)}
+                  className="md:hidden h-8 w-8 rounded-md border border-[color:var(--border)] inline-flex items-center justify-center text-[color:var(--muted)] hover:text-[color:var(--fg)]"
+                  aria-label="Open sidebar"
+                >
+                  ☰
+                </button>
+                <span className="text-sm font-medium truncate flex-1 min-w-0">
+                  {activeSession?.title ||
+                    (welcomeMode ? (
+                      ''
+                    ) : (
+                      <span className="text-[color:var(--muted)] italic">
+                        {folder ? 'New chat' : 'No session'}
+                      </span>
+                    ))}
+                </span>
+                {(activity || typing) && (
+                  <span className="text-[11px] text-[color:var(--muted)] truncate max-w-[14rem]">
+                    … {activity || 'typing'}
                   </span>
                 )}
-              </span>
-              {(activity || typing) && (
-                <span className="text-[11px] text-[color:var(--muted)] truncate max-w-[14rem]">
-                  … {activity || 'typing'}
-                </span>
-              )}
-            </div>
-            <div className="px-3 md:px-6 lg:px-10 py-3">
-              <div className="max-w-3xl mx-auto space-y-3">
-                {loadingHistory && (
-                  <div className="text-center text-[11px] text-[color:var(--muted)]">
-                    loading history…
-                  </div>
-                )}
-                {!loadingHistory && messages.length === 0 && (
-                  <div className="min-h-[50dvh] flex items-center justify-center text-center px-6">
-                    <div className="text-[color:var(--muted)] text-sm">
-                      {folder && sessionId ? (
-                        <>
-                          New conversation with{' '}
-                          <span className="font-medium">
-                            {activeAgent?.name || folder}
-                          </span>
-                          .<br />
-                          Type a message below to start.
-                        </>
-                      ) : (
-                        'Pick or start a conversation from the sidebar.'
-                      )}
-                    </div>
-                  </div>
-                )}
-                {messages.map((m, idx) => {
-                  let onRegen: (() => void) | undefined;
-                  if (m.side === 'agent') {
-                    const prevUser = lastUserTextBeforeAgent(idx);
-                    if (prevUser) onRegen = () => void sendText(prevUser);
-                  }
-                  return (
-                    <div key={m.id} data-msg-id={m.id}>
-                      <Bubble m={m} onRegenerate={onRegen} />
-                    </div>
-                  );
-                })}
-                {(activity || typing) && messages.length > 0 && (
-                  <div className="flex justify-start">
-                    <div className="text-sm text-[color:var(--muted)] animate-pulse px-1">
-                      {activity ? `… ${activity}` : '…'}
-                    </div>
-                  </div>
-                )}
-                {messages.length > 0 && (
-                  <div ref={bottomSpacerRef} aria-hidden />
-                )}
               </div>
-            </div>
-          </div>
-          <form
-            className="px-3 md:px-6 lg:px-10 pt-2"
-            style={{
-              paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))',
-            }}
-            onSubmit={(e) => {
-              e.preventDefault();
-              void send();
-            }}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              accept="image/*,video/*,audio/*,application/pdf,.zip,.txt,.md,.csv,.json"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void handleFile(f);
-                e.target.value = '';
-              }}
-            />
-            <div className="max-w-3xl mx-auto">
-              <div
-                data-popover
-                className="relative rounded-3xl bg-[color:var(--card)] border border-[color:var(--border)] focus-within:border-[color:var(--accent)]/60 transition-colors px-3 pt-3 pb-2 shadow-sm"
-              >
-                {pickerVisible && (
-                  <div className="absolute bottom-full left-0 right-0 mb-2 max-h-60 overflow-y-auto rounded-2xl border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-10">
-                    {pickerOptions.map((c, i) => (
-                      <button
-                        type="button"
-                        key={c.name}
-                        ref={(el) => {
-                          pickerItemRefs.current[i] = el;
-                        }}
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          applyCommand(c.name);
-                        }}
-                        onMouseEnter={() => setPickerIndex(i)}
-                        className={
-                          'w-full text-left px-3 py-1.5 text-sm flex gap-3 items-baseline transition-colors duration-100 ' +
-                          (i === pickerIndex
-                            ? 'bg-[color:var(--accent)]/20'
-                            : 'hover:bg-white/5')
-                        }
-                      >
-                        <span className="font-mono">/{c.name}</span>
-                        <span className="text-xs text-[color:var(--muted)] truncate">
-                          {c.description}
-                        </span>
-                      </button>
-                    ))}
+            );
+            if (welcomeMode) {
+              return (
+                <>
+                  {pageHeader}
+                  <div className="flex-1 flex flex-col items-stretch pt-[28dvh]">
+                    <div className="px-3 md:px-6 lg:px-10 pb-4">
+                      <div className="max-w-3xl mx-auto flex items-center justify-center gap-3 flex-wrap">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src="/logo.png" alt="" width={48} height={48} />
+                        <h1 className="text-3xl md:text-4xl font-serif text-[color:var(--fg)]">
+                          {welcomeMessage}
+                        </h1>
+                      </div>
+                    </div>
+                    {composerForm}
                   </div>
-                )}
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (pickerVisible) {
-                      if (e.key === 'ArrowDown') {
-                        e.preventDefault();
-                        setPickerIndex((i) => (i + 1) % pickerOptions.length);
-                        return;
-                      }
-                      if (e.key === 'ArrowUp') {
-                        e.preventDefault();
-                        setPickerIndex(
-                          (i) =>
-                            (i - 1 + pickerOptions.length) %
-                            pickerOptions.length,
-                        );
-                        return;
-                      }
-                      if (
-                        e.key === 'Tab' ||
-                        (e.key === 'Enter' && !e.shiftKey)
-                      ) {
-                        e.preventDefault();
-                        const pick = pickerOptions[pickerIndex];
-                        if (pick) applyCommand(pick.name);
-                        return;
-                      }
-                      if (e.key === 'Escape') {
-                        e.preventDefault();
-                        setInput('');
-                        return;
-                      }
-                    }
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      void send();
-                    }
-                  }}
-                  rows={1}
-                  placeholder={
-                    folder && sessionId
-                      ? `Message ${activeAgent?.name || folder}…`
-                      : 'Pick or start a conversation'
-                  }
-                  className="w-full block min-h-[24px] resize-none overflow-y-auto bg-transparent border-0 px-1 text-sm focus:outline-none leading-6 placeholder:text-[color:var(--muted)]"
-                />
-                <div className="mt-1 flex items-center gap-1 flex-wrap">
-                  <button
-                    type="button"
-                    aria-label="Attach file"
-                    title="Attach file"
-                    disabled={!folder || !sessionId || uploading || recording}
-                    onClick={() => fileInputRef.current?.click()}
-                    className="h-8 w-8 inline-flex items-center justify-center rounded-full text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-white/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      width="18"
-                      height="18"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden="true"
-                    >
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={recording ? 'Stop recording' : 'Record voice'}
-                    title={
-                      recording ? 'Stop recording' : 'Record voice message'
-                    }
-                    disabled={!folder || !sessionId || uploading}
-                    onClick={() =>
-                      recording ? stopRecording() : void startRecording()
-                    }
-                    className={
-                      'h-8 w-8 inline-flex items-center justify-center rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed ' +
-                      (recording
-                        ? 'text-red-400 bg-red-500/15 animate-pulse'
-                        : 'text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-white/5')
-                    }
-                  >
-                    {recording ? (
-                      <svg
-                        viewBox="0 0 24 24"
-                        width="14"
-                        height="14"
-                        fill="currentColor"
-                        aria-hidden="true"
-                      >
-                        <rect x="6" y="6" width="12" height="12" rx="1" />
-                      </svg>
-                    ) : (
-                      <svg
-                        viewBox="0 0 24 24"
-                        width="18"
-                        height="18"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        aria-hidden="true"
-                      >
-                        <rect x="9" y="3" width="6" height="12" rx="3" />
-                        <path d="M5 11a7 7 0 0 0 14 0" />
-                        <line x1="12" y1="18" x2="12" y2="22" />
-                      </svg>
-                    )}
-                  </button>
-                  <div className="flex-1" />
-                  {activeAgent && (
-                    <div className="relative" data-popover>
-                      <button
-                        type="button"
-                        onClick={() => setComposerMenu((v) => !v)}
-                        className="h-7 inline-flex items-center gap-1 rounded-full px-2.5 text-[11px] text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-white/5 border border-[color:var(--border)] transition-colors"
-                      >
-                        <span>
-                          {modelLabel(activeAgent.model)}
-                          <span className="opacity-60"> · </span>
-                          {effortLabel(activeAgent.effort)}
-                        </span>
-                        <svg
-                          viewBox="0 0 24 24"
-                          width="10"
-                          height="10"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                      </button>
-                      {composerMenu && folder && (
-                        <div className="absolute bottom-full right-0 mb-2 min-w-[12rem] rounded-xl border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg z-20 py-1">
-                          <div className="px-3 pt-1 pb-1 text-[10px] uppercase tracking-wider text-[color:var(--muted)]">
-                            Model
-                          </div>
-                          {MODEL_OPTIONS.map((opt) => (
-                            <MenuItem
-                              key={opt.id}
-                              label={opt.label}
-                              active={activeAgent.model === opt.id}
-                              onClick={() => {
-                                void updateActiveAgentModel(opt.id);
-                              }}
-                            />
-                          ))}
-                          <div className="h-px my-1 bg-[color:var(--border)]" />
-                          <div className="px-3 pt-1 pb-1 text-[10px] uppercase tracking-wider text-[color:var(--muted)]">
-                            Effort
-                          </div>
-                          {EFFORT_OPTIONS.map((opt) => (
-                            <MenuItem
-                              key={opt}
-                              label={effortLabel(opt)}
-                              active={activeAgent.effort === opt}
-                              onClick={() => {
-                                void updateActiveAgentEffort(opt);
-                              }}
-                            />
-                          ))}
+                </>
+              );
+            }
+            return (
+              <>
+                <div
+                  ref={scrollRef}
+                  onScroll={handleScroll}
+                  className="flex-1 overflow-y-auto"
+                >
+                  {pageHeader}
+                  <div className="px-3 md:px-6 lg:px-10 py-3">
+                    <div className="max-w-3xl mx-auto space-y-3">
+                      {loadingHistory && (
+                        <div className="text-center text-[11px] text-[color:var(--muted)]">
+                          loading history…
                         </div>
                       )}
+                      {(() => {
+                        let lastAgentIdx = -1;
+                        for (let i = messages.length - 1; i >= 0; i--) {
+                          if (
+                            messages[i].side === 'agent' &&
+                            messages[i].text
+                          ) {
+                            lastAgentIdx = i;
+                            break;
+                          }
+                        }
+                        return messages.map((m, idx) => {
+                          let onRegen: (() => void) | undefined;
+                          if (m.side === 'agent') {
+                            const prevUser = lastUserTextBeforeAgent(idx);
+                            if (prevUser)
+                              onRegen = () => void sendText(prevUser);
+                          }
+                          return (
+                            <div key={m.id} data-msg-id={m.id}>
+                              <Bubble
+                                m={m}
+                                onRegenerate={onRegen}
+                                pinned={idx === lastAgentIdx}
+                              />
+                            </div>
+                          );
+                        });
+                      })()}
+                      {(activity || typing) && messages.length > 0 && (
+                        <div className="flex justify-start">
+                          <div className="text-sm text-[color:var(--muted)] animate-pulse px-1">
+                            {activity ? `… ${activity}` : '…'}
+                          </div>
+                        </div>
+                      )}
+                      {messages.length > 0 && (
+                        <div ref={bottomSpacerRef} aria-hidden />
+                      )}
                     </div>
-                  )}
-                  <button
-                    type="submit"
-                    aria-label="Send"
-                    disabled={!folder || !sessionId || !input.trim() || sending}
-                    className="h-8 w-8 inline-flex items-center justify-center rounded-full bg-[color:var(--accent)] text-white transition-all duration-150 hover:brightness-110 active:scale-95 disabled:bg-[color:var(--border)] disabled:text-[color:var(--muted)] disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      width="16"
-                      height="16"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden="true"
-                    >
-                      <line x1="12" y1="19" x2="12" y2="5" />
-                      <polyline points="5 12 12 5 19 12" />
-                    </svg>
-                  </button>
+                  </div>
                 </div>
-              </div>
-              <div className="text-center text-[10px] text-[color:var(--muted)] mt-1.5 px-2">
-                NanoClaw is AI and can make mistakes. Verify important info.
-              </div>
-            </div>
-          </form>
+                {composerForm}
+              </>
+            );
+          })()}
         </section>
       </div>
       <SettingsModal
@@ -1294,8 +1366,11 @@ function SidebarPane(p: SidebarProps) {
         (p.drawerOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0')
       }
     >
-      <header className="px-3 py-3 flex items-center gap-2 border-b border-[color:var(--border)]">
-        <div className="text-base font-semibold flex-1">NanoClaw</div>
+      <header className="px-3 py-3 flex items-center gap-2">
+        <div className="flex-1 flex items-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="NanoClaw" width={32} height={32} />
+        </div>
         <button
           type="button"
           onClick={() => p.setDrawerOpen(false)}
@@ -1306,83 +1381,18 @@ function SidebarPane(p: SidebarProps) {
         </button>
       </header>
 
-      {/* Agent picker */}
-      <div className="px-2 pt-2 pb-1 relative" data-popover>
-        <button
-          type="button"
-          onClick={() => p.setAgentPickerOpen(!p.agentPickerOpen)}
-          className="w-full flex items-center gap-2 px-2 py-2 rounded-md hover:bg-[color:var(--card)] transition-colors"
-        >
-          {p.activeAgent && (
-            <span
-              className="w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white shrink-0"
-              style={{ background: avatarColor(p.activeAgent.folder) }}
-            >
-              {initials(p.activeAgent.name || p.activeAgent.folder)}
-            </span>
-          )}
-          <span className="flex-1 text-sm font-medium truncate text-left">
-            {p.activeAgent?.name || p.activeAgent?.folder || 'Pick agent'}
-          </span>
-          <svg
-            viewBox="0 0 24 24"
-            width="14"
-            height="14"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="text-[color:var(--muted)]"
-          >
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
-        </button>
-        {p.agentPickerOpen && (
-          <div className="absolute left-2 right-2 top-full mt-1 z-20 rounded-md border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg py-1 max-h-72 overflow-y-auto">
-            {p.agents.map((a) => {
-              const active = a.folder === p.folder;
-              return (
-                <button
-                  type="button"
-                  key={a.folder}
-                  onClick={() => {
-                    p.setFolder(a.folder);
-                    p.setAgentPickerOpen(false);
-                  }}
-                  className={
-                    'w-full flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-white/5 ' +
-                    (active ? 'text-[color:var(--accent)]' : '')
-                  }
-                >
-                  <span
-                    className="w-5 h-5 rounded-full grid place-items-center text-[9px] font-bold text-white shrink-0"
-                    style={{ background: avatarColor(a.folder) }}
-                  >
-                    {initials(a.name || a.folder)}
-                  </span>
-                  <span className="flex-1 truncate text-left">
-                    {a.name || a.folder}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
       {/* New chat button */}
-      <div className="px-2 pb-2">
+      <div className="px-3 pb-2">
         <button
           type="button"
           onClick={() => p.folder && p.newSession(p.folder)}
           disabled={!p.folder}
-          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors disabled:opacity-50"
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium text-[color:var(--fg)] bg-[color:var(--card)] hover:bg-[color:var(--accent)]/15 hover:text-[color:var(--accent)] border border-[color:var(--border)] hover:border-[color:var(--accent)]/40 transition-colors disabled:opacity-50"
         >
           <svg
             viewBox="0 0 24 24"
-            width="14"
-            height="14"
+            width="16"
+            height="16"
             fill="none"
             stroke="currentColor"
             strokeWidth="2"
@@ -1423,6 +1433,70 @@ function SidebarPane(p: SidebarProps) {
       </nav>
 
       <div className="border-t border-[color:var(--border)] px-2 py-2 space-y-0.5">
+        {/* Agent picker */}
+        <div className="relative" data-popover>
+          <button
+            type="button"
+            onClick={() => p.setAgentPickerOpen(!p.agentPickerOpen)}
+            className="w-full flex items-center gap-2 px-2 py-2 rounded-md hover:bg-[color:var(--card)] transition-colors"
+          >
+            {p.activeAgent && (
+              <span
+                className="w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white shrink-0"
+                style={{ background: avatarColor(p.activeAgent.folder) }}
+              >
+                {initials(p.activeAgent.name || p.activeAgent.folder)}
+              </span>
+            )}
+            <span className="flex-1 text-sm font-medium truncate text-left">
+              {p.activeAgent?.name || p.activeAgent?.folder || 'Pick agent'}
+            </span>
+            <svg
+              viewBox="0 0 24 24"
+              width="14"
+              height="14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="text-[color:var(--muted)]"
+            >
+              <polyline points="18 15 12 9 6 15" />
+            </svg>
+          </button>
+          {p.agentPickerOpen && (
+            <div className="absolute left-0 right-0 bottom-full mb-1 z-20 rounded-md border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg py-1 max-h-72 overflow-y-auto">
+              {p.agents.map((a) => {
+                const active = a.folder === p.folder;
+                return (
+                  <button
+                    type="button"
+                    key={a.folder}
+                    onClick={() => {
+                      p.setFolder(a.folder);
+                      p.setAgentPickerOpen(false);
+                    }}
+                    className={
+                      'w-full flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-white/5 ' +
+                      (active ? 'text-[color:var(--accent)]' : '')
+                    }
+                  >
+                    <span
+                      className="w-5 h-5 rounded-full grid place-items-center text-[9px] font-bold text-white shrink-0"
+                      style={{ background: avatarColor(a.folder) }}
+                    >
+                      {initials(a.name || a.folder)}
+                    </span>
+                    <span className="flex-1 truncate text-left">
+                      {a.name || a.folder}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => p.setSettingsOpen(true)}

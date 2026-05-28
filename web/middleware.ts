@@ -20,6 +20,6 @@ export const config = {
   // Skip _next/* assets, static files, /api/auth/* (handled above), and the
   // PWA manifest/icons/sw.
   matcher: [
-    '/((?!_next/|icons/|sw\\.js|manifest\\.webmanifest|favicon.ico).*)',
+    '/((?!_next/|icons/|sw\\.js|manifest\\.webmanifest|favicon\\.ico|icon\\.png|apple-icon\\.png|logo\\.png).*)',
   ],
 };

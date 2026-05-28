@@ -62,10 +62,8 @@ export const metadata: Metadata = {
     title: 'NanoClaw',
   },
   icons: {
-    icon: [
-      { url: '/icons/icon-32.png', sizes: '32x32', type: 'image/png' },
-      { url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-    ],
+    icon: [{ url: '/logo.png', type: 'image/png' }],
+    shortcut: '/logo.png',
     apple: '/icons/apple-touch-icon.png',
   },
 };

@@ -1,6 +1,6 @@
 // Minimal service worker. Network-first for /api/*, cache-first for static
 // assets. Lets the PWA load offline once visited; API still requires backend.
-const CACHE = 'nanoclaw-v1';
+const CACHE = 'nanoclaw-v3';
 const STATIC = ['/', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {

@@ -77,9 +77,10 @@ export function formatTimestamp(ts: number): string {
 export interface BubbleProps {
   m: BubbleData;
   onRegenerate?: () => void;
+  pinned?: boolean;
 }
 
-export function Bubble({ m, onRegenerate }: BubbleProps) {
+export function Bubble({ m, onRegenerate, pinned }: BubbleProps) {
   const own = m.side === 'user';
   const time = formatTimestamp(m.ts);
   return (
@@ -107,6 +108,7 @@ export function Bubble({ m, onRegenerate }: BubbleProps) {
           onRegenerate={onRegenerate}
           time={time}
           channelLabel={m.channelLabel}
+          pinned={pinned}
         />
       ) : (
         (time || m.channelLabel) && (
@@ -129,11 +131,13 @@ function AssistantActions({
   onRegenerate,
   time,
   channelLabel,
+  pinned,
 }: {
   text: string;
   onRegenerate?: () => void;
   time?: string;
   channelLabel?: string;
+  pinned?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   function copy() {
@@ -147,7 +151,12 @@ function AssistantActions({
     );
   }
   return (
-    <div className="mt-1 px-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity w-full">
+    <div
+      className={
+        'mt-1 px-1 flex items-center gap-0.5 transition-opacity w-full ' +
+        (pinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')
+      }
+    >
       <button
         type="button"
         onClick={copy}
