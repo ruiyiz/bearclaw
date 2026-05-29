@@ -14,8 +14,10 @@ import {
   agentDir,
   agentVarDir,
 } from '../config.js';
+import { isNestedRegistry, resolveRegistry } from '../agent-registry.js';
 import { loadJson } from '../utils/json.js';
 import type {
+  AgentRegistry,
   EventRecord,
   Handler,
   HandlerRunLog,
@@ -113,20 +115,15 @@ export function getRecentHandlerLogs(limit = 100): HandlerRunLog[] {
 const REGISTERED_AGENTS_PATH = path.join(CONFIG_DIR, 'registered_agents.json');
 const AGENT_FOLDER_RE = /^[A-Za-z0-9._-]+$/;
 
+// Resolve the nested on-disk registry to the flat jid-keyed view. (The running
+// process keeps this view in memory; admin/data reads the file directly for
+// out-of-band tools and health checks.)
 function loadRegisteredAgents(): Record<string, RegisteredAgent> {
-  const raw = loadJson<Record<string, RegisteredAgent> | RegisteredAgent[]>(
-    REGISTERED_AGENTS_PATH,
-    {},
-  );
-  if (Array.isArray(raw)) {
-    const out: Record<string, RegisteredAgent> = {};
-    for (const a of raw) {
-      const { jid: _jid, ...rest } = a as RegisteredAgent & { jid?: string };
-      if (_jid) out[_jid] = rest as RegisteredAgent;
-    }
-    return out;
+  const raw = loadJson<unknown>(REGISTERED_AGENTS_PATH, {});
+  if (isNestedRegistry(raw)) {
+    return resolveRegistry(raw as AgentRegistry);
   }
-  return raw;
+  return {};
 }
 
 export function getRegisteredAgents(): RegisteredAgent[] {

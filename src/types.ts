@@ -55,7 +55,7 @@ export interface Channel {
   syncMetadata?(force?: boolean): Promise<void>;
 }
 
-interface ContainerConfig {
+export interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }
 
@@ -75,6 +75,11 @@ interface ActiveHoursConfig {
   autoReply?: string; // custom off-hours message
 }
 
+// Resolved, per-channel view of a registered agent. This is the flat shape the
+// router and channels consume, keyed by routing jid. It is *derived* at load
+// (and on every mutation) from the nested on-disk AgentRegistry — never the
+// source of truth. Agent-level fields (name, heartbeat, containerConfig) are
+// copied onto every channel's resolved entry so they cannot drift.
 export interface RegisteredAgent {
   name: string;
   folder: string;
@@ -84,10 +89,39 @@ export interface RegisteredAgent {
   heartbeat?: HeartbeatConfig;
   email?: EmailConfig;
   activeHours?: ActiveHoursConfig;
+  requiresTrigger?: boolean;
   // Marks the channel that should receive folder-wide proactive messages
   // (e.g. the Hypnopompic Report) when multiple channels share the folder.
   primary?: boolean;
 }
+
+// ─── On-disk registry (nested: folder-outer, channels-inner) ────────────────
+// Source of truth for registered_agents.json. Agent-level fields live once on
+// the StoredAgent; per-channel routing config lives on each StoredChannel.
+
+export interface StoredChannel {
+  added_at: string;
+  trigger?: string; // omitted for the web channel (web threads never trigger)
+  requiresTrigger?: boolean;
+  primary?: boolean;
+  activeHours?: ActiveHoursConfig;
+  // email channel only:
+  address?: string;
+  interval?: string;
+}
+
+export interface StoredAgent {
+  name: string;
+  heartbeat?: HeartbeatConfig;
+  containerConfig?: ContainerConfig;
+  // Keyed by channel: a routing jid (imsg:17, <id>@g.us, tg:<id>), the bare
+  // token "web", or "email". The web channel routes by folder, so its key is
+  // bare; the resolved jid is reconstructed as web:<folder>.
+  channels: Record<string, StoredChannel>;
+}
+
+// Keyed by agent folder.
+export type AgentRegistry = Record<string, StoredAgent>;
 
 // Session ID lookup table. Keyed by the per-thread routing key:
 //   - Web channel:   web:<folder>:<sessionId>  (one SDK session per UI thread)

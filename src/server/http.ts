@@ -64,7 +64,6 @@ import {
   type ContextScope,
 } from '../admin/data.js';
 import type { RegisteredAgent } from '../types.js';
-import { loadJson, saveJson } from '../utils/json.js';
 
 export interface HttpServerOpts {
   webChannel: WebChannel;
@@ -986,33 +985,6 @@ function guessContentType(file: string): string {
     default:
       return 'application/octet-stream';
   }
-}
-
-// ─── Registered-agent helper persisted to disk ──────────────────────────────
-
-export function persistRegisteredAgentsHelper(): {
-  ensureWebAgent: (folder: string) => RegisteredAgent;
-} {
-  const registeredPath = path.join(CONFIG_DIR, 'registered_agents.json');
-  return {
-    ensureWebAgent(folder: string): RegisteredAgent {
-      const all = loadJson<Record<string, RegisteredAgent>>(registeredPath, {});
-      const jid = `web:${folder}`;
-      if (all[jid]) return all[jid];
-      // Inherit name from any existing registration for this folder. Web
-      // threads route by folder, never by trigger — leave it empty.
-      const sibling = Object.values(all).find((a) => a.folder === folder);
-      const agent: RegisteredAgent = {
-        name: sibling?.name || folder,
-        folder,
-        trigger: '',
-        added_at: new Date().toISOString(),
-      };
-      all[jid] = agent;
-      saveJson(registeredPath, all);
-      return agent;
-    },
-  };
 }
 
 // ─── Server bootstrap ───────────────────────────────────────────────────────

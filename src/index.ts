@@ -49,10 +49,8 @@ import {
   sessionIdFromJid as webSessionIdFromJid,
 } from './channels/web.js';
 import { attachOutboundPersistence } from './channels/outbound-persist.js';
-import {
-  persistRegisteredAgentsHelper,
-  startHttpServer,
-} from './server/http.js';
+import { startHttpServer } from './server/http.js';
+import { isNestedRegistry, resolveRegistry } from './agent-registry.js';
 import { guessMimetype, resolveMediaSource } from './media/source.js';
 import {
   createHandler,
@@ -90,11 +88,14 @@ import { findChannel } from './channels/router.js';
 import { startSchedulerEmitter } from './events/scheduler.js';
 import { generateSpeech } from './media/tts.js';
 import {
+  AgentRegistry,
   Channel,
   MediaType,
   NewMessage,
   RegisteredAgent,
   Session,
+  StoredAgent,
+  StoredChannel,
 } from './types.js';
 import { loadJson, saveJson } from './utils/json.js';
 import { startDailyRollover } from './agent/daily-rollover.js';
@@ -107,6 +108,10 @@ let lastTimestamp = '';
 let sessions: Session = {};
 let agentModels: Record<string, string> = {};
 let agentEfforts: Record<string, string> = {};
+// Nested, folder-keyed source of truth (mirrors registered_agents.json).
+let agentRegistry: AgentRegistry = {};
+// Flat, jid-keyed view derived from `agentRegistry`. Rebuilt on every mutation;
+// this is what the router, channels, bus and heartbeat consume.
 let registeredAgents: Record<string, RegisteredAgent> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
@@ -178,14 +183,42 @@ function loadState(): void {
   }
   agentModels = loadJson(path.join(DATA_DIR, 'models.json'), {});
   agentEfforts = loadJson(path.join(DATA_DIR, 'efforts.json'), {});
-  registeredAgents = loadJson(
+  const rawRegistry = loadJson<unknown>(
     path.join(CONFIG_DIR, 'registered_agents.json'),
     {},
   );
+  if (!isNestedRegistry(rawRegistry)) {
+    throw new Error(
+      'registered_agents.json is in the old flat format. Run: npx tsx src/scripts/migrate-registered-agents.ts',
+    );
+  }
+  agentRegistry = rawRegistry as AgentRegistry;
+  rebuildResolved();
   logger.info(
-    { agentCount: Object.keys(registeredAgents).length },
+    {
+      folderCount: Object.keys(agentRegistry).length,
+      channelCount: Object.keys(registeredAgents).length,
+    },
     'State loaded',
   );
+}
+
+// Recompute the flat jid-keyed view from the nested registry. Call after every
+// mutation so the resolved view never drifts from the source of truth.
+function rebuildResolved(): void {
+  registeredAgents = resolveRegistry(agentRegistry);
+}
+
+// Persist the nested registry and rebuild the resolved view.
+function persistRegistry(): void {
+  saveJson(path.join(CONFIG_DIR, 'registered_agents.json'), agentRegistry);
+  rebuildResolved();
+}
+
+// Map a routing jid to its stored channel key (web jids collapse to the bare
+// "web" token; everything else is its own key).
+function channelKeyForJid(jid: string): string {
+  return jid.startsWith('web:') ? 'web' : jid;
 }
 
 function persistSessions(): void {
@@ -228,20 +261,52 @@ function saveState(): void {
   persistSessions();
 }
 
+// Wire a channel onto an agent folder. Accepts the resolved (flat) shape used
+// by callers and folds it into the nested registry: agent-level fields land on
+// the folder's StoredAgent (set once, on folder creation), channel-level fields
+// on channels[channelKey].
 function registerAgent(jid: string, agent: RegisteredAgent): void {
-  registeredAgents[jid] = agent;
-  saveJson(path.join(CONFIG_DIR, 'registered_agents.json'), registeredAgents);
+  const folder = agent.folder;
+  const channelKey = channelKeyForJid(jid);
 
-  const persistentDir = path.join(AGENTS_DIR, agent.folder);
+  const ch: StoredChannel = { added_at: agent.added_at };
+  // Web threads never trigger — omit the trigger entirely. Other channels keep
+  // their trigger (including the empty string = "respond to everything").
+  if (channelKey !== 'web') ch.trigger = agent.trigger ?? '';
+  if (agent.requiresTrigger !== undefined)
+    ch.requiresTrigger = agent.requiresTrigger;
+  if (agent.primary) ch.primary = true;
+  if (agent.activeHours) ch.activeHours = agent.activeHours;
+
+  let entry: StoredAgent = agentRegistry[folder];
+  if (!entry) {
+    entry = { name: agent.name, channels: {} };
+    agentRegistry[folder] = entry;
+  }
+  if (agent.heartbeat) entry.heartbeat = agent.heartbeat;
+  if (agent.containerConfig) entry.containerConfig = agent.containerConfig;
+  entry.channels[channelKey] = ch;
+  persistRegistry();
+
+  const persistentDir = path.join(AGENTS_DIR, folder);
   fs.mkdirSync(persistentDir, { recursive: true });
-  fs.mkdirSync(path.join(agentVarDir(agent.folder), 'logs'), {
+  fs.mkdirSync(path.join(agentVarDir(folder), 'logs'), {
     recursive: true,
   });
 
-  logger.info(
-    { jid, name: agent.name, folder: agent.folder },
-    'Agent registered',
-  );
+  logger.info({ jid, name: agent.name, folder }, 'Agent registered');
+}
+
+// Ensure a folder has a web channel wired (idempotent). Inherits the folder's
+// display name; web threads route by folder, so the trigger stays empty.
+function ensureWebAgentRegistered(folder: string): void {
+  if (registeredAgents[`web:${folder}`]) return;
+  registerAgent(`web:${folder}`, {
+    name: agentRegistry[folder]?.name || folder,
+    folder,
+    trigger: '',
+    added_at: new Date().toISOString(),
+  });
 }
 
 function getAvailableGroups(): AvailableGroup[] {
@@ -303,18 +368,17 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   let content = msg.content.trim();
   const isMainAgent = agent.folder === MAIN_AGENT_FOLDER;
-  // Web jids are per-folder dedicated threads — the UI already routes by
-  // folder, so no trigger prefix is needed.
-  const isWebJid = msg.chat_jid.startsWith('web:');
 
-  if (!isMainAgent && !isWebJid) {
-    if (agent.trigger && !content.startsWith('/')) {
-      const triggerPattern = new RegExp(
-        `^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
-        'i',
-      );
-      if (!triggerPattern.test(content)) return;
-    }
+  // Trigger gating is declarative: a channel's resolved config carries its own
+  // trigger (empty = respond to everything) and activeHours. Web threads route
+  // by folder and resolve with no trigger, so they fall through without any
+  // channel-prefix special-casing here.
+  if (!isMainAgent && agent.trigger && !content.startsWith('/')) {
+    const triggerPattern = new RegExp(
+      `^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+      'i',
+    );
+    if (!triggerPattern.test(content)) return;
   }
 
   if (agent.activeHours && !isInActiveWindow(agent.activeHours.cron)) {
@@ -1560,15 +1624,11 @@ async function main(): Promise<void> {
   channels.push(webChannel);
   await webChannel.connect();
 
-  const { ensureWebAgent } = persistRegisteredAgentsHelper();
   startHttpServer({
     webChannel,
     registeredAgents: () => registeredAgents,
     registerWebAgent: (folder: string) => {
-      const jid = `web:${folder}`;
-      if (registeredAgents[jid]) return;
-      const agent = ensureWebAgent(folder);
-      registerAgent(jid, agent);
+      ensureWebAgentRegistered(folder);
     },
     addRegisteredAgent: (jid: string, agent: RegisteredAgent) => {
       registerAgent(jid, agent);
@@ -1576,65 +1636,65 @@ async function main(): Promise<void> {
     updateRegisteredAgent: (jid, patch) => {
       const existing = registeredAgents[jid];
       if (!existing) return null;
-      const next: RegisteredAgent = { ...existing };
-      if (typeof patch.name === 'string') next.name = patch.name;
-      if (typeof patch.trigger === 'string') next.trigger = patch.trigger;
-      if (typeof patch.primary === 'boolean') next.primary = patch.primary;
-      registeredAgents[jid] = next;
-      saveJson(
-        path.join(CONFIG_DIR, 'registered_agents.json'),
-        registeredAgents,
-      );
-      logger.info(
-        { jid, name: next.name, folder: next.folder },
-        'Agent entry updated',
-      );
+      const folder = existing.folder;
+      const entry = agentRegistry[folder];
+      if (!entry) return null;
+      // name is agent-level — patching it via a single channel renames the
+      // whole folder (matches the folder-wide display-name model).
+      if (typeof patch.name === 'string') entry.name = patch.name;
+      const channelKey = channelKeyForJid(jid);
+      const ch = entry.channels[channelKey];
+      if (ch) {
+        // Web channels never trigger — ignore trigger patches for them.
+        if (typeof patch.trigger === 'string' && channelKey !== 'web')
+          ch.trigger = patch.trigger;
+        if (typeof patch.primary === 'boolean') {
+          if (patch.primary) ch.primary = true;
+          else delete ch.primary;
+        }
+      }
+      persistRegistry();
+      const next = registeredAgents[jid] ?? null;
+      logger.info({ jid, name: entry.name, folder }, 'Agent entry updated');
       return next;
     },
     removeRegisteredAgent: (jid: string) => {
-      if (!registeredAgents[jid]) return;
-      delete registeredAgents[jid];
-      saveJson(
-        path.join(CONFIG_DIR, 'registered_agents.json'),
-        registeredAgents,
-      );
+      const existing = registeredAgents[jid];
+      if (!existing) return;
+      const entry = agentRegistry[existing.folder];
+      if (entry) {
+        delete entry.channels[channelKeyForJid(jid)];
+        // Drop the folder entry once its last routing channel is gone (an
+        // email-only channels map would leave a non-routable folder).
+        const routingLeft = Object.keys(entry.channels).some(
+          (k) => k !== 'email',
+        );
+        if (!routingLeft) delete agentRegistry[existing.folder];
+      }
+      persistRegistry();
       logger.info({ jid }, 'Agent unwired');
     },
     removeRegisteredAgentsByFolder: (folder: string) => {
-      const removed: string[] = [];
-      for (const jid of Object.keys(registeredAgents)) {
-        if (registeredAgents[jid].folder === folder) {
-          delete registeredAgents[jid];
-          removed.push(jid);
-        }
-      }
-      if (removed.length > 0) {
-        saveJson(
-          path.join(CONFIG_DIR, 'registered_agents.json'),
-          registeredAgents,
-        );
-      }
+      const removed = Object.keys(registeredAgents).filter(
+        (jid) => registeredAgents[jid].folder === folder,
+      );
+      delete agentRegistry[folder];
+      if (removed.length > 0) persistRegistry();
       logger.info({ folder, count: removed.length }, 'Agent removed (jids)');
       return removed;
     },
     setAgentDisplayName: (folder: string, name: string) => {
-      const updated: string[] = [];
-      for (const [jid, a] of Object.entries(registeredAgents)) {
-        if (a.folder === folder) {
-          a.name = name;
-          updated.push(jid);
-        }
-      }
-      if (updated.length > 0) {
-        saveJson(
-          path.join(CONFIG_DIR, 'registered_agents.json'),
-          registeredAgents,
-        );
-        logger.info(
-          { folder, name, count: updated.length },
-          'Agent display name set',
-        );
-      }
+      const entry = agentRegistry[folder];
+      if (!entry) return [];
+      entry.name = name;
+      const updated = Object.keys(registeredAgents).filter(
+        (jid) => registeredAgents[jid].folder === folder,
+      );
+      persistRegistry();
+      logger.info(
+        { folder, name, count: updated.length },
+        'Agent display name set',
+      );
       return updated;
     },
     getAgentModel: (folder: string) => agentModels[folder],
@@ -1665,10 +1725,7 @@ async function main(): Promise<void> {
     defaultEffort: DEFAULT_EFFORT,
   });
   // Auto-wire the main agent so first-load chat works without manual setup.
-  if (!registeredAgents[`web:${MAIN_AGENT_FOLDER}`]) {
-    const agent = ensureWebAgent(MAIN_AGENT_FOLDER);
-    registerAgent(`web:${MAIN_AGENT_FOLDER}`, agent);
-  }
+  ensureWebAgentRegistered(MAIN_AGENT_FOLDER);
 
   // Start all subsystems unconditionally
   startSchedulerEmitter();
