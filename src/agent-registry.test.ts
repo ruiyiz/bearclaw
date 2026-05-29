@@ -90,23 +90,28 @@ test('resolveRegistry round-trips the migrated registry back to flat jids', () =
   // Real routing jids preserved.
   assert.ok('imsg:17' in flat);
   assert.ok('tg:1719584668' in flat);
-  // email is config-only — never a routing entry.
+  // email routes as email:<folder>, never the bare "email" key.
   assert.ok(!('email' in flat));
+  assert.ok('email:coco' in flat);
   assert.equal(flat['imsg:17'].folder, 'coco');
   assert.equal(flat['imsg:17'].name, 'CoCo');
   assert.equal(flat['tg:1719584668'].trigger, '');
   assert.equal(flat['tg:1719584668'].primary, true);
 });
 
-test('resolveRegistry copies email config onto every routing channel of the folder', () => {
+test('resolveRegistry emits a dedicated email:<folder> entry (no trigger, no off-hours)', () => {
   const nested = migrateFlatToNested(FLAT);
   const flat = resolveRegistry(nested);
-  for (const jid of ['imsg:17', '120363406031716049@g.us', 'web:coco']) {
-    assert.deepEqual(flat[jid].email, {
-      address: 'owner+coco@gmail.com',
-      interval: '30m',
-    });
-  }
+  assert.ok('email:coco' in flat);
+  assert.deepEqual(flat['email:coco'].email, {
+    address: 'owner+coco@gmail.com',
+    interval: '30m',
+  });
+  assert.equal(flat['email:coco'].trigger, '');
+  assert.equal(flat['email:coco'].activeHours, undefined);
+  // email config is NOT copied onto the folder's other channels.
+  assert.equal(flat['imsg:17'].email, undefined);
+  assert.equal(flat['web:coco'].email, undefined);
 });
 
 test('resolveRegistry defaults missing trigger to empty string', () => {

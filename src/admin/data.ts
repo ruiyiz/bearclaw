@@ -427,6 +427,46 @@ export function runHealthChecks(): HealthCheck[] {
     db.close();
   }
 
+  // 6. Email poll health — one check per folder with an email channel, read
+  // from the status files the EmailChannel writes after each poll.
+  for (const folder of Object.keys(loadRegisteredAgents()).reduce<Set<string>>(
+    (set, jid) => {
+      if (jid.startsWith('email:')) set.add(jid.slice('email:'.length));
+      return set;
+    },
+    new Set(),
+  )) {
+    const statusPath = path.join(DATA_DIR, `email_status_${folder}.json`);
+    if (!fs.existsSync(statusPath)) {
+      checks.push({
+        name: `Email (${folder})`,
+        status: 'warn',
+        detail: 'No poll has run yet',
+      });
+      continue;
+    }
+    try {
+      const s = JSON.parse(fs.readFileSync(statusPath, 'utf-8')) as {
+        lastPollOk?: boolean;
+        lastPollAt?: string;
+        lastPollError?: string | null;
+      };
+      checks.push({
+        name: `Email (${folder})`,
+        status: s.lastPollOk ? 'ok' : 'fail',
+        detail: s.lastPollOk
+          ? `Last poll ok${s.lastPollAt ? ` at ${s.lastPollAt}` : ''}`
+          : `Last poll failed: ${s.lastPollError || 'unknown'}`,
+      });
+    } catch (err) {
+      checks.push({
+        name: `Email (${folder})`,
+        status: 'warn',
+        detail: `Cannot read status: ${err}`,
+      });
+    }
+  }
+
   return checks;
 }
 

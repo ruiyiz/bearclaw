@@ -145,15 +145,6 @@ export interface NewMessage {
   timestamp: string;
 }
 
-export interface EmailMessage {
-  id: string;
-  threadId: string;
-  from: string;
-  subject: string;
-  body: string;
-  date: string;
-}
-
 export interface EventRecord {
   id: number;
   type: string;

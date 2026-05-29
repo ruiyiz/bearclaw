@@ -16,34 +16,25 @@ import type {
   StoredChannel,
 } from './types.js';
 
-// Reconstruct the routing jid for a stored channel key. The web channel routes
-// by folder, so its stored key is the bare token "web"; every other channel
-// key is already its routing jid.
+// Reconstruct the routing jid for a stored channel key. The web and email
+// channels route by folder, so their stored keys are bare tokens; every other
+// channel key is already its routing jid.
 export function jidForChannelKey(folder: string, channelKey: string): string {
-  return channelKey === 'web' ? `web:${folder}` : channelKey;
+  if (channelKey === 'web') return `web:${folder}`;
+  if (channelKey === 'email') return `email:${folder}`;
+  return channelKey;
 }
 
 // Derive the flat, jid-keyed RegisteredAgent view from the nested registry.
-// "email" is config-only in this pass (no routing jid yet); its address/
-// interval are copied onto every routing channel of the folder so the legacy
-// per-folder email loop keeps working. The email key itself never becomes a
-// routing entry here.
+// Each channel (including email) resolves to its own routing entry. The email
+// entry carries the address/interval and, like web, never triggers or applies
+// off-hours — email always replies, and delivery is structural (by jid).
 export function resolveRegistry(
   reg: AgentRegistry,
 ): Record<string, RegisteredAgent> {
   const out: Record<string, RegisteredAgent> = {};
   for (const [folder, agent] of Object.entries(reg)) {
-    const emailCh = agent.channels.email;
-    const email =
-      emailCh && emailCh.address
-        ? {
-            address: emailCh.address,
-            ...(emailCh.interval ? { interval: emailCh.interval } : {}),
-          }
-        : undefined;
-
     for (const [channelKey, ch] of Object.entries(agent.channels)) {
-      if (channelKey === 'email') continue;
       const jid = jidForChannelKey(folder, channelKey);
       const resolved: RegisteredAgent = {
         name: agent.name,
@@ -51,14 +42,22 @@ export function resolveRegistry(
         trigger: ch.trigger ?? '',
         added_at: ch.added_at,
       };
-      if (ch.requiresTrigger !== undefined)
-        resolved.requiresTrigger = ch.requiresTrigger;
-      if (ch.primary) resolved.primary = true;
-      if (ch.activeHours) resolved.activeHours = ch.activeHours;
+      if (channelKey === 'email') {
+        if (!ch.address) continue; // misconfigured email channel — skip
+        resolved.trigger = '';
+        resolved.email = {
+          address: ch.address,
+          ...(ch.interval ? { interval: ch.interval } : {}),
+        };
+      } else {
+        if (ch.requiresTrigger !== undefined)
+          resolved.requiresTrigger = ch.requiresTrigger;
+        if (ch.primary) resolved.primary = true;
+        if (ch.activeHours) resolved.activeHours = ch.activeHours;
+      }
       if (agent.heartbeat) resolved.heartbeat = agent.heartbeat;
       if (agent.containerConfig)
         resolved.containerConfig = agent.containerConfig;
-      if (email) resolved.email = email;
       out[jid] = resolved;
     }
   }

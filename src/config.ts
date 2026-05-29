@@ -75,7 +75,6 @@ export const TELEGRAM_STREAM_MODE: 'live' | 'progress' =
   process.env.TELEGRAM_STREAM_MODE === 'progress' ? 'progress' : 'live';
 
 export const EMAIL_DEFAULT_INTERVAL = '1h';
-export const EMAIL_HANDLER_PREFIX = 'email-';
 
 // Heartbeat — proactive agent initiative loop
 export const HEARTBEAT_HANDLER_PREFIX = 'heartbeat-';

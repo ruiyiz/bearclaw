@@ -42,6 +42,7 @@ import type { EffortLevel } from './agent/runner.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { initBotPool, TelegramChannel } from './channels/telegram.js';
 import { IMessageChannel } from './channels/imessage.js';
+import { EmailChannel } from './channels/email.js';
 import {
   WebChannel,
   folderFromJid as webFolderFromJid,
@@ -71,11 +72,6 @@ import {
   updateHandler,
   updateMessageContent,
 } from './db.js';
-import {
-  registerEmailHandlers,
-  sendEmailReply,
-  startEmailLoops,
-} from './integrations/email.js';
 import { commandMap } from './commands/registry.js';
 import { startEventBusLoop } from './events/bus.js';
 import { registerHeartbeatHandlers } from './events/heartbeat.js';
@@ -215,10 +211,13 @@ function persistRegistry(): void {
   rebuildResolved();
 }
 
-// Map a routing jid to its stored channel key (web jids collapse to the bare
-// "web" token; everything else is its own key).
+// Map a routing jid to its stored channel key (web/email jids collapse to the
+// bare "web"/"email" tokens; everything else is its own key). Inverse of
+// jidForChannelKey.
 function channelKeyForJid(jid: string): string {
-  return jid.startsWith('web:') ? 'web' : jid;
+  if (jid.startsWith('web:')) return 'web';
+  if (jid.startsWith('email:')) return 'email';
+  return jid;
 }
 
 function persistSessions(): void {
@@ -236,19 +235,19 @@ function touchWebSessionForJid(chatJid: string, timestamp: string): void {
   touchWebSession(folder, sessionId, timestamp);
 }
 
-// Resolves a chat_jid to its registered agent. Web composite jids
-// (`web:<folder>:<sessionId>`) all share one folder-level registry entry under
-// `web:<folder>`. IM and other channels register exact jids.
+// Resolves a chat_jid to its registered agent. Composite jids collapse to a
+// folder-level entry: web threads (`web:<folder>:<sessionId>`) → `web:<folder>`,
+// email threads (`email:<folder>:<threadId>`) → `email:<folder>`. IM and other
+// channels register exact jids.
 function lookupAgent(chatJid: string): RegisteredAgent | undefined {
   const exact = registeredAgents[chatJid];
   if (exact) return exact;
-  if (chatJid.startsWith('web:')) {
-    const rest = chatJid.slice(4);
+  for (const prefix of ['web:', 'email:']) {
+    if (!chatJid.startsWith(prefix)) continue;
+    const rest = chatJid.slice(prefix.length);
     const colon = rest.indexOf(':');
-    if (colon !== -1) {
-      const folderKey = `web:${rest.slice(0, colon)}`;
-      return registeredAgents[folderKey];
-    }
+    if (colon !== -1)
+      return registeredAgents[`${prefix}${rest.slice(0, colon)}`];
   }
   return undefined;
 }
@@ -735,8 +734,16 @@ function sessionKeyFor(chatJid: string, folder: string): string {
 }
 
 function imJidsForFolder(folder: string): string[] {
+  // IM broadcast targets only — web and email route per-thread and are never
+  // fanned out to here (email especially: a stray broadcast would email the
+  // owner on every proactive turn).
   return Object.entries(registeredAgents)
-    .filter(([jid, a]) => a.folder === folder && !jid.startsWith('web:'))
+    .filter(
+      ([jid, a]) =>
+        a.folder === folder &&
+        !jid.startsWith('web:') &&
+        !jid.startsWith('email:'),
+    )
     .map(([jid]) => jid);
 }
 
@@ -990,9 +997,13 @@ function startIpcWatcher(): void {
                 } else {
                   // No originating channel (e.g. event handler). Prefer the
                   // folder's primary channel if one is flagged; otherwise fan
-                  // out to every channel registered to the folder.
+                  // out to every channel registered to the folder. Email is
+                  // excluded — proactive output must target it explicitly via
+                  // an email:<folder> chatJid, never the broadcast fan-out.
                   const folderJids = Object.entries(registeredAgents).filter(
-                    ([, a]) => a.folder === data.agentFolder,
+                    ([jid, a]) =>
+                      a.folder === data.agentFolder &&
+                      !jid.startsWith('email:'),
                   );
                   const primary = folderJids.find(([, a]) => a.primary);
                   targetJids = primary
@@ -1401,61 +1412,6 @@ async function processTaskIpc(
       }
       break;
 
-    case 'reply_email':
-      if (
-        data.requestId &&
-        data.messageId &&
-        data.to &&
-        data.subject &&
-        data.body
-      ) {
-        const emailResultsDir = path.join(
-          RUN_DIR,
-          'ipc',
-          sourceAgent,
-          'email_results',
-        );
-        fs.mkdirSync(emailResultsDir, { recursive: true });
-        try {
-          await sendEmailReply(
-            data.messageId,
-            data.to,
-            data.subject,
-            data.body,
-          );
-          const resultFile = path.join(
-            emailResultsDir,
-            `${data.requestId}.json`,
-          );
-          fs.writeFileSync(
-            resultFile,
-            JSON.stringify({ success: true, message: 'Email reply sent' }),
-          );
-          logger.info(
-            { messageId: data.messageId, to: data.to, sourceAgent },
-            'Email reply sent via IPC',
-          );
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          const resultFile = path.join(
-            emailResultsDir,
-            `${data.requestId}.json`,
-          );
-          fs.writeFileSync(
-            resultFile,
-            JSON.stringify({
-              success: false,
-              message: `Failed to send email: ${errorMsg}`,
-            }),
-          );
-          logger.error(
-            { messageId: data.messageId, err, sourceAgent },
-            'Failed to send email reply via IPC',
-          );
-        }
-      }
-      break;
-
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
@@ -1552,7 +1508,6 @@ async function main(): Promise<void> {
   startMaintenance();
 
   registerHeartbeatHandlers(registeredAgents);
-  registerEmailHandlers(registeredAgents);
 
   // Initialize channels based on config
   if (!TELEGRAM_ONLY) {
@@ -1602,6 +1557,22 @@ async function main(): Promise<void> {
     channels.push(imessage);
     await imessage.connect();
   }
+
+  // Email channel — one channel owns every email thread. Per-folder poll loops
+  // (for folders with an email channel in the registry) feed inbound mail
+  // through the same dispatch path as the other channels; replies are
+  // delivered structurally by jid. Fire-and-forget connect (starts polling).
+  const email = new EmailChannel({
+    onMessage: (_chatJid, msg) => {
+      storeMessage(msg);
+      dispatchMessage(msg);
+    },
+    onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
+    registeredAgents: () => registeredAgents,
+  });
+  attachOutboundPersistence(email, () => registeredAgents);
+  channels.push(email);
+  void email.connect();
 
   // Web channel — backs the Next.js app. Always on; bound to a local HTTP
   // server (127.0.0.1) so the PWA can chat, watch events, and run admin ops.
@@ -1736,7 +1707,6 @@ async function main(): Promise<void> {
   });
   startIpcWatcher();
   startMessageLoop();
-  startEmailLoops(registeredAgents);
 }
 
 main().catch((err) => {
