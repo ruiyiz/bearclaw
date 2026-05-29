@@ -1,5 +1,5 @@
 /**
- * IPC-based MCP Server for NanoClaw
+ * IPC-based MCP Server for BearClaw
  * Writes messages and tasks to files for the host process to pick up
  */
 
@@ -79,7 +79,7 @@ export function createIpcMcp(ctx: IpcMcpContext) {
   const tasksDir = path.join(ipcDir, 'tasks');
 
   return createSdkMcpServer({
-    name: 'nanoclaw',
+    name: 'bearclaw',
     version: '1.0.0',
     tools: [
       tool(

@@ -5,7 +5,7 @@ description: Add Telegram as a channel. Can replace WhatsApp entirely or run alo
 
 # Add Telegram Channel
 
-This skill adds Telegram support to NanoClaw. Users can choose to:
+This skill adds Telegram support to BearClaw. Users can choose to:
 
 1. **Replace WhatsApp** - Use Telegram as the only messaging channel
 2. **Add alongside WhatsApp** - Both channels active
@@ -43,11 +43,13 @@ Tell the user:
 > To register a chat, you need its Chat ID. Here's how:
 >
 > **For Private Chat (DM with bot):**
+>
 > 1. Search for your bot in Telegram
 > 2. Start a chat and send any message
 > 3. I'll add a `/chatid` command to help you get the ID
 >
 > **For Group Chat:**
+>
 > 1. Add your bot to the group
 > 2. Send any message
 > 3. Use the `/chatid` command in the group
@@ -81,16 +83,17 @@ Before making changes, ask:
 
 ## Architecture
 
-NanoClaw uses a **Channel abstraction** (`Channel` interface in `src/types.ts`). Each messaging platform implements this interface. Key files:
+BearClaw uses a **Channel abstraction** (`Channel` interface in `src/types.ts`). Each messaging platform implements this interface. Key files:
 
-| File | Purpose |
-|------|---------|
-| `src/types.ts` | `Channel` interface definition |
-| `src/channels/whatsapp.ts` | `WhatsAppChannel` class (reference implementation) |
-| `src/channels/router.ts` | `findChannel()` |
-| `src/index.ts` | Orchestrator: creates channels, wires callbacks, starts the IPC watcher |
+| File                       | Purpose                                                                 |
+| -------------------------- | ----------------------------------------------------------------------- |
+| `src/types.ts`             | `Channel` interface definition                                          |
+| `src/channels/whatsapp.ts` | `WhatsAppChannel` class (reference implementation)                      |
+| `src/channels/router.ts`   | `findChannel()`                                                         |
+| `src/index.ts`             | Orchestrator: creates channels, wires callbacks, starts the IPC watcher |
 
 The Telegram channel follows the same pattern as WhatsApp:
+
 - Implements `Channel` interface (`connect`, `sendMessage`, `ownsJid`, `disconnect`, `setTyping`)
 - Delivers inbound messages via `onMessage` / `onChatMetadata` callbacks
 - The existing message loop in `src/index.ts` picks up stored messages automatically
@@ -102,8 +105,8 @@ The Telegram channel follows the same pattern as WhatsApp:
 Read `src/config.ts` and add Telegram config exports:
 
 ```typescript
-export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-export const TELEGRAM_ONLY = process.env.TELEGRAM_ONLY === "true";
+export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+export const TELEGRAM_ONLY = process.env.TELEGRAM_ONLY === 'true';
 ```
 
 These should be added near the top with other configuration exports.
@@ -113,14 +116,16 @@ These should be added near the top with other configuration exports.
 Create `src/channels/telegram.ts` implementing the `Channel` interface. Use `src/channels/whatsapp.ts` as a reference for the pattern.
 
 ```typescript
-import { Bot } from "grammy";
+import { Bot } from 'grammy';
 
+import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { logger } from '../logger.js';
 import {
-  ASSISTANT_NAME,
-  TRIGGER_PATTERN,
-} from "../config.js";
-import { logger } from "../logger.js";
-import { Channel, OnInboundMessage, OnChatMetadata, RegisteredGroup } from "../types.js";
+  Channel,
+  OnInboundMessage,
+  OnChatMetadata,
+  RegisteredGroup,
+} from '../types.js';
 
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
@@ -129,7 +134,7 @@ export interface TelegramChannelOpts {
 }
 
 export class TelegramChannel implements Channel {
-  name = "telegram";
+  name = 'telegram';
   // Formatting is handled internally by sendMessage via renderMarkdown
 
   private bot: Bot | null = null;
@@ -145,28 +150,28 @@ export class TelegramChannel implements Channel {
     this.bot = new Bot(this.botToken);
 
     // Command to get chat ID (useful for registration)
-    this.bot.command("chatid", (ctx) => {
+    this.bot.command('chatid', (ctx) => {
       const chatId = ctx.chat.id;
       const chatType = ctx.chat.type;
       const chatName =
-        chatType === "private"
-          ? ctx.from?.first_name || "Private"
-          : (ctx.chat as any).title || "Unknown";
+        chatType === 'private'
+          ? ctx.from?.first_name || 'Private'
+          : (ctx.chat as any).title || 'Unknown';
 
       ctx.reply(
         `Chat ID: \`tg:${chatId}\`\nName: ${chatName}\nType: ${chatType}`,
-        { parse_mode: "Markdown" },
+        { parse_mode: 'Markdown' },
       );
     });
 
     // Command to check bot status
-    this.bot.command("ping", (ctx) => {
+    this.bot.command('ping', (ctx) => {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
-    this.bot.on("message:text", async (ctx) => {
+    this.bot.on('message:text', async (ctx) => {
       // Skip commands
-      if (ctx.message.text.startsWith("/")) return;
+      if (ctx.message.text.startsWith('/')) return;
 
       const chatJid = `tg:${ctx.chat.id}`;
       let content = ctx.message.text;
@@ -175,13 +180,13 @@ export class TelegramChannel implements Channel {
         ctx.from?.first_name ||
         ctx.from?.username ||
         ctx.from?.id.toString() ||
-        "Unknown";
-      const sender = ctx.from?.id.toString() || "";
+        'Unknown';
+      const sender = ctx.from?.id.toString() || '';
       const msgId = ctx.message.message_id.toString();
 
       // Determine chat name
       const chatName =
-        ctx.chat.type === "private"
+        ctx.chat.type === 'private'
           ? senderName
           : (ctx.chat as any).title || chatJid;
 
@@ -192,7 +197,7 @@ export class TelegramChannel implements Channel {
       if (botUsername) {
         const entities = ctx.message.entities || [];
         const isBotMentioned = entities.some((entity) => {
-          if (entity.type === "mention") {
+          if (entity.type === 'mention') {
             const mentionText = content
               .substring(entity.offset, entity.offset + entity.length)
               .toLowerCase();
@@ -213,7 +218,7 @@ export class TelegramChannel implements Channel {
       if (!group) {
         logger.debug(
           { chatJid, chatName },
-          "Message from unregistered Telegram chat",
+          'Message from unregistered Telegram chat',
         );
         return;
       }
@@ -231,7 +236,7 @@ export class TelegramChannel implements Channel {
 
       logger.info(
         { chatJid, chatName, sender: senderName },
-        "Telegram message stored",
+        'Telegram message stored',
       );
     });
 
@@ -243,14 +248,17 @@ export class TelegramChannel implements Channel {
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
-        ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || "Unknown";
-      const caption = ctx.message.caption ? ` ${ctx.message.caption}` : "";
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+      const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
       this.opts.onChatMetadata(chatJid, timestamp);
       this.opts.onMessage(chatJid, {
         id: ctx.message.message_id.toString(),
         chat_jid: chatJid,
-        sender: ctx.from?.id?.toString() || "",
+        sender: ctx.from?.id?.toString() || '',
         sender_name: senderName,
         content: `${placeholder}${caption}`,
         timestamp,
@@ -258,24 +266,24 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on("message:photo", (ctx) => storeNonText(ctx, "[Photo]"));
-    this.bot.on("message:video", (ctx) => storeNonText(ctx, "[Video]"));
-    this.bot.on("message:voice", (ctx) => storeNonText(ctx, "[Voice message]"));
-    this.bot.on("message:audio", (ctx) => storeNonText(ctx, "[Audio]"));
-    this.bot.on("message:document", (ctx) => {
-      const name = ctx.message.document?.file_name || "file";
+    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
+    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
+    this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
+    this.bot.on('message:document', (ctx) => {
+      const name = ctx.message.document?.file_name || 'file';
       storeNonText(ctx, `[Document: ${name}]`);
     });
-    this.bot.on("message:sticker", (ctx) => {
-      const emoji = ctx.message.sticker?.emoji || "";
+    this.bot.on('message:sticker', (ctx) => {
+      const emoji = ctx.message.sticker?.emoji || '';
       storeNonText(ctx, `[Sticker ${emoji}]`);
     });
-    this.bot.on("message:location", (ctx) => storeNonText(ctx, "[Location]"));
-    this.bot.on("message:contact", (ctx) => storeNonText(ctx, "[Contact]"));
+    this.bot.on('message:location', (ctx) => storeNonText(ctx, '[Location]'));
+    this.bot.on('message:contact', (ctx) => storeNonText(ctx, '[Contact]'));
 
     // Handle errors gracefully
     this.bot.catch((err) => {
-      logger.error({ err: err.message }, "Telegram bot error");
+      logger.error({ err: err.message }, 'Telegram bot error');
     });
 
     // Start polling — returns a Promise that resolves when started
@@ -284,7 +292,7 @@ export class TelegramChannel implements Channel {
         onStart: (botInfo) => {
           logger.info(
             { username: botInfo.username, id: botInfo.id },
-            "Telegram bot connected",
+            'Telegram bot connected',
           );
           console.log(`\n  Telegram bot: @${botInfo.username}`);
           console.log(
@@ -298,12 +306,12 @@ export class TelegramChannel implements Channel {
 
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.bot) {
-      logger.warn("Telegram bot not initialized");
+      logger.warn('Telegram bot not initialized');
       return;
     }
 
     try {
-      const numericId = jid.replace(/^tg:/, "");
+      const numericId = jid.replace(/^tg:/, '');
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
@@ -311,12 +319,15 @@ export class TelegramChannel implements Channel {
         await this.bot.api.sendMessage(numericId, text);
       } else {
         for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await this.bot.api.sendMessage(numericId, text.slice(i, i + MAX_LENGTH));
+          await this.bot.api.sendMessage(
+            numericId,
+            text.slice(i, i + MAX_LENGTH),
+          );
         }
       }
-      logger.info({ jid, length: text.length }, "Telegram message sent");
+      logger.info({ jid, length: text.length }, 'Telegram message sent');
     } catch (err) {
-      logger.error({ jid, err }, "Failed to send Telegram message");
+      logger.error({ jid, err }, 'Failed to send Telegram message');
     }
   }
 
@@ -325,30 +336,31 @@ export class TelegramChannel implements Channel {
   }
 
   ownsJid(jid: string): boolean {
-    return jid.startsWith("tg:");
+    return jid.startsWith('tg:');
   }
 
   async disconnect(): Promise<void> {
     if (this.bot) {
       this.bot.stop();
       this.bot = null;
-      logger.info("Telegram bot stopped");
+      logger.info('Telegram bot stopped');
     }
   }
 
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (!this.bot || !isTyping) return;
     try {
-      const numericId = jid.replace(/^tg:/, "");
-      await this.bot.api.sendChatAction(numericId, "typing");
+      const numericId = jid.replace(/^tg:/, '');
+      await this.bot.api.sendChatAction(numericId, 'typing');
     } catch (err) {
-      logger.debug({ jid, err }, "Failed to send Telegram typing indicator");
+      logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
     }
   }
 }
 ```
 
 Key differences from the old standalone `src/telegram.ts`:
+
 - Implements `Channel` interface — same pattern as `WhatsAppChannel`
 - Uses `onMessage` / `onChatMetadata` callbacks instead of importing DB functions directly
 - Registration check via `registeredGroups()` callback, not `getAllRegisteredGroups()`
@@ -362,9 +374,9 @@ Modify `src/index.ts` to support multiple channels. Read the file first to under
 1. **Add imports** at the top:
 
 ```typescript
-import { TelegramChannel } from "./channels/telegram.js";
-import { TELEGRAM_BOT_TOKEN, TELEGRAM_ONLY } from "./config.js";
-import { findChannel } from "./router.js";
+import { TelegramChannel } from './channels/telegram.js';
+import { TELEGRAM_BOT_TOKEN, TELEGRAM_ONLY } from './config.js';
+import { findChannel } from './router.js';
 ```
 
 2. **Add a channels array** alongside the existing `whatsapp` variable:
@@ -391,10 +403,13 @@ await channel.setTyping?.(chatJid, false);
 ```
 
 In the `onOutput` callback inside `processGroupMessages`, replace:
+
 ```typescript
 await whatsapp.sendMessage(chatJid, `${ASSISTANT_NAME}: ${text}`);
 ```
+
 with:
+
 ```typescript
 await channel.sendMessage(chatJid, text);
 ```
@@ -460,9 +475,11 @@ async function main(): Promise<void> {
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
-    syncGroupMetadata: (force) => whatsapp?.syncGroupMetadata(force) ?? Promise.resolve(),
+    syncGroupMetadata: (force) =>
+      whatsapp?.syncGroupMetadata(force) ?? Promise.resolve(),
     getAvailableGroups,
-    writeGroupsSnapshot: (gf, im, ag, rj) => writeGroupsSnapshot(gf, im, ag, rj),
+    writeGroupsSnapshot: (gf, im, ag, rj) =>
+      writeGroupsSnapshot(gf, im, ag, rj),
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
@@ -478,7 +495,11 @@ export function getAvailableGroups(): AvailableGroup[] {
   const registeredJids = new Set(Object.keys(registeredGroups));
 
   return chats
-    .filter((c) => c.jid !== '__group_sync__' && (c.jid.endsWith('@g.us') || c.jid.startsWith('tg:')))
+    .filter(
+      (c) =>
+        c.jid !== '__group_sync__' &&
+        (c.jid.endsWith('@g.us') || c.jid.startsWith('tg:')),
+    )
     .map((c) => ({
       jid: c.jid,
       name: c.name,
@@ -519,18 +540,18 @@ Registration uses the `registerGroup()` function in `src/index.ts`, which writes
 
 ```typescript
 // For private chat (main group):
-registerGroup("tg:123456789", {
-  name: "Personal",
-  folder: "main",
+registerGroup('tg:123456789', {
+  name: 'Personal',
+  folder: 'main',
   trigger: `@${ASSISTANT_NAME}`,
   added_at: new Date().toISOString(),
   requiresTrigger: false, // main group responds to all messages
 });
 
 // For group chat (note negative ID for Telegram groups):
-registerGroup("tg:-1001234567890", {
-  name: "My Telegram Group",
-  folder: "telegram-group",
+registerGroup('tg:-1001234567890', {
+  name: 'My Telegram Group',
+  folder: 'telegram-group',
   trigger: `@${ASSISTANT_NAME}`,
   added_at: new Date().toISOString(),
   requiresTrigger: true, // only respond when triggered
@@ -545,14 +566,14 @@ Alternatively, if the agent is already running in the main group, it can registe
 
 ```bash
 npm run build
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 ```
 
 Or for systemd:
 
 ```bash
 npm run build
-systemctl --user restart nanoclaw
+systemctl --user restart bearclaw
 ```
 
 ### Step 7: Test
@@ -560,10 +581,11 @@ systemctl --user restart nanoclaw
 Tell the user:
 
 > Send a message to your registered Telegram chat:
+>
 > - For main chat: Any message works
 > - For non-main: `@Andy hello` or @mention the bot
 >
-> Check logs: `tail -f logs/nanoclaw.log`
+> Check logs: `tail -f logs/bearclaw.log`
 
 ## Replace WhatsApp Entirely
 
@@ -585,6 +607,7 @@ If user wants Telegram-only:
 ### Trigger Options
 
 The bot responds when:
+
 1. Chat has `requiresTrigger: false` in its registration (e.g., main group)
 2. Bot is @mentioned in Telegram (translated to TRIGGER_PATTERN automatically)
 3. Message matches TRIGGER_PATTERN directly (e.g., starts with @Andy)
@@ -603,14 +626,16 @@ Telegram @mentions (e.g., `@andy_ai_bot`) are automatically translated: if the b
 ### Bot not responding
 
 Check:
+
 1. `TELEGRAM_BOT_TOKEN` is set in `.env` AND synced to `data/env/env`
-2. Chat is registered in `~/.nanoclaw/data/registered_agents.json` (check with: `jq 'to_entries | map(select(.key | startswith("tg:")))' ~/.nanoclaw/data/registered_agents.json`)
+2. Chat is registered in `~/.bearclaw/data/registered_agents.json` (check with: `jq 'to_entries | map(select(.key | startswith("tg:")))' ~/.bearclaw/data/registered_agents.json`)
 3. For non-main chats: message includes trigger pattern
-4. Service is running: `launchctl list | grep nanoclaw`
+4. Service is running: `launchctl list | grep bearclaw`
 
 ### Bot only responds to @mentions in groups
 
 The bot has Group Privacy enabled (default). It can only see messages that @mention it or are commands. To fix:
+
 1. Open `@BotFather` in Telegram
 2. `/mybots` > select bot > **Bot Settings** > **Group Privacy** > **Turn off**
 3. Remove and re-add the bot to the group (required for the change to take effect)
@@ -618,17 +643,19 @@ The bot has Group Privacy enabled (default). It can only see messages that @ment
 ### Getting chat ID
 
 If `/chatid` doesn't work:
+
 - Verify bot token is valid: `curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"`
-- Check bot is started: `tail -f logs/nanoclaw.log`
+- Check bot is started: `tail -f logs/bearclaw.log`
 
 ### Service conflicts
 
 If running `npm run dev` while launchd service is active:
+
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist
 npm run dev
 # When done testing:
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl load ~/Library/LaunchAgents/com.bearclaw.plist
 ```
 
 ## Agent Swarms (Teams)
@@ -648,6 +675,6 @@ To remove Telegram integration:
 3. Remove `channels` array and revert to using `whatsapp` directly in `processGroupMessages`, scheduler deps, and IPC deps
 4. Revert `getAvailableGroups()` filter to only include `@g.us` chats
 5. Remove Telegram config (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_ONLY`) from `src/config.ts`
-6. Remove Telegram registrations from `~/.nanoclaw/data/registered_agents.json`: `jq 'with_entries(select(.key | startswith("tg:") | not))' ~/.nanoclaw/data/registered_agents.json > /tmp/r.json && mv /tmp/r.json ~/.nanoclaw/data/registered_agents.json`
+6. Remove Telegram registrations from `~/.bearclaw/data/registered_agents.json`: `jq 'with_entries(select(.key | startswith("tg:") | not))' ~/.bearclaw/data/registered_agents.json > /tmp/r.json && mv /tmp/r.json ~/.bearclaw/data/registered_agents.json`
 7. Uninstall: `npm uninstall grammy`
-8. Rebuild: `npm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
+8. Rebuild: `npm run build && launchctl kickstart -k gui/$(id -u)/com.bearclaw`

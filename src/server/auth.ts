@@ -36,21 +36,21 @@ export function initAuth(): void {
     logger.info({ path: SECRET_PATH }, 'Generated auth secret');
   }
 
-  // Bootstrap a one-time password if NANOCLAW_PASSWORD is unset and no
+  // Bootstrap a one-time password if BEARCLAW_PASSWORD is unset and no
   // password file exists yet. Owner reads it from the file/log, logs in,
-  // and is expected to set NANOCLAW_PASSWORD in ~/.nanoclaw/.env afterwards.
-  if (!process.env.NANOCLAW_PASSWORD && !fs.existsSync(INITIAL_PW_PATH)) {
+  // and is expected to set BEARCLAW_PASSWORD in ~/.bearclaw/.env afterwards.
+  if (!process.env.BEARCLAW_PASSWORD && !fs.existsSync(INITIAL_PW_PATH)) {
     const pw = crypto.randomBytes(16).toString('base64url');
     fs.writeFileSync(INITIAL_PW_PATH, pw, { mode: 0o600 });
     logger.warn(
       { path: INITIAL_PW_PATH },
-      `INITIAL ADMIN PASSWORD: ${pw}  (write to ~/.nanoclaw/.env as NANOCLAW_PASSWORD then delete the file)`,
+      `INITIAL ADMIN PASSWORD: ${pw}  (write to ~/.bearclaw/.env as BEARCLAW_PASSWORD then delete the file)`,
     );
   }
 }
 
 function expectedPassword(): string | null {
-  const env = process.env.NANOCLAW_PASSWORD;
+  const env = process.env.BEARCLAW_PASSWORD;
   if (env) return env;
   if (fs.existsSync(INITIAL_PW_PATH)) {
     return fs.readFileSync(INITIAL_PW_PATH, 'utf-8').trim();

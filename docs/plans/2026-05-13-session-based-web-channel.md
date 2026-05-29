@@ -29,7 +29,7 @@ old:  web:<folder>
 new:  web:<folder>:<sessionId>
 ```
 
-`sessionId` is a UUID v4, nanoclaw-side identity. Distinct from the SDK's
+`sessionId` is a UUID v4, bearclaw-side identity. Distinct from the SDK's
 internal session id. The composite jid wins us free auto-partitioning on
 every existing key-on-chat_jid path:
 
@@ -77,7 +77,7 @@ export interface Session {
 ```
 
 IM channels stay one entry per channel (one jid). Web gets many entries
-(one per session). On-disk `~/.nanoclaw/data/sessions.json` migrates in
+(one per session). On-disk `~/.bearclaw/data/sessions.json` migrates in
 process at boot: web entries become `web:<folder>:legacy`; IM unchanged;
 sentinel `__migrated_v2: true` blocks re-runs.
 
@@ -272,7 +272,7 @@ Defaults baked in unless redirected:
    identity = one concurrent runner. Multi-tab user sees turns serialize
    across their tabs.
 5. **Cross-session messaging via IPC MCP** — agent can target any
-   registered jid via `mcp__nanoclaw__send_message`. Sessions don't change
+   registered jid via `mcp__bearclaw__send_message`. Sessions don't change
    this — power feature, not blocked. The agent receives its own
    `chatJid` in IPC context, so the default reply target stays the
    current session.

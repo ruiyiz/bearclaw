@@ -2,8 +2,8 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'NanoClaw',
-    short_name: 'NanoClaw',
+    name: 'BearClaw',
+    short_name: 'BearClaw',
     description: 'Personal Claude assistant',
     start_url: '/',
     display: 'standalone',

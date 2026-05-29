@@ -4,7 +4,7 @@
 
 **Goal:** Split the monolithic CLAUDE.md into purpose-specific files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, IDENTITY.md), rename "groups" to "agents" throughout the codebase, and inject context explicitly rather than relying on SDK auto-loading.
 
-**Architecture:** Shared context files live in `~/.nanoclaw/context/`. Per-agent identity and daily logs live in `~/.nanoclaw/agents/{folder}/`. The agent runner reads all files and appends them to the system prompt. No tiered inheritance.
+**Architecture:** Shared context files live in `~/.bearclaw/context/`. Per-agent identity and daily logs live in `~/.bearclaw/agents/{folder}/`. The agent runner reads all files and appends them to the system prompt. No tiered inheritance.
 
 **Tech Stack:** TypeScript, Claude Agent SDK, better-sqlite3, grammy (Telegram), React/Ink (TUI)
 
@@ -13,18 +13,20 @@
 ### Task 1: Rename config constants and paths
 
 **Files:**
+
 - Modify: `src/config.ts`
 
 **Step 1: Rename constants**
 
 In `src/config.ts`, rename:
+
 - `GROUPS_DIR` to `AGENTS_DIR`, change path from `'groups'` to `'agents'`
 - `MAIN_GROUP_FOLDER` to `MAIN_AGENT_FOLDER`
-- Add `CONTEXT_DIR` constant pointing to `~/.nanoclaw/context/`
+- Add `CONTEXT_DIR` constant pointing to `~/.bearclaw/context/`
 
 ```typescript
-export const CONTEXT_DIR = path.resolve(NANOCLAW_HOME, 'context');
-export const AGENTS_DIR = path.resolve(NANOCLAW_HOME, 'agents');
+export const CONTEXT_DIR = path.resolve(BEARCLAW_HOME, 'context');
+export const AGENTS_DIR = path.resolve(BEARCLAW_HOME, 'agents');
 export const MAIN_AGENT_FOLDER = 'main';
 ```
 
@@ -46,6 +48,7 @@ git commit -m "Rename GROUPS_DIR to AGENTS_DIR, add CONTEXT_DIR"
 ### Task 2: Rename types
 
 **Files:**
+
 - Modify: `src/types.ts`
 
 **Step 1: Rename RegisteredGroup to RegisteredAgent**
@@ -65,6 +68,7 @@ export interface RegisteredAgent {
 ```
 
 Also update the `Channel` interface method signatures:
+
 - `sendAsAgent` parameter: `groupFolder` -> `agentFolder`
 - `sendMediaAsAgent` parameter: `groupFolder` -> `agentFolder`
 
@@ -80,6 +84,7 @@ git commit -m "Rename RegisteredGroup to RegisteredAgent"
 ### Task 3: Update agent-runner.ts - context injection
 
 **Files:**
+
 - Modify: `src/agent-runner.ts`
 
 **Step 1: Update imports**
@@ -117,6 +122,7 @@ function buildContextPrompt(agentFolder: string): string {
 **Step 3: Update runContainerAgent to use buildContextPrompt**
 
 In `runContainerAgent`:
+
 - Change `groupDir` to `agentDir`, use `AGENTS_DIR` instead of `GROUPS_DIR`
 - Build the full system prompt by combining `buildContextPrompt(input.groupFolder)` with `SYSTEM_PROMPT`
 - Update the `systemPrompt` option:
@@ -155,6 +161,7 @@ git commit -m "Inject context files explicitly, rename group to agent"
 ### Task 4: Update system-prompt.ts
 
 **Files:**
+
 - Modify: `src/system-prompt.ts`
 
 **Step 1: Update WORKSPACE section**
@@ -175,11 +182,11 @@ Shared memory — context/MEMORY.md contains curated, durable facts shared acros
 It's loaded into every conversation. You can also read context/USER.md and context/SOUL.md in your working directory's parent.
 
 Daily logs — running context stored in memory/YYYY-MM-DD.md files in your agent directory.
-Use mcp__nanoclaw__memory_write to save notes, observations, decisions, task progress.
+Use mcp__bearclaw__memory_write to save notes, observations, decisions, task progress.
 Always use this tool for daily logs. Do not use Write/Edit to create memory files manually.
 The tool handles paths, timestamps, and search indexing automatically.
 
-Use mcp__nanoclaw__memory_search to keyword-search across memory/ and conversations/ files.
+Use mcp__bearclaw__memory_search to keyword-search across memory/ and conversations/ files.
 Prefer this over manually reading files when looking for past context.
 
 During long conversations, proactively use memory_write to save important decisions and context.
@@ -199,6 +206,7 @@ git commit -m "Update system prompt to reference new memory structure"
 ### Task 5: Update ipc-mcp.ts
 
 **Files:**
+
 - Modify: `src/ipc-mcp.ts`
 
 **Step 1: Update imports and interface**
@@ -218,7 +226,7 @@ async (args) => {
   indexMemoryFiles(agentFolder, agentDir);
   const results = searchMemory(agentFolder, args.query, args.limit);
   // ... rest unchanged
-}
+};
 ```
 
 **Step 3: Update memory_write tool**
@@ -233,7 +241,10 @@ Set shared=true to append to the shared context/MEMORY.md instead.`,
   {
     content: z.string().describe('The note to save'),
     topic: z.string().optional().describe('Optional topic header'),
-    shared: z.boolean().default(false).describe('Write to shared MEMORY.md instead of daily log'),
+    shared: z
+      .boolean()
+      .default(false)
+      .describe('Write to shared MEMORY.md instead of daily log'),
   },
   async (args) => {
     if (args.shared) {
@@ -243,11 +254,13 @@ Set shared=true to append to the shared context/MEMORY.md instead.`,
         ? `\n## ${args.topic}\n\n${args.content}\n`
         : `\n${args.content}\n`;
       fs.appendFileSync(memoryFile, entry);
-      return { content: [{ type: 'text', text: 'Saved to context/MEMORY.md' }] };
+      return {
+        content: [{ type: 'text', text: 'Saved to context/MEMORY.md' }],
+      };
     }
     // ... existing daily log logic, using AGENTS_DIR
-  }
-)
+  },
+);
 ```
 
 **Step 4: Rename register_group tool to register_agent**
@@ -270,6 +283,7 @@ git commit -m "Update IPC MCP tools for agent terminology and shared memory"
 ### Task 6: Update db.ts
 
 **Files:**
+
 - Modify: `src/db.ts`
 
 **Step 1: Keep `group_folder` as the SQLite column name**
@@ -308,6 +322,7 @@ git commit -m "Rename group parameters to agent in db functions"
 ### Task 7: Update event-bus.ts
 
 **Files:**
+
 - Modify: `src/event-bus.ts`
 
 **Step 1: Update imports**
@@ -343,6 +358,7 @@ git commit -m "Update event bus for agent terminology"
 ### Task 8: Update odyssey.ts and email-channel.ts
 
 **Files:**
+
 - Modify: `src/odyssey.ts`
 - Modify: `src/email-channel.ts`
 
@@ -371,6 +387,7 @@ git commit -m "Update odyssey and email channel for agent terminology"
 ### Task 9: Update channel files
 
 **Files:**
+
 - Modify: `src/channels/telegram.ts`
 - Modify: `src/channels/whatsapp.ts`
 
@@ -381,7 +398,7 @@ git commit -m "Update odyssey and email channel for agent terminology"
 - Rename `groupFolder` parameter to `agentFolder` in `sendAsAgent`, `sendMediaAsAgent`, `downloadTelegramFile`, `sendPoolMessage`
 - Update `GROUPS_DIR` references in media path to `AGENTS_DIR`
 
-Note: WhatsApp's `groupFetchAllParticipating()` is a WhatsApp API method -- the variable `groups` in that context refers to WhatsApp groups, not NanoClaw groups. Those references stay as-is.
+Note: WhatsApp's `groupFetchAllParticipating()` is a WhatsApp API method -- the variable `groups` in that context refers to WhatsApp groups, not BearClaw groups. Those references stay as-is.
 
 **Step 2: Update whatsapp.ts**
 
@@ -402,6 +419,7 @@ git commit -m "Update channel files for agent terminology"
 ### Task 10: Update index.ts (main routing)
 
 **Files:**
+
 - Modify: `src/index.ts`
 
 This is the largest file. Key changes:
@@ -446,6 +464,7 @@ git commit -m "Update main index.ts for agent terminology"
 ### Task 11: Update TUI
 
 **Files:**
+
 - Modify: `src/tui/data.ts`
 - Modify: `src/tui/views/groups.tsx` (rename to `agents.tsx`)
 - Modify: `src/tui/app.tsx`
@@ -484,13 +503,15 @@ git commit -m "Rename Groups to Agents in TUI"
 ### Task 12: Update project CLAUDE.md
 
 **Files:**
+
 - Modify: `CLAUDE.md`
 
 **Step 1: Update key files table**
 
 Update the table to reference new paths:
-- `~/.nanoclaw/agents/{name}/IDENTITY.md` instead of `~/.nanoclaw/groups/{name}/CLAUDE.md`
-- Add `~/.nanoclaw/context/` files
+
+- `~/.bearclaw/agents/{name}/IDENTITY.md` instead of `~/.bearclaw/groups/{name}/CLAUDE.md`
+- Add `~/.bearclaw/context/` files
 
 **Step 2: Commit**
 
@@ -504,6 +525,7 @@ git commit -m "Update CLAUDE.md to reference new agent/context paths"
 ### Task 13: Update context_mode enum value
 
 **Files:**
+
 - Modify: `src/types.ts`
 - Modify: `src/ipc-mcp.ts`
 - Modify: `src/event-bus.ts`
@@ -537,6 +559,7 @@ git commit -m "Rename context_mode 'group' to 'agent'"
 ### Task 14: Write migration logic
 
 **Files:**
+
 - Modify: `src/index.ts` (or create `src/migrate.ts`)
 
 **Step 1: Add startup migration in index.ts**
@@ -545,9 +568,9 @@ Add a `migrateToAgents()` function called on startup, before loading registered 
 
 ```typescript
 function migrateToAgents(): void {
-  const oldGroupsDir = path.join(NANOCLAW_HOME, 'groups');
-  const newAgentsDir = path.join(NANOCLAW_HOME, 'agents');
-  const contextDir = path.join(NANOCLAW_HOME, 'context');
+  const oldGroupsDir = path.join(BEARCLAW_HOME, 'groups');
+  const newAgentsDir = path.join(BEARCLAW_HOME, 'agents');
+  const contextDir = path.join(BEARCLAW_HOME, 'context');
 
   // Skip if already migrated
   if (fs.existsSync(newAgentsDir) || !fs.existsSync(oldGroupsDir)) return;
@@ -564,7 +587,9 @@ function migrateToAgents(): void {
     // Move the global CLAUDE.md to context/AGENTS.md as a starting point
     // User will need to manually split it into AGENTS.md, SOUL.md, USER.md, MEMORY.md
     fs.renameSync(globalClaudeMd, path.join(contextDir, 'AGENTS.md'));
-    logger.info('Moved groups/CLAUDE.md to context/AGENTS.md — split into SOUL.md, USER.md, MEMORY.md manually');
+    logger.info(
+      'Moved groups/CLAUDE.md to context/AGENTS.md — split into SOUL.md, USER.md, MEMORY.md manually',
+    );
   }
 
   // 3. Rename per-agent CLAUDE.md -> IDENTITY.md
@@ -624,14 +649,14 @@ git commit -m "Fix remaining references from groups to agents"
 
 ### Task 16: Create initial context files
 
-This is a manual/semi-manual task. Split the current `~/.nanoclaw/groups/CLAUDE.md` content into:
+This is a manual/semi-manual task. Split the current `~/.bearclaw/groups/CLAUDE.md` content into:
 
-1. `~/.nanoclaw/context/AGENTS.md` — Operating manual sections (workspace, responses, formatting, agent teams, group chat behavior, Apple Reminders, iMessage)
-2. `~/.nanoclaw/context/SOUL.md` — Core principles section (identity & personality, boundaries)
-3. `~/.nanoclaw/context/USER.md` — About Mike section (work, family, interests, setup)
-4. `~/.nanoclaw/context/MEMORY.md` — Any curated knowledge not covered above
-5. `~/.nanoclaw/agents/main/IDENTITY.md` — Merge current main/CLAUDE.md elevated privileges with agent-specific identity
-6. `~/.nanoclaw/agents/coco/IDENTITY.md` — CoCo-specific identity if different from main
+1. `~/.bearclaw/context/AGENTS.md` — Operating manual sections (workspace, responses, formatting, agent teams, group chat behavior, Apple Reminders, iMessage)
+2. `~/.bearclaw/context/SOUL.md` — Core principles section (identity & personality, boundaries)
+3. `~/.bearclaw/context/USER.md` — About Mike section (work, family, interests, setup)
+4. `~/.bearclaw/context/MEMORY.md` — Any curated knowledge not covered above
+5. `~/.bearclaw/agents/main/IDENTITY.md` — Merge current main/CLAUDE.md elevated privileges with agent-specific identity
+6. `~/.bearclaw/agents/coco/IDENTITY.md` — CoCo-specific identity if different from main
 
 **Step 1: Create the files**
 

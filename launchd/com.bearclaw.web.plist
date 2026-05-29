@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.nanoclaw.web</string>
+    <string>com.bearclaw.web</string>
     <key>ProgramArguments</key>
     <array>
         <string>{{NODE_PATH}}</string>
@@ -26,14 +26,14 @@
         <string>{{HOME}}</string>
         <key>NODE_ENV</key>
         <string>production</string>
-        <key>NANOCLAW_HTTP_HOST</key>
+        <key>BEARCLAW_HTTP_HOST</key>
         <string>127.0.0.1</string>
-        <key>NANOCLAW_HTTP_PORT</key>
+        <key>BEARCLAW_HTTP_PORT</key>
         <string>7878</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>{{PROJECT_ROOT}}/logs/nanoclaw.web.log</string>
+    <string>{{PROJECT_ROOT}}/logs/bearclaw.web.log</string>
     <key>StandardErrorPath</key>
-    <string>{{PROJECT_ROOT}}/logs/nanoclaw.web.error.log</string>
+    <string>{{PROJECT_ROOT}}/logs/bearclaw.web.error.log</string>
 </dict>
 </plist>

@@ -1153,7 +1153,7 @@ export function ChatView() {
           </div>
         </div>
         <div className="text-center text-[10px] text-[color:var(--muted)] mt-1.5 px-2">
-          NanoClaw is AI and can make mistakes. Verify important info.
+          BearClaw is AI and can make mistakes. Verify important info.
         </div>
       </div>
     </form>
@@ -1369,7 +1369,7 @@ function SidebarPane(p: SidebarProps) {
       <header className="px-3 py-3 flex items-center gap-2">
         <div className="flex-1 flex items-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="NanoClaw" width={32} height={32} />
+          <img src="/logo.png" alt="BearClaw" width={32} height={32} />
         </div>
         <button
           type="button"

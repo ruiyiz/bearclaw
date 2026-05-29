@@ -32,7 +32,7 @@ function expandEnv(value: unknown, missing: Set<string>): unknown {
 }
 
 /**
- * Load mcpServers from ~/.nanoclaw/config/mcp.json with ${VAR} env-var
+ * Load mcpServers from ~/.bearclaw/config/mcp.json with ${VAR} env-var
  * expansion across all string leaves. Missing env vars do not throw —
  * they expand to "" and are logged at WARN so the rest of the config
  * still loads. Returns {} on missing/invalid file.

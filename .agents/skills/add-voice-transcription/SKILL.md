@@ -1,6 +1,6 @@
 ---
 name: add-voice-transcription
-description: Add voice message transcription to NanoClaw using OpenAI's Whisper API. Automatically transcribes WhatsApp voice notes so the agent can read and respond to them.
+description: Add voice message transcription to BearClaw using OpenAI's Whisper API. Automatically transcribes WhatsApp voice notes so the agent can read and respond to them.
 ---
 
 # Add Voice Message Transcription
@@ -356,13 +356,13 @@ npm install --legacy-peer-deps
 npm run build
 ```
 
-### Step 7: Restart NanoClaw
+### Step 7: Restart BearClaw
 
 Restart the service to load the new transcription code:
 
 ```bash
 # If using launchd (macOS):
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 
 # Or if running manually:
 # Stop the current process and restart with:
@@ -372,9 +372,9 @@ npm start
 Verify it started:
 
 ```bash
-sleep 2 && launchctl list | grep nanoclaw
+sleep 2 && launchctl list | grep bearclaw
 # or check logs:
-tail -f logs/nanoclaw.log
+tail -f logs/bearclaw.log
 ```
 
 ### Step 8: Test Voice Transcription
@@ -394,7 +394,7 @@ Tell the user:
 Watch for transcription in the logs:
 
 ```bash
-tail -f logs/nanoclaw.log | grep -i "voice\|transcri"
+tail -f logs/bearclaw.log | grep -i "voice\|transcri"
 ```
 
 ---
@@ -438,7 +438,7 @@ The architecture supports multiple providers. To add Groq, Deepgram, or local Wh
 Check logs for specific errors:
 
 ```bash
-tail -100 logs/nanoclaw.log | grep -i transcription
+tail -100 logs/bearclaw.log | grep -i transcription
 ```
 
 Common causes:
@@ -520,7 +520,7 @@ To remove the feature:
 6. Rebuild:
    ```bash
    npm run build
-   launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+   launchctl kickstart -k gui/$(id -u)/com.bearclaw
    ```
 
 ---

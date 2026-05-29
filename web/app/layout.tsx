@@ -54,12 +54,12 @@ const fontVars = [geist, spaceGrotesk, inter, manrope, plex, sourceSerif, lora]
   .join(' ');
 
 export const metadata: Metadata = {
-  title: 'NanoClaw',
+  title: 'BearClaw',
   description: 'Personal Claude assistant',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'NanoClaw',
+    title: 'BearClaw',
   },
   icons: {
     icon: [{ url: '/logo.png', type: 'image/png' }],

@@ -87,8 +87,8 @@ export interface HttpServerOpts {
   defaultEffort: string;
 }
 
-const DEFAULT_PORT = parseInt(process.env.NANOCLAW_HTTP_PORT || '7878', 10);
-const HOST = process.env.NANOCLAW_HTTP_HOST || '127.0.0.1';
+const DEFAULT_PORT = parseInt(process.env.BEARCLAW_HTTP_PORT || '7878', 10);
+const HOST = process.env.BEARCLAW_HTTP_HOST || '127.0.0.1';
 
 type Handler = (
   req: http.IncomingMessage,

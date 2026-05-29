@@ -5,7 +5,7 @@ description: Add Telegram as a channel. Can replace WhatsApp entirely or run alo
 
 # Add Telegram Channel
 
-This skill adds Telegram support to NanoClaw. Users can choose to:
+This skill adds Telegram support to BearClaw. Users can choose to:
 
 1. **Replace WhatsApp** - Use Telegram as the only messaging channel
 2. **Add alongside WhatsApp** - Both channels active
@@ -83,7 +83,7 @@ Before making changes, ask:
 
 ## Architecture
 
-NanoClaw uses a **Channel abstraction** (`Channel` interface in `src/types.ts`). Each messaging platform implements this interface. Key files:
+BearClaw uses a **Channel abstraction** (`Channel` interface in `src/types.ts`). Each messaging platform implements this interface. Key files:
 
 | File                       | Purpose                                                                 |
 | -------------------------- | ----------------------------------------------------------------------- |
@@ -566,14 +566,14 @@ Alternatively, if the agent is already running in the main group, it can registe
 
 ```bash
 npm run build
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 ```
 
 Or for systemd:
 
 ```bash
 npm run build
-systemctl --user restart nanoclaw
+systemctl --user restart bearclaw
 ```
 
 ### Step 7: Test
@@ -585,7 +585,7 @@ Tell the user:
 > - For main chat: Any message works
 > - For non-main: `@Andy hello` or @mention the bot
 >
-> Check logs: `tail -f logs/nanoclaw.log`
+> Check logs: `tail -f logs/bearclaw.log`
 
 ## Replace WhatsApp Entirely
 
@@ -628,9 +628,9 @@ Telegram @mentions (e.g., `@andy_ai_bot`) are automatically translated: if the b
 Check:
 
 1. `TELEGRAM_BOT_TOKEN` is set in `.env` AND synced to `data/env/env`
-2. Chat is registered in `~/.nanoclaw/data/registered_agents.json` (check with: `jq 'to_entries | map(select(.key | startswith("tg:")))' ~/.nanoclaw/data/registered_agents.json`)
+2. Chat is registered in `~/.bearclaw/data/registered_agents.json` (check with: `jq 'to_entries | map(select(.key | startswith("tg:")))' ~/.bearclaw/data/registered_agents.json`)
 3. For non-main chats: message includes trigger pattern
-4. Service is running: `launchctl list | grep nanoclaw`
+4. Service is running: `launchctl list | grep bearclaw`
 
 ### Bot only responds to @mentions in groups
 
@@ -645,17 +645,17 @@ The bot has Group Privacy enabled (default). It can only see messages that @ment
 If `/chatid` doesn't work:
 
 - Verify bot token is valid: `curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"`
-- Check bot is started: `tail -f logs/nanoclaw.log`
+- Check bot is started: `tail -f logs/bearclaw.log`
 
 ### Service conflicts
 
 If running `npm run dev` while launchd service is active:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist
 npm run dev
 # When done testing:
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl load ~/Library/LaunchAgents/com.bearclaw.plist
 ```
 
 ## Agent Swarms (Teams)
@@ -675,6 +675,6 @@ To remove Telegram integration:
 3. Remove `channels` array and revert to using `whatsapp` directly in `processGroupMessages`, scheduler deps, and IPC deps
 4. Revert `getAvailableGroups()` filter to only include `@g.us` chats
 5. Remove Telegram config (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_ONLY`) from `src/config.ts`
-6. Remove Telegram registrations from `~/.nanoclaw/data/registered_agents.json`: `jq 'with_entries(select(.key | startswith("tg:") | not))' ~/.nanoclaw/data/registered_agents.json > /tmp/r.json && mv /tmp/r.json ~/.nanoclaw/data/registered_agents.json`
+6. Remove Telegram registrations from `~/.bearclaw/data/registered_agents.json`: `jq 'with_entries(select(.key | startswith("tg:") | not))' ~/.bearclaw/data/registered_agents.json > /tmp/r.json && mv /tmp/r.json ~/.bearclaw/data/registered_agents.json`
 7. Uninstall: `npm uninstall grammy`
-8. Rebuild: `npm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
+8. Rebuild: `npm run build && launchctl kickstart -k gui/$(id -u)/com.bearclaw`

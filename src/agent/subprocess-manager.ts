@@ -8,7 +8,7 @@ import { logger } from '../logger.js';
 
 const SUBPROCESSES_DIR = path.join(RUN_DIR, 'subprocesses');
 const BIN_DIR = path.join(CACHE_DIR, 'bin');
-const NOTIFY_SCRIPT_PATH = path.join(BIN_DIR, 'nanoclaw-notify');
+const NOTIFY_SCRIPT_PATH = path.join(BIN_DIR, 'bearclaw-notify');
 
 interface SessionState {
   sessionId: string;
@@ -41,7 +41,7 @@ import os from 'os';
 const [,, sessionId, eventType] = process.argv;
 if (!sessionId || !eventType) process.exit(1);
 
-const home = path.join(os.homedir(), '.nanoclaw');
+const home = path.join(os.homedir(), '.bearclaw');
 const sessionFile = path.join(home, 'var', 'run', 'subprocesses', sessionId + '.json');
 
 let session;

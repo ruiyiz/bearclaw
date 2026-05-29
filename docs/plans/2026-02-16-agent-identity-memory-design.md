@@ -2,30 +2,30 @@
 
 ## Problem
 
-NanoClaw's current memory system has three issues:
+BearClaw's current memory system has three issues:
 
 1. **Mixed concerns**: CLAUDE.md files combine agent identity, user knowledge, operating instructions, and curated memory in a single file.
-2. **Tiered inheritance**: A global `~/.nanoclaw/groups/CLAUDE.md` is inherited by all groups, with per-group CLAUDE.md files overriding it. This creates implicit dependencies and makes it unclear what each agent actually sees.
+2. **Tiered inheritance**: A global `~/.bearclaw/groups/CLAUDE.md` is inherited by all groups, with per-group CLAUDE.md files overriding it. This creates implicit dependencies and makes it unclear what each agent actually sees.
 3. **SDK coupling**: The system relies on Claude Agent SDK's automatic CLAUDE.md loading behavior, which is opaque and not under our control.
 
 ## Design
 
 ### File Separation
 
-Split the monolithic CLAUDE.md into purpose-specific files, inspired by OpenClaw's separation but adapted for NanoClaw's multi-agent model.
+Split the monolithic CLAUDE.md into purpose-specific files, inspired by OpenClaw's separation but adapted for BearClaw's multi-agent model.
 
-| File | Scope | Purpose |
-|------|-------|---------|
-| `AGENTS.md` | Shared | Operating manual: tool usage, formatting rules, response behavior, agent teams, group chat etiquette, Apple Reminders |
-| `SOUL.md` | Shared | Core principles: be helpful, have opinions, boundaries, safety |
-| `USER.md` | Shared | Facts about the human: work, family, setup, preferences |
-| `MEMORY.md` | Shared | Curated long-term knowledge |
-| `IDENTITY.md` | Per-agent | Agent-specific identity: name, role, capabilities, elevated privileges (main), channel-specific behavior |
+| File          | Scope     | Purpose                                                                                                               |
+| ------------- | --------- | --------------------------------------------------------------------------------------------------------------------- |
+| `AGENTS.md`   | Shared    | Operating manual: tool usage, formatting rules, response behavior, agent teams, group chat etiquette, Apple Reminders |
+| `SOUL.md`     | Shared    | Core principles: be helpful, have opinions, boundaries, safety                                                        |
+| `USER.md`     | Shared    | Facts about the human: work, family, setup, preferences                                                               |
+| `MEMORY.md`   | Shared    | Curated long-term knowledge                                                                                           |
+| `IDENTITY.md` | Per-agent | Agent-specific identity: name, role, capabilities, elevated privileges (main), channel-specific behavior              |
 
 ### Directory Structure
 
 ```
-~/.nanoclaw/
+~/.bearclaw/
 ├── context/                    # Shared context injected into every agent
 │   ├── AGENTS.md               # Operating manual
 │   ├── SOUL.md                 # Core principles
@@ -60,8 +60,8 @@ Replace SDK auto-loading with explicit prompt injection in `agent-runner.ts`.
 
 ```typescript
 function buildContextPrompt(agentFolder: string): string {
-  const contextDir = path.join(NANOCLAW_HOME, 'context');
-  const agentDir = path.join(NANOCLAW_HOME, 'agents', agentFolder);
+  const contextDir = path.join(BEARCLAW_HOME, 'context');
+  const agentDir = path.join(BEARCLAW_HOME, 'agents', agentFolder);
 
   const parts: string[] = [];
 
@@ -92,16 +92,19 @@ The `cwd` for the agent SDK remains the per-agent directory (`agents/{folder}/`)
 ### Memory System
 
 **Shared curated memory (`context/MEMORY.md`)**:
+
 - Loaded into every agent's system prompt via `buildContextPrompt`.
 - Contains distilled, high-signal knowledge that all agents benefit from.
 - Agents can update it via the `memory_write` tool (with a `shared: true` flag) or by directly editing the file.
 
 **Per-agent daily logs (`agents/{folder}/memory/YYYY-MM-DD.md`)**:
+
 - Loaded via the `SessionStart` hook (today + yesterday).
 - Contain raw conversation context and decisions.
 - Written via `memory_write` (default behavior, scoped to current agent).
 
 **Memory search (`memory_search`)**:
+
 - Searches both the agent's own `memory/` + `conversations/` directories AND the shared `context/MEMORY.md`.
 - FTS index updated to include shared memory entries alongside per-agent entries.
 
@@ -109,15 +112,15 @@ The `cwd` for the agent SDK remains the per-agent directory (`agents/{folder}/`)
 
 #### Renamed concepts
 
-| Before | After |
-|--------|-------|
-| `groups/` directory | `agents/` directory |
-| `GROUPS_DIR` | `AGENTS_DIR` |
-| `RegisteredGroup` | `RegisteredAgent` |
+| Before                         | After                          |
+| ------------------------------ | ------------------------------ |
+| `groups/` directory            | `agents/` directory            |
+| `GROUPS_DIR`                   | `AGENTS_DIR`                   |
+| `RegisteredGroup`              | `RegisteredAgent`              |
 | `group.folder` / `groupFolder` | `agent.folder` / `agentFolder` |
-| `registered_groups.json` | `registered_agents.json` |
-| `MAIN_GROUP_FOLDER` | `MAIN_AGENT_FOLDER` |
-| `CLAUDE.md` (all) | Split into separate files |
+| `registered_groups.json`       | `registered_agents.json`       |
+| `MAIN_GROUP_FOLDER`            | `MAIN_AGENT_FOLDER`            |
+| `CLAUDE.md` (all)              | Split into separate files      |
 
 #### Files to modify
 
@@ -136,8 +139,9 @@ The `cwd` for the agent SDK remains the per-agent directory (`agents/{folder}/`)
 #### Migration
 
 A one-time migration script or startup check that:
-1. Moves `~/.nanoclaw/groups/` to `~/.nanoclaw/agents/` (if `agents/` doesn't exist).
-2. Splits `~/.nanoclaw/groups/CLAUDE.md` into `context/AGENTS.md`, `context/SOUL.md`, `context/USER.md`, `context/MEMORY.md`.
+
+1. Moves `~/.bearclaw/groups/` to `~/.bearclaw/agents/` (if `agents/` doesn't exist).
+2. Splits `~/.bearclaw/groups/CLAUDE.md` into `context/AGENTS.md`, `context/SOUL.md`, `context/USER.md`, `context/MEMORY.md`.
 3. Renames per-agent `CLAUDE.md` files to `IDENTITY.md`.
 4. Renames `registered_groups.json` to `registered_agents.json`.
 5. Updates the SQLite `handlers` table if column rename is desired.

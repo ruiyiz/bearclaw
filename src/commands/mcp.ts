@@ -41,7 +41,7 @@ export const mcpCommand: SlashCommand = {
     const servers = cfg.mcpServers || {};
     const names = Object.keys(servers).sort();
     const lines = [`**MCP servers (${names.length + 1})**`, ''];
-    lines.push('• `nanoclaw` — built-in IPC (host ↔ agent)');
+    lines.push('• `bearclaw` — built-in IPC (host ↔ agent)');
     for (const n of names) lines.push(`• ${describeServer(n, servers[n])}`);
     lines.push('');
     lines.push(`Config: \`${path.join(CONFIG_DIR, 'mcp.json')}\``);

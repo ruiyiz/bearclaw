@@ -1,6 +1,6 @@
 ---
 name: add-voice-transcription
-description: Add voice message transcription to NanoClaw using OpenAI's Whisper API. Automatically transcribes WhatsApp voice notes so the agent can read and respond to them.
+description: Add voice message transcription to BearClaw using OpenAI's Whisper API. Automatically transcribes WhatsApp voice notes so the agent can read and respond to them.
 ---
 
 # Add Voice Message Transcription
@@ -120,13 +120,16 @@ function loadConfig(): TranscriptionConfig {
     return {
       provider: 'openai',
       enabled: false,
-      fallbackMessage: '[Voice Message - transcription unavailable]'
+      fallbackMessage: '[Voice Message - transcription unavailable]',
     };
   }
 }
 
 // Transcribe audio using OpenAI Whisper API
-async function transcribeWithOpenAI(audioBuffer: Buffer, config: TranscriptionConfig): Promise<string | null> {
+async function transcribeWithOpenAI(
+  audioBuffer: Buffer,
+  config: TranscriptionConfig,
+): Promise<string | null> {
   if (!config.openai?.apiKey || config.openai.apiKey === '') {
     console.warn('OpenAI API key not configured');
     return null;
@@ -139,19 +142,19 @@ async function transcribeWithOpenAI(audioBuffer: Buffer, config: TranscriptionCo
     const toFile = openaiModule.toFile;
 
     const openai = new OpenAI({
-      apiKey: config.openai.apiKey
+      apiKey: config.openai.apiKey,
     });
 
     // Use OpenAI's toFile helper to create a proper file upload
     const file = await toFile(audioBuffer, 'voice.ogg', {
-      type: 'audio/ogg'
+      type: 'audio/ogg',
     });
 
     // Call Whisper API
     const transcription = await openai.audio.transcriptions.create({
       file: file,
       model: config.openai.model || 'whisper-1',
-      response_format: 'text'
+      response_format: 'text',
     });
 
     // Type assertion needed: OpenAI SDK types response_format='text' as Transcription object,
@@ -166,7 +169,7 @@ async function transcribeWithOpenAI(audioBuffer: Buffer, config: TranscriptionCo
 // Main transcription function
 export async function transcribeAudioMessage(
   msg: WAMessage,
-  sock: WASocket
+  sock: WASocket,
 ): Promise<string | null> {
   const config = loadConfig();
 
@@ -178,15 +181,15 @@ export async function transcribeAudioMessage(
 
   try {
     // Download the audio message
-    const buffer = await downloadMediaMessage(
+    const buffer = (await downloadMediaMessage(
       msg,
       'buffer',
       {},
       {
         logger: console as any,
-        reuploadRequest: sock.updateMediaMessage
-      }
-    ) as Buffer;
+        reuploadRequest: sock.updateMediaMessage,
+      },
+    )) as Buffer;
 
     if (!buffer || buffer.length === 0) {
       console.error('Failed to download audio message');
@@ -229,19 +232,33 @@ export function isVoiceMessage(msg: WAMessage): boolean {
 Read `src/db.ts` and find the `storeMessage` function. Update its signature and implementation to accept transcribed content:
 
 Change the function signature from:
+
 ```typescript
-export function storeMessage(msg: proto.IWebMessageInfo, chatJid: string, isFromMe: boolean, pushName?: string): void
+export function storeMessage(
+  msg: proto.IWebMessageInfo,
+  chatJid: string,
+  isFromMe: boolean,
+  pushName?: string,
+): void;
 ```
 
 To:
+
 ```typescript
-export function storeMessage(msg: proto.IWebMessageInfo, chatJid: string, isFromMe: boolean, pushName?: string, transcribedContent?: string): void
+export function storeMessage(
+  msg: proto.IWebMessageInfo,
+  chatJid: string,
+  isFromMe: boolean,
+  pushName?: string,
+  transcribedContent?: string,
+): void;
 ```
 
 Update the content extraction to use transcribed content if provided:
 
 ```typescript
-const content = transcribedContent ||
+const content =
+  transcribedContent ||
   msg.message?.conversation ||
   msg.message?.extendedTextMessage?.text ||
   msg.message?.imageMessage?.caption ||
@@ -253,6 +270,7 @@ const content = transcribedContent ||
 ### Step 5: Integrate Transcription into Message Handler
 
 **Note:** Voice messages are transcribed for all messages in registered groups, regardless of the trigger word. This is because:
+
 1. Voice notes can't easily include a trigger word
 2. Users expect voice notes to work the same as text messages
 3. The transcribed content is stored in the database for context, even if it doesn't trigger the agent
@@ -279,19 +297,45 @@ if (registeredGroups[chatJid]) {
 
       if (transcript) {
         // Store with transcribed content
-        storeMessage(msg, chatJid, msg.key.fromMe || false, msg.pushName || undefined, `[Voice: ${transcript}]`);
-        logger.info({ chatJid, length: transcript.length }, 'Transcribed voice message');
+        storeMessage(
+          msg,
+          chatJid,
+          msg.key.fromMe || false,
+          msg.pushName || undefined,
+          `[Voice: ${transcript}]`,
+        );
+        logger.info(
+          { chatJid, length: transcript.length },
+          'Transcribed voice message',
+        );
       } else {
         // Store with fallback message
-        storeMessage(msg, chatJid, msg.key.fromMe || false, msg.pushName || undefined, '[Voice Message - transcription unavailable]');
+        storeMessage(
+          msg,
+          chatJid,
+          msg.key.fromMe || false,
+          msg.pushName || undefined,
+          '[Voice Message - transcription unavailable]',
+        );
       }
     } catch (err) {
       logger.error({ err }, 'Voice transcription error');
-      storeMessage(msg, chatJid, msg.key.fromMe || false, msg.pushName || undefined, '[Voice Message - transcription failed]');
+      storeMessage(
+        msg,
+        chatJid,
+        msg.key.fromMe || false,
+        msg.pushName || undefined,
+        '[Voice Message - transcription failed]',
+      );
     }
   } else {
     // Regular message, store normally
-    storeMessage(msg, chatJid, msg.key.fromMe || false, msg.pushName || undefined);
+    storeMessage(
+      msg,
+      chatJid,
+      msg.key.fromMe || false,
+      msg.pushName || undefined,
+    );
   }
 }
 ```
@@ -312,13 +356,13 @@ npm install --legacy-peer-deps
 npm run build
 ```
 
-### Step 7: Restart NanoClaw
+### Step 7: Restart BearClaw
 
 Restart the service to load the new transcription code:
 
 ```bash
 # If using launchd (macOS):
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 
 # Or if running manually:
 # Stop the current process and restart with:
@@ -328,9 +372,9 @@ npm start
 Verify it started:
 
 ```bash
-sleep 2 && launchctl list | grep nanoclaw
+sleep 2 && launchctl list | grep bearclaw
 # or check logs:
-tail -f logs/nanoclaw.log
+tail -f logs/bearclaw.log
 ```
 
 ### Step 8: Test Voice Transcription
@@ -350,7 +394,7 @@ Tell the user:
 Watch for transcription in the logs:
 
 ```bash
-tail -f logs/nanoclaw.log | grep -i "voice\|transcri"
+tail -f logs/bearclaw.log | grep -i "voice\|transcri"
 ```
 
 ---
@@ -392,11 +436,13 @@ The architecture supports multiple providers. To add Groq, Deepgram, or local Wh
 ### "Transcription unavailable" or "Transcription failed"
 
 Check logs for specific errors:
+
 ```bash
-tail -100 logs/nanoclaw.log | grep -i transcription
+tail -100 logs/bearclaw.log | grep -i transcription
 ```
 
 Common causes:
+
 - API key not configured or invalid
 - No API credits remaining
 - Network connectivity issues
@@ -410,6 +456,7 @@ Common causes:
 ### ES Module errors (`__dirname is not defined`)
 
 The fix is already included in the implementation above using:
+
 ```typescript
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -418,6 +465,7 @@ const __dirname = dirname(__filename);
 ### Dependency conflicts (Zod versions)
 
 If you see Zod version conflicts during `npm install`:
+
 ```bash
 npm install --legacy-peer-deps
 ```
@@ -441,6 +489,7 @@ This resolves conflicts between OpenAI SDK (requires Zod v3) and other dependenc
 Monitor usage in your OpenAI dashboard: https://platform.openai.com/usage
 
 Tips to control costs:
+
 - Set spending limits in OpenAI account settings
 - Disable transcription during development/testing with `"enabled": false`
 - Typical usage: 100 voice notes/month (~3 minutes average) = ~$1.80
@@ -452,6 +501,7 @@ Tips to control costs:
 To remove the feature:
 
 1. Remove from `package.json`:
+
    ```bash
    npm uninstall openai
    ```
@@ -470,7 +520,7 @@ To remove the feature:
 6. Rebuild:
    ```bash
    npm run build
-   launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+   launchctl kickstart -k gui/$(id -u)/com.bearclaw
    ```
 
 ---
@@ -478,6 +528,7 @@ To remove the feature:
 ## Future Enhancements
 
 Potential additions:
+
 - **Local Whisper**: Use `whisper.cpp` or `faster-whisper` for offline transcription
 - **Groq Integration**: Free tier with Whisper, very fast
 - **Deepgram**: Alternative cloud provider

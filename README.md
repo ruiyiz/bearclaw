@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/nanoclaw-logo.png" alt="NanoClaw" width="400">
+  <img src="assets/bearclaw-logo.png" alt="BearClaw" width="400">
 </p>
 
 <p align="center">
@@ -10,13 +10,13 @@
 
 [OpenClaw](https://github.com/openclaw/openclaw) is an impressive project with a great vision. But I can't sleep well running software I don't understand with access to my life. OpenClaw has 52+ modules, 8 config management files, 45+ dependencies, and abstractions for 15 channel providers. Security is application-level (allowlists, pairing codes) rather than OS isolation. Everything runs in one Node process with shared memory.
 
-NanoClaw gives you the same core functionality in a codebase you can understand in 8 minutes. One process. A handful of files. Agents run via the Claude Agent SDK directly on your machine.
+BearClaw gives you the same core functionality in a codebase you can understand in 8 minutes. One process. A handful of files. Agents run via the Claude Agent SDK directly on your machine.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/gavrielc/nanoclaw.git
-cd nanoclaw
+git clone https://github.com/gavrielc/bearclaw.git
+cd bearclaw
 claude
 ```
 
@@ -80,7 +80,7 @@ The codebase is small enough that Claude can safely modify it.
 
 **Don't add features. Add skills.**
 
-If you want to add Telegram support, don't create a PR that adds Telegram alongside WhatsApp. Instead, contribute a skill file (`.claude/skills/add-telegram/SKILL.md`) that teaches Claude Code how to transform a NanoClaw installation to use Telegram.
+If you want to add Telegram support, don't create a PR that adds Telegram alongside WhatsApp. Instead, contribute a skill file (`.claude/skills/add-telegram/SKILL.md`) that teaches Claude Code how to transform a BearClaw installation to use Telegram.
 
 Users then run `/add-telegram` on their fork and get clean code that does exactly what they need, not a bloated system trying to support every use case.
 
@@ -111,35 +111,35 @@ Skills we'd love to see:
 
 ## Service Management
 
-NanoClaw runs as a launchd service (`~/Library/LaunchAgents/com.nanoclaw.plist`).
+BearClaw runs as a launchd service (`~/Library/LaunchAgents/com.bearclaw.plist`).
 
 ```bash
 # Start
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl load ~/Library/LaunchAgents/com.bearclaw.plist
 
 # Stop
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist
 
 # Restart
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 
 # Check status
-launchctl list | grep nanoclaw
+launchctl list | grep bearclaw
 ```
 
 Logs:
 
 ```bash
-tail -f logs/nanoclaw.log        # Main log
-tail -f logs/nanoclaw.error.log  # Errors
-cat ~/.nanoclaw/agents/main/logs/agent-*.log | tail -50  # Agent logs
+tail -f logs/bearclaw.log        # Main log
+tail -f logs/bearclaw.error.log  # Errors
+cat ~/.bearclaw/agents/main/logs/agent-*.log | tail -50  # Agent logs
 ```
 
 Re-authenticate WhatsApp (if disconnected):
 
 ```bash
 npm run auth
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 ```
 
 ## Architecture
@@ -158,8 +158,8 @@ Key files:
 - `src/events/scheduler.ts` - Runs scheduled handlers
 - `src/events/bus.ts` - Dispatches events to handlers
 - `src/db.ts` - SQLite operations
-- `~/.nanoclaw/agents/{name}/IDENTITY.md` - Per-agent identity
-- `~/.nanoclaw/context/{AGENTS,SOUL,USER,MEMORY}.md` - Shared context
+- `~/.bearclaw/agents/{name}/IDENTITY.md` - Per-agent identity
+- `~/.bearclaw/context/{AGENTS,SOUL,USER,MEMORY}.md` - Shared context
 
 ## FAQ
 
@@ -169,7 +169,7 @@ Because I use WhatsApp. Fork it and run a skill to change it. That's the whole p
 
 **Is this secure?**
 
-Agents run directly on the host, so they have access to the host filesystem. Each agent runs with `cwd` set to its own `~/.nanoclaw/agents/{folder}/` directory, and the `settingSources: ['project']` option means it reads project settings from that folder. However, there is no OS-level isolation between agents — a determined prompt injection could access files outside the agent folder. For stronger isolation, you could run NanoClaw in a container itself. See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
+Agents run directly on the host, so they have access to the host filesystem. Each agent runs with `cwd` set to its own `~/.bearclaw/agents/{folder}/` directory, and the `settingSources: ['project']` option means it reads project settings from that folder. However, there is no OS-level isolation between agents — a determined prompt injection could access files outside the agent folder. For stronger isolation, you could run BearClaw in a container itself. See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
 
 **Why no configuration files?**
 

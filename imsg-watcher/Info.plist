@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.nanoclaw.imsg-watcher</string>
+    <string>com.bearclaw.imsg-watcher</string>
     <key>CFBundleName</key>
     <string>ImsgWatcher</string>
     <key>CFBundleExecutable</key>

@@ -1,11 +1,11 @@
 ---
 name: add-gmail
-description: Add Gmail integration to NanoClaw. Can be configured as a tool (agent reads/sends emails when triggered from WhatsApp) or as a full channel (emails can trigger the agent, schedule tasks, and receive replies). Guides through GCP OAuth setup and implements the integration.
+description: Add Gmail integration to BearClaw. Can be configured as a tool (agent reads/sends emails when triggered from WhatsApp) or as a full channel (emails can trigger the agent, schedule tasks, and receive replies). Guides through GCP OAuth setup and implements the integration.
 ---
 
 # Add Gmail Integration
 
-This skill adds Gmail capabilities to NanoClaw. It can be configured in two modes:
+This skill adds Gmail capabilities to BearClaw. It can be configured in two modes:
 
 1. **Tool Mode** - Agent can read/send emails, but only when triggered from WhatsApp
 2. **Channel Mode** - Emails can trigger the agent, schedule tasks, and receive email replies
@@ -14,14 +14,16 @@ This skill adds Gmail capabilities to NanoClaw. It can be configured in two mode
 
 Ask the user:
 
-> How do you want to use Gmail with NanoClaw?
+> How do you want to use Gmail with BearClaw?
 >
 > **Option 1: Tool Mode**
+>
 > - Agent can read and send emails when you ask it to
 > - Triggered only from WhatsApp (e.g., "@Andy check my email" or "@Andy send an email to...")
 > - Simpler setup, no email polling
 >
 > **Option 2: Channel Mode**
+>
 > - Everything in Tool Mode, plus:
 > - Emails to a specific address/label trigger the agent
 > - Agent replies via email (not WhatsApp)
@@ -74,9 +76,9 @@ Wait for user confirmation, then continue:
 >    - Go to **APIs & Services → Credentials** (in the left sidebar)
 >    - Click **+ CREATE CREDENTIALS** at the top
 >    - Select **OAuth client ID**
->    - If prompted for consent screen, choose "External", fill in app name (e.g., "NanoClaw"), your email, and save
+>    - If prompted for consent screen, choose "External", fill in app name (e.g., "BearClaw"), your email, and save
 >    - For Application type, select **Desktop app**
->    - Name it anything (e.g., "NanoClaw Gmail")
+>    - Name it anything (e.g., "BearClaw Gmail")
 >    - Click **Create**
 
 Wait for user confirmation, then continue:
@@ -130,6 +132,7 @@ timeout 60 npx -y @gongrzhe/server-gmail-autoauth-mcp || true
 ```
 
 Tell user:
+
 > Complete the authorization in your browser. The window should close automatically when done. Let me know when you've authorized.
 
 ### 5. Verify Gmail Access
@@ -172,34 +175,34 @@ gmail: { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] }
 Find the `allowedTools` array and add Gmail tools:
 
 ```typescript
-'mcp__gmail__*'
+'mcp__gmail__*';
 ```
 
 The result should look like:
 
 ```typescript
 mcpServers: {
-  nanoclaw: ipcMcp,
+  bearclaw: ipcMcp,
   gmail: { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] }
 },
 allowedTools: [
   'Bash',
   'Read', 'Write', 'Edit', 'Glob', 'Grep',
   'WebSearch', 'WebFetch',
-  'mcp__nanoclaw__*',
+  'mcp__bearclaw__*',
   'mcp__gmail__*'
 ],
 ```
 
 ### Step 2: Update Group Memory
 
-Append to `~/.nanoclaw/context/MEMORY.md` (the global memory file):
+Append to `~/.bearclaw/context/MEMORY.md` (the global memory file):
 
 ```markdown
-
 ## Email (Gmail)
 
 You have access to Gmail via MCP tools:
+
 - `mcp__gmail__search_emails` - Search emails with query
 - `mcp__gmail__get_email` - Get full email content by ID
 - `mcp__gmail__send_email` - Send an email
@@ -209,7 +212,7 @@ You have access to Gmail via MCP tools:
 Example: "Check my unread emails from today" or "Send an email to john@example.com about the meeting"
 ```
 
-Also append the same section to `~/.nanoclaw/agents/main/IDENTITY.md`.
+Also append the same section to `~/.bearclaw/agents/main/IDENTITY.md`.
 
 ### Step 3: Rebuild and Restart
 
@@ -222,13 +225,13 @@ npm run build
 Wait for TypeScript compilation, then restart the service:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 ```
 
 Check that it started:
 
 ```bash
-sleep 2 && launchctl list | grep nanoclaw
+sleep 2 && launchctl list | grep bearclaw
 ```
 
 ### Step 4: Test Gmail Integration
@@ -246,7 +249,7 @@ Tell the user:
 Watch the logs for any errors:
 
 ```bash
-tail -f logs/nanoclaw.log
+tail -f logs/bearclaw.log
 ```
 
 ---
@@ -262,15 +265,18 @@ Ask the user:
 > How should the agent be triggered from email?
 >
 > **Option A: Specific Label**
-> - Create a Gmail label (e.g., "NanoClaw")
+>
+> - Create a Gmail label (e.g., "BearClaw")
 > - Emails with this label trigger the agent
 > - You manually label emails or set up Gmail filters
 >
 > **Option B: Email Address Pattern**
+>
 > - Emails to a specific address pattern (e.g., andy+task@gmail.com)
 > - Uses Gmail's plus-addressing feature
 >
 > **Option C: Subject Prefix**
+>
 > - Emails with a subject starting with a keyword (e.g., "[Andy]")
 > - Anyone can trigger the agent by using the prefix
 
@@ -279,14 +285,17 @@ Also ask:
 > How should email conversations be grouped?
 >
 > **Option A: Per Email Thread**
+>
 > - Each email thread gets its own conversation context
 > - Agent remembers the thread history
 >
 > **Option B: Per Sender**
+>
 > - All emails from the same sender share context
 > - Agent remembers all interactions with that person
 >
 > **Option C: Single Context**
+>
 > - All emails share the main group context
 > - Like an additional input to the main channel
 
@@ -304,10 +313,10 @@ Read `src/types.ts` and add this interface:
 export interface EmailChannelConfig {
   enabled: boolean;
   triggerMode: 'label' | 'address' | 'subject';
-  triggerValue: string;  // Label name, address pattern, or subject prefix
+  triggerValue: string; // Label name, address pattern, or subject prefix
   contextMode: 'thread' | 'sender' | 'single';
   pollIntervalMs: number;
-  replyPrefix?: string;  // Optional prefix for replies
+  replyPrefix?: string; // Optional prefix for replies
 }
 ```
 
@@ -316,11 +325,11 @@ Read `src/config.ts` and add this configuration (customize values based on user'
 ```typescript
 export const EMAIL_CHANNEL: EmailChannelConfig = {
   enabled: true,
-  triggerMode: 'label',  // or 'address' or 'subject'
-  triggerValue: 'NanoClaw',  // the label name, address pattern, or prefix
+  triggerMode: 'label', // or 'address' or 'subject'
+  triggerValue: 'BearClaw', // the label name, address pattern, or prefix
   contextMode: 'thread',
-  pollIntervalMs: 60000,  // Check every minute
-  replyPrefix: '[Andy] '
+  pollIntervalMs: 60000, // Check every minute
+  replyPrefix: '[Andy] ',
 };
 ```
 
@@ -344,19 +353,30 @@ export function initEmailTable(): void {
 }
 
 export function isEmailProcessed(messageId: string): boolean {
-  const row = db.prepare('SELECT 1 FROM processed_emails WHERE message_id = ?').get(messageId);
+  const row = db
+    .prepare('SELECT 1 FROM processed_emails WHERE message_id = ?')
+    .get(messageId);
   return !!row;
 }
 
-export function markEmailProcessed(messageId: string, threadId: string, sender: string, subject: string): void {
-  db.prepare(`
+export function markEmailProcessed(
+  messageId: string,
+  threadId: string,
+  sender: string,
+  subject: string,
+): void {
+  db.prepare(
+    `
     INSERT OR REPLACE INTO processed_emails (message_id, thread_id, sender, subject, processed_at)
     VALUES (?, ?, ?, ?, ?)
-  `).run(messageId, threadId, sender, subject, new Date().toISOString());
+  `,
+  ).run(messageId, threadId, sender, subject, new Date().toISOString());
 }
 
 export function markEmailResponded(messageId: string): void {
-  db.prepare('UPDATE processed_emails SET response_sent = 1 WHERE message_id = ?').run(messageId);
+  db.prepare(
+    'UPDATE processed_emails SET response_sent = 1 WHERE message_id = ?',
+  ).run(messageId);
 }
 ```
 
@@ -368,12 +388,16 @@ Create a new file `src/integrations/email.ts` with this content:
 
 ```typescript
 import { EMAIL_CHANNEL } from './config.js';
-import { isEmailProcessed, markEmailProcessed, markEmailResponded } from './db.js';
+import {
+  isEmailProcessed,
+  markEmailProcessed,
+  markEmailResponded,
+} from './db.js';
 import pino from 'pino';
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
-  transport: { target: 'pino-pretty', options: { colorize: true } }
+  transport: { target: 'pino-pretty', options: { colorize: true } },
 });
 
 interface EmailMessage {
@@ -417,13 +441,11 @@ export async function sendEmailReply(
   threadId: string,
   to: string,
   subject: string,
-  body: string
+  body: string,
 ): Promise<void> {
   // Call Gmail MCP's send_email tool with in_reply_to for threading
   // Prefix subject with replyPrefix if configured
-  const replySubject = subject.startsWith('Re:')
-    ? subject
-    : `Re: ${subject}`;
+  const replySubject = subject.startsWith('Re:') ? subject : `Re: ${subject}`;
 
   const prefixedBody = EMAIL_CHANNEL.replyPrefix
     ? `${EMAIL_CHANNEL.replyPrefix}${body}`
@@ -448,7 +470,7 @@ export function getContextKey(email: EmailMessage): string {
 
 Read `src/index.ts` and add the email polling infrastructure. First, add these imports at the top:
 
-```typescript
+````typescript
 import { checkForNewEmails, sendEmailReply, getContextKey } from './email-channel.js';
 import { EMAIL_CHANNEL } from './config.js';
 import { isEmailProcessed, markEmailProcessed, markEmailResponded } from './db.js';
@@ -506,7 +528,7 @@ Then find the `connectWhatsApp` function and add `startEmailLoop()` call after `
 ```typescript
 // In the connection === 'open' block, after startMessageLoop():
 startEmailLoop();
-```
+````
 
 ### Step 6: Implement Email Agent Runner
 
@@ -516,15 +538,16 @@ Add this function to `src/index.ts` (or create a separate `src/email-agent.ts` i
 async function runEmailAgent(
   contextKey: string,
   prompt: string,
-  email: EmailMessage
+  email: EmailMessage,
 ): Promise<string | null> {
   // Email uses either:
   // 1. A dedicated "email" group folder
   // 2. Or dynamic folders per thread/sender
 
-  const groupFolder = EMAIL_CHANNEL.contextMode === 'single'
-    ? 'main'  // Use main group context
-    : `email/${contextKey}`;  // Isolated email context
+  const groupFolder =
+    EMAIL_CHANNEL.contextMode === 'single'
+      ? 'main' // Use main group context
+      : `email/${contextKey}`; // Isolated email context
 
   // Ensure folder exists
   const groupDir = path.join(GROUPS_DIR, groupFolder);
@@ -534,8 +557,8 @@ async function runEmailAgent(
   const emailGroup: RegisteredGroup = {
     name: contextKey,
     folder: groupFolder,
-    trigger: '',  // No trigger for email
-    added_at: new Date().toISOString()
+    trigger: '', // No trigger for email
+    added_at: new Date().toISOString(),
   };
 
   // Use existing runAgent
@@ -543,9 +566,9 @@ async function runEmailAgent(
     prompt,
     sessionId: sessions[groupFolder],
     groupFolder,
-    chatJid: `email:${email.from}`,  // Use email: prefix for JID
+    chatJid: `email:${email.from}`, // Use email: prefix for JID
     isMain: false,
-    isScheduledTask: false
+    isScheduledTask: false,
   });
 
   if (output.newSessionId) {
@@ -583,10 +606,10 @@ Then add handling in `src/index.ts` in the `processTaskIpc` function or create a
 Create the email agent directory and identity file:
 
 ```bash
-mkdir -p ~/.nanoclaw/agents/email
+mkdir -p ~/.bearclaw/agents/email
 ```
 
-Write `~/.nanoclaw/agents/email/IDENTITY.md`:
+Write `~/.bearclaw/agents/email/IDENTITY.md`:
 
 ```markdown
 # Email Channel
@@ -616,18 +639,19 @@ npm run build
 Restart the service:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 ```
 
 Verify it started and check for email channel startup message:
 
 ```bash
-sleep 3 && tail -20 logs/nanoclaw.log | grep -i email
+sleep 3 && tail -20 logs/bearclaw.log | grep -i email
 ```
 
 Tell the user:
 
 > Email channel is now active! Test it by sending an email that matches your trigger:
+>
 > - **Label mode:** Apply the "${triggerValue}" label to any email
 > - **Address mode:** Send an email to ${triggerValue}
 > - **Subject mode:** Send an email with subject starting with "${triggerValue}"
@@ -637,7 +661,7 @@ Tell the user:
 Monitor for the test:
 
 ```bash
-tail -f logs/nanoclaw.log | grep -E "(email|Email)"
+tail -f logs/bearclaw.log | grep -E "(email|Email)"
 ```
 
 ---
@@ -645,12 +669,14 @@ tail -f logs/nanoclaw.log | grep -E "(email|Email)"
 ## Troubleshooting
 
 ### Gmail MCP not responding
+
 ```bash
 # Test Gmail MCP directly
 npx -y @gongrzhe/server-gmail-autoauth-mcp
 ```
 
 ### OAuth token expired
+
 ```bash
 # Re-authorize
 rm ~/.gmail-mcp/credentials.json
@@ -658,13 +684,15 @@ npx -y @gongrzhe/server-gmail-autoauth-mcp
 ```
 
 ### Emails not being detected
+
 - Check the trigger configuration matches your test email
 - Verify the label exists (for label mode)
 - Check `processed_emails` table for already-processed emails
 
 ### Agent can't access Gmail
+
 - Verify `~/.gmail-mcp` directory exists and contains `credentials.json`
-- Check logs: `tail -50 logs/nanoclaw.log`
+- Check logs: `tail -50 logs/bearclaw.log`
 
 ---
 
@@ -682,10 +710,10 @@ To remove Gmail entirely:
 
 3. Delete `src/integrations/email.ts` (if created)
 
-4. Remove Gmail sections from `~/.nanoclaw/context/MEMORY.md` and any agent's `~/.nanoclaw/agents/*/IDENTITY.md`
+4. Remove Gmail sections from `~/.bearclaw/context/MEMORY.md` and any agent's `~/.bearclaw/agents/*/IDENTITY.md`
 
 5. Rebuild:
    ```bash
    npm run build
-   launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+   launchctl kickstart -k gui/$(id -u)/com.bearclaw
    ```

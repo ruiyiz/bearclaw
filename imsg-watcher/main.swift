@@ -4,12 +4,12 @@ import SQLite3
 
 let home = FileManager.default.homeDirectoryForCurrentUser.path
 let dbPath = "\(home)/Library/Messages/chat.db"
-let outputPath = "\(home)/.nanoclaw/var/log/imsg-watch.jsonl"
+let outputPath = "\(home)/.bearclaw/var/log/imsg-watch.jsonl"
 let appleEpochOffset: TimeInterval = 978_307_200
 let debounceInterval: TimeInterval = 0.25
 
 try? FileManager.default.createDirectory(
-    atPath: "\(home)/.nanoclaw/var/log",
+    atPath: "\(home)/.bearclaw/var/log",
     withIntermediateDirectories: true
 )
 

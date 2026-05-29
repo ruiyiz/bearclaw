@@ -50,6 +50,7 @@ Tell the user:
 > **Important**: Each pool bot needs Group Privacy disabled so it can send messages in groups.
 >
 > For each pool bot in `@BotFather`:
+>
 > 1. Send `/mybots` and select the bot
 > 2. Go to **Bot Settings** > **Group Privacy** > **Turn off**
 >
@@ -142,9 +143,15 @@ export async function sendPoolMessage(
     try {
       await poolApis[idx].setMyName(sender);
       await new Promise((r) => setTimeout(r, 2000));
-      logger.info({ sender, groupFolder, poolIndex: idx }, 'Assigned and renamed pool bot');
+      logger.info(
+        { sender, groupFolder, poolIndex: idx },
+        'Assigned and renamed pool bot',
+      );
     } catch (err) {
-      logger.warn({ sender, err }, 'Failed to rename pool bot (sending anyway)');
+      logger.warn(
+        { sender, err },
+        'Failed to rename pool bot (sending anyway)',
+      );
     }
   }
 
@@ -159,7 +166,10 @@ export async function sendPoolMessage(
         await api.sendMessage(numericId, text.slice(i, i + MAX_LENGTH));
       }
     }
-    logger.info({ chatId, sender, poolIndex: idx, length: text.length }, 'Pool message sent');
+    logger.info(
+      { chatId, sender, poolIndex: idx, length: text.length },
+      'Pool message sent',
+    );
   } catch (err) {
     logger.error({ chatId, sender, err }, 'Failed to send pool message');
   }
@@ -171,11 +181,13 @@ export async function sendPoolMessage(
 Read `src/agent/ipc-mcp.ts` and update the `send_message` tool to accept an optional `sender` parameter:
 
 Change the tool's schema from:
+
 ```typescript
 { text: z.string().describe('The message text to send') },
 ```
 
 To:
+
 ```typescript
 {
   text: z.string().describe('The message text to send'),
@@ -212,12 +224,7 @@ Read `src/ipc.ts` and make these changes:
 
 ```typescript
 if (data.sender && data.chatJid.startsWith('tg:')) {
-  await sendPoolMessage(
-    data.chatJid,
-    data.text,
-    data.sender,
-    sourceGroup,
-  );
+  await sendPoolMessage(data.chatJid, data.text, data.sender, sourceGroup);
 } else {
   await deps.sendMessage(data.chatJid, data.text);
 }
@@ -237,23 +244,24 @@ if (TELEGRAM_BOT_POOL.length > 0) {
 
 #### 5a. Add global message formatting rules
 
-Read `~/.nanoclaw/context/AGENTS.md` and add a Message Formatting section:
+Read `~/.bearclaw/context/AGENTS.md` and add a Message Formatting section:
 
 ```markdown
 ## Message Formatting
 
 NEVER use markdown. Only use WhatsApp/Telegram formatting:
-- *single asterisks* for bold (NEVER **double asterisks**)
+
+- _single asterisks_ for bold (NEVER **double asterisks**)
 - _underscores_ for italic
 - • bullet points
-- ```triple backticks``` for code
+- `triple backticks` for code
 
 No ## headings. No [links](url). No **double stars**.
 ```
 
 #### 5b. Update existing IDENTITY.md headings
 
-In any agent's `~/.nanoclaw/agents/{folder}/IDENTITY.md` that has a "WhatsApp Formatting" section, rename the heading to reflect multi-channel support:
+In any agent's `~/.bearclaw/agents/{folder}/IDENTITY.md` that has a "WhatsApp Formatting" section, rename the heading to reflect multi-channel support:
 
 ```
 ## WhatsApp Formatting (and other messaging apps)
@@ -261,33 +269,33 @@ In any agent's `~/.nanoclaw/agents/{folder}/IDENTITY.md` that has a "WhatsApp Fo
 
 #### 5c. Add Agent Teams instructions to Telegram groups
 
-For each Telegram chat that will use agent teams, create or update its `~/.nanoclaw/agents/{folder}/IDENTITY.md` with these instructions. Read the existing identity file first (or `~/.nanoclaw/context/AGENTS.md` as a base) and add the Agent Teams section:
+For each Telegram chat that will use agent teams, create or update its `~/.bearclaw/agents/{folder}/IDENTITY.md` with these instructions. Read the existing identity file first (or `~/.bearclaw/context/AGENTS.md` as a base) and add the Agent Teams section:
 
-```markdown
+````markdown
 ## Agent Teams
 
 When creating a team to tackle a complex task, follow these rules:
 
 ### CRITICAL: Follow the user's prompt exactly
 
-Create *exactly* the team the user asked for — same number of agents, same roles, same names. Do NOT add extra agents, rename roles, or use generic names like "Researcher 1". If the user says "a marine biologist, a physicist, and Alexander Hamilton", create exactly those three agents with those exact names.
+Create _exactly_ the team the user asked for — same number of agents, same roles, same names. Do NOT add extra agents, rename roles, or use generic names like "Researcher 1". If the user says "a marine biologist, a physicist, and Alexander Hamilton", create exactly those three agents with those exact names.
 
 ### Team member instructions
 
 Each team member MUST be instructed to:
 
-1. *Share progress in the group* via `mcp__nanoclaw__send_message` with a `sender` parameter matching their exact role/character name (e.g., `sender: "Marine Biologist"` or `sender: "Alexander Hamilton"`). This makes their messages appear from a dedicated bot in the Telegram group.
-2. *Also communicate with teammates* via `SendMessage` as normal for coordination.
-3. Keep group messages *short* — 2-4 sentences max per message. Break longer content into multiple `send_message` calls. No walls of text.
+1. _Share progress in the group_ via `mcp__bearclaw__send_message` with a `sender` parameter matching their exact role/character name (e.g., `sender: "Marine Biologist"` or `sender: "Alexander Hamilton"`). This makes their messages appear from a dedicated bot in the Telegram group.
+2. _Also communicate with teammates_ via `SendMessage` as normal for coordination.
+3. Keep group messages _short_ — 2-4 sentences max per message. Break longer content into multiple `send_message` calls. No walls of text.
 4. Use the `sender` parameter consistently — always the same name so the bot identity stays stable.
-5. NEVER use markdown formatting. Use ONLY WhatsApp/Telegram formatting: single *asterisks* for bold (NOT **double**), _underscores_ for italic, • for bullets, ```backticks``` for code. No ## headings, no [links](url), no **double asterisks**.
+5. NEVER use markdown formatting. Use ONLY WhatsApp/Telegram formatting: single _asterisks_ for bold (NOT **double**), _underscores_ for italic, • for bullets, `backticks` for code. No ## headings, no [links](url), no **double asterisks**.
 
 ### Example team creation prompt
 
 When creating a teammate, include instructions like:
 
 \```
-You are the Marine Biologist. When you have findings or updates for the user, send them to the group using mcp__nanoclaw__send_message with sender set to "Marine Biologist". Keep each message short (2-4 sentences max). Use emojis for strong reactions. ONLY use single *asterisks* for bold (never **double**), _underscores_ for italic, • for bullets. No markdown. Also communicate with teammates via SendMessage.
+You are the Marine Biologist. When you have findings or updates for the user, send them to the group using mcp**bearclaw**send*message with sender set to "Marine Biologist". Keep each message short (2-4 sentences max). Use emojis for strong reactions. ONLY use single *asterisks* for bold (never **double**), \_underscores* for italic, • for bullets. No markdown. Also communicate with teammates via SendMessage.
 \```
 
 ### Lead agent behavior
@@ -296,9 +304,9 @@ As the lead agent who created the team:
 
 - You do NOT need to react to or relay every teammate message. The user sees those directly from the teammate bots.
 - Send your own messages only to comment, share thoughts, synthesize, or direct the team.
-- When processing an internal update from a teammate that doesn't need a user-facing response, wrap your *entire* output in `<internal>` tags.
+- When processing an internal update from a teammate that doesn't need a user-facing response, wrap your _entire_ output in `<internal>` tags.
 - Focus on high-level coordination and the final synthesis.
-```
+````
 
 ### Step 6: Update Environment
 
@@ -314,15 +322,15 @@ TELEGRAM_BOT_POOL=TOKEN1,TOKEN2,TOKEN3,...
 cp .env data/env/env
 ```
 
-Also add `TELEGRAM_BOT_POOL` to the launchd plist (`~/Library/LaunchAgents/com.nanoclaw.plist`) in the `EnvironmentVariables` dict if using launchd.
+Also add `TELEGRAM_BOT_POOL` to the launchd plist (`~/Library/LaunchAgents/com.bearclaw.plist`) in the `EnvironmentVariables` dict if using launchd.
 
 ### Step 7: Rebuild and Restart
 
 ```bash
 npm run build
 ./container/build.sh  # Required — MCP tool changed
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist
+launchctl load ~/Library/LaunchAgents/com.bearclaw.plist
 ```
 
 Must use `unload/load` (not just `kickstart`) because the plist env vars changed.
@@ -335,11 +343,12 @@ Tell the user:
 > "Assemble a team of a researcher and a coder to build me a hello world app"
 >
 > You should see:
+>
 > - The lead agent (main bot) acknowledging and creating the team
 > - Each subagent messaging from a different bot, renamed to their role
 > - Short, scannable messages from each agent
 >
-> Check logs: `tail -f logs/nanoclaw.log | grep -i pool`
+> Check logs: `tail -f logs/bearclaw.log | grep -i pool`
 
 ## Architecture Notes
 
@@ -355,7 +364,7 @@ Tell the user:
 ### Pool bots not sending messages
 
 1. Verify tokens: `curl -s "https://api.telegram.org/botTOKEN/getMe"`
-2. Check pool initialized: `grep "Pool bot" logs/nanoclaw.log`
+2. Check pool initialized: `grep "Pool bot" logs/bearclaw.log`
 3. Ensure all pool bots are members of the Telegram group
 4. Check Group Privacy is disabled for each pool bot
 
@@ -378,4 +387,4 @@ To remove Agent Swarm support while keeping basic Telegram:
 5. Remove `sender` param from MCP tool in `src/agent/ipc-mcp.ts`
 6. Remove Agent Teams section from group CLAUDE.md files
 7. Remove `TELEGRAM_BOT_POOL` from `.env`, `data/env/env`, and launchd plist
-8. Rebuild: `npm run build && ./container/build.sh && launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist && launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist`
+8. Rebuild: `npm run build && ./container/build.sh && launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist && launchctl load ~/Library/LaunchAgents/com.bearclaw.plist`

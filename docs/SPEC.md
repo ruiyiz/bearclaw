@@ -1,4 +1,4 @@
-# NanoClaw Specification
+# BearClaw Specification
 
 A personal Claude assistant accessible via chat platforms (WhatsApp, Telegram, iMessage) and Gmail, with persistent per-agent state, scheduled and event-driven handlers, and shared context. Long-term memory is delegated to a separate **gbrain** process exposed over MCP.
 
@@ -43,7 +43,7 @@ This document describes design and architecture decisions. Not a code reference;
 │              │           Agent Runner (in-process)        │        │
 │              │   query() → Claude Agent SDK               │        │
 │              │   tools: Bash, Read/Write/Edit, Web*,      │        │
-│              │          mcp__nanoclaw__*, mcp__gbrain__*  │        │
+│              │          mcp__bearclaw__*, mcp__gbrain__*  │        │
 │              │   gbrain mutating tools blocked at         │        │
 │              │   SDK boundary (disallowedTools)           │        │
 │              └────────────────────────────────────────────┘        │
@@ -62,11 +62,11 @@ This document describes design and architecture decisions. Not a code reference;
 │                                                                    │
 │              ┌────────────────────────────────────────────┐        │
 │              │              IPC Watcher (file-based)      │        │
-│              │   reads ~/.nanoclaw/var/run/ipc/{folder}/  │        │
+│              │   reads ~/.bearclaw/var/run/ipc/{folder}/  │        │
 │              └────────────────────────────────────────────┘        │
 │                                                                    │
 │              ┌────────────────────────────────────────────┐        │
-│              │         SQLite (~/.nanoclaw/var/)          │        │
+│              │         SQLite (~/.bearclaw/var/)          │        │
 │              │   chats, messages, events, handlers,       │        │
 │              │   handler_logs                             │        │
 │              └────────────────────────────────────────────┘        │
@@ -98,16 +98,16 @@ This document describes design and architecture decisions. Not a code reference;
 | TUI       | `ink` + `react`                       | Status terminal UI                     |
 | Runtime   | Node.js 20+                           | Single host process                    |
 
-NanoClaw never imports gbrain code. The boundary is a single MCP entry in `~/.nanoclaw/config/mcp.json`. Drop the entry and the agent still boots, falling back to the warm-start window.
+BearClaw never imports gbrain code. The boundary is a single MCP entry in `~/.bearclaw/config/mcp.json`. Drop the entry and the agent still boots, falling back to the warm-start window.
 
 ---
 
 ## Folder Structure
 
-NanoClaw separates source repo, runtime config (`~/.nanoclaw/config/`), and runtime state (`~/.nanoclaw/var/`). Stable user content lives at the top level (`agents/`, `context/`, `skills/`); volatile state is namespaced under `var/`. gbrain owns its own home at `~/.gbrain/`.
+BearClaw separates source repo, runtime config (`~/.bearclaw/config/`), and runtime state (`~/.bearclaw/var/`). Stable user content lives at the top level (`agents/`, `context/`, `skills/`); volatile state is namespaced under `var/`. gbrain owns its own home at `~/.gbrain/`.
 
 ```
-~/.nanoclaw/
+~/.bearclaw/
 ├── .env                              # Auth tokens, integration keys
 ├── config/                           # Stable, user-edited
 │   ├── registered_agents.json
@@ -140,13 +140,13 @@ NanoClaw separates source repo, runtime config (`~/.nanoclaw/config/`), and runt
 └── .logs/                            # cron run logs
 ```
 
-`agents/{folder}/` (stable, user-meaningful) vs `var/agents/{folder}/` (volatile, system-meaningful) is deliberate: `agents/` is what the user backs up, edits, or manually inspects; `var/` is what NanoClaw owns and may rewrite.
+`agents/{folder}/` (stable, user-meaningful) vs `var/agents/{folder}/` (volatile, system-meaningful) is deliberate: `agents/` is what the user backs up, edits, or manually inspects; `var/` is what BearClaw owns and may rewrite.
 
 ---
 
 ## Configuration
 
-`src/config.ts` is the single source of truth for env vars, paths, and intervals. `~/.nanoclaw/.env` is loaded at startup.
+`src/config.ts` is the single source of truth for env vars, paths, and intervals. `~/.bearclaw/.env` is loaded at startup.
 
 ### Authentication
 
@@ -172,10 +172,10 @@ OPENAI_API_KEY=sk-...                      # image_generate + gbrain embeddings
 
 ## Memory System
 
-NanoClaw's memory layers are designed around two principles:
+BearClaw's memory layers are designed around two principles:
 
 1. **Files are authoritative; the database is auxiliary.** Conversations and context files live as markdown on disk. SQLite carries channel state, event bus, and handler bookkeeping — no curated content.
-2. **In-process layers stay simple; long-term memory lives elsewhere.** NanoClaw owns checkpoints + daily conversations + manual context files. Anything richer (semantic search, timeline reasoning, cross-conversation graph) is delegated to gbrain over MCP. NanoClaw works without gbrain — falls back to the warm-start window.
+2. **In-process layers stay simple; long-term memory lives elsewhere.** BearClaw owns checkpoints + daily conversations + manual context files. Anything richer (semantic search, timeline reasoning, cross-conversation graph) is delegated to gbrain over MCP. BearClaw works without gbrain — falls back to the warm-start window.
 
 | Layer                  | Location                                         | Owner            | Purpose                                         |
 | ---------------------- | ------------------------------------------------ | ---------------- | ----------------------------------------------- |
@@ -215,7 +215,7 @@ The agent only sees gbrain's read-only operations. Mutating tools (`put_page`, `
 | Read other agents' conversations     | via gbrain | via gbrain |
 | `register_agent`, IPC fan-out        | yes        | no         |
 
-Manual context files in `~/.nanoclaw/context/` are visible to every agent. Per-agent identity is isolated to `agents/{folder}/IDENTITY.md`.
+Manual context files in `~/.bearclaw/context/` are visible to every agent. Per-agent identity is isolated to `agents/{folder}/IDENTITY.md`.
 
 ---
 
@@ -259,7 +259,7 @@ The conversation checkpoint provides crash safety; the daily flush prevents `che
      resume: sessionId
      systemPrompt: claude_code preset + context/{AGENTS,CONTEXT,SOUL,USER}.md
                  + IDENTITY.md + SYSTEM_PROMPT
-     mcpServers: { nanoclaw: ipcMcp, ...userMcpServers }   # gbrain in userMcpServers
+     mcpServers: { bearclaw: ipcMcp, ...userMcpServers }   # gbrain in userMcpServers
      SessionStart hook: warm-start budget (today's checkpoint + last N days)
 5. The agent streams output. MCP-side effects (send_message, schedule_task, …) are
    written to var/run/ipc/{folder}/ and dispatched by the IPC watcher.
@@ -288,13 +288,13 @@ A unified `handlers` table stores both cron-scheduled and event-driven runs.
 
 Custom handlers are registered by agents via `register_handler` (event-driven) or `schedule_task` (cron / one-shot). Every handler completion emits `handler_complete`, which can drive subsequent handlers.
 
-The earlier `dream-{folder}` and `dream-cycle-report` handler families are gone; gbrain owns long-term consolidation now and runs its own crons (separate launchd plists, not via NanoClaw's handler table).
+The earlier `dream-{folder}` and `dream-cycle-report` handler families are gone; gbrain owns long-term consolidation now and runs its own crons (separate launchd plists, not via BearClaw's handler table).
 
 ---
 
 ## MCP Servers
 
-### `nanoclaw` MCP (built-in)
+### `bearclaw` MCP (built-in)
 
 Per-call MCP server with the agent's identity. Tools:
 
@@ -311,29 +311,29 @@ Per-call MCP server with the agent's identity. Tools:
 
 The previous `memory_search` / `memory_write` tools are removed. The agent uses gbrain MCP for retrieval.
 
-### `gbrain` MCP (external, configured in `~/.nanoclaw/config/mcp.json`)
+### `gbrain` MCP (external, configured in `~/.bearclaw/config/mcp.json`)
 
-stdio entry: `command: /Users/<user>/.bun/bin/gbrain`, `args: ["serve"]`. Spawned by the SDK per session. Exposes the full gbrain operations set; mutating ops are denied at NanoClaw's `disallowedTools` boundary, so only read tools (`query`, `get_page`, `list_pages`, `traverse_graph`, `get_timeline`, `get_stats`, …) reach the model.
+stdio entry: `command: /Users/<user>/.bun/bin/gbrain`, `args: ["serve"]`. Spawned by the SDK per session. Exposes the full gbrain operations set; mutating ops are denied at BearClaw's `disallowedTools` boundary, so only read tools (`query`, `get_page`, `list_pages`, `traverse_graph`, `get_timeline`, `get_stats`, …) reach the model.
 
 HTTP MCP exists in gbrain (`gbrain serve --http`) but the OAuth setup is Postgres-only on PGLite engines, so the persistent HTTP option is currently deferred. Each session pays a stdio cold-start (~50–200 ms) but otherwise the agent sees the full gbrain feature set.
 
 ### User MCP servers
 
-`~/.nanoclaw/config/mcp.json` is merged into every agent's `mcpServers` config. Users add Notion, GitHub, etc. there without editing source. The gbrain entry lives there too, by convention.
+`~/.bearclaw/config/mcp.json` is merged into every agent's `mcpServers` config. Users add Notion, GitHub, etc. there without editing source. The gbrain entry lives there too, by convention.
 
 ---
 
 ## Deployment
 
-NanoClaw runs as a single macOS launchd service (`~/Library/LaunchAgents/com.nanoclaw.plist`). gbrain crons are separate launchd plists owned by NanoClaw setup but logically independent.
+BearClaw runs as a single macOS launchd service (`~/Library/LaunchAgents/com.bearclaw.plist`). gbrain crons are separate launchd plists owned by BearClaw setup but logically independent.
 
 ```
 ~/Library/LaunchAgents/
-├── com.nanoclaw.plist                # main agent runner
-├── com.nanoclaw.imsg-watcher.plist   # iMessage tail
-├── com.nanoclaw.gbrain.sync.plist    # 15min: snapshot conversations → gbrain sync + embed
-├── com.nanoclaw.gbrain.dream.plist   # daily 02:00: gbrain dream
-└── com.nanoclaw.gbrain.doctor.plist  # weekly Mon 06:00: gbrain doctor
+├── com.bearclaw.plist                # main agent runner
+├── com.bearclaw.imsg-watcher.plist   # iMessage tail
+├── com.bearclaw.gbrain.sync.plist    # 15min: snapshot conversations → gbrain sync + embed
+├── com.bearclaw.gbrain.dream.plist   # daily 02:00: gbrain dream
+└── com.bearclaw.gbrain.doctor.plist  # weekly Mon 06:00: gbrain doctor
 ```
 
 ### Startup sequence
@@ -351,9 +351,9 @@ NanoClaw runs as a single macOS launchd service (`~/Library/LaunchAgents/com.nan
 ### Service management
 
 ```bash
-launchctl load   ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl load   ~/Library/LaunchAgents/com.bearclaw.plist
+launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 ```
 
 Same pattern for the gbrain plists.
@@ -369,10 +369,10 @@ See [SECURITY.md](SECURITY.md) for the full threat model. Highlights:
 - **IPC authorization.** The IPC watcher rejects cross-agent operations from non-main agents (sending to other chats, registering handlers for other agents, calling `register_agent` / `refresh_agents`).
 - **Trigger gate.** Non-main agents only fire on messages matching their configured trigger.
 - **gbrain is read-only at the agent boundary.** Mutating ops are denied via `disallowedTools` in `runner.ts`. The cron jobs and the operator's CLI retain full write access.
-- **Manual context applies; no auto-write.** `~/.nanoclaw/context/` is never written by NanoClaw or by gbrain. The user holds the commit button — agents propose changes via chat, the user replies with instructions, the agent edits via Read/Edit.
-- **Credentials.** Loaded from `~/.nanoclaw/.env` into `process.env`. Agents can read them via Bash; this is a known limitation of the in-process model.
+- **Manual context applies; no auto-write.** `~/.bearclaw/context/` is never written by BearClaw or by gbrain. The user holds the commit button — agents propose changes via chat, the user replies with instructions, the agent edits via Read/Edit.
+- **Credentials.** Loaded from `~/.bearclaw/.env` into `process.env`. Agents can read them via Bash; this is a known limitation of the in-process model.
 
 ```bash
-chmod 700 ~/.nanoclaw/agents/
-chmod 600 ~/.nanoclaw/.env
+chmod 700 ~/.bearclaw/agents/
+chmod 600 ~/.bearclaw/.env
 ```

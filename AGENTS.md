@@ -1,4 +1,4 @@
-# NanoClaw
+# BearClaw
 
 Personal Codex assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
 
@@ -8,7 +8,7 @@ Single Node.js process that connects to chat platforms (WhatsApp, Telegram, iMes
 
 The web UI is a Next.js 15 PWA in `web/` (separate package). It talks to a local HTTP/SSE server (`src/server/http.ts`, default `127.0.0.1:7878`) inside the main process. The web app has two module groups: **user** (chat, events) and **admin** (skills, handlers, agents, health, heartbeat).
 
-Auth: signed-cookie session + double-submit CSRF (`src/server/auth.ts`). Single owner password from `NANOCLAW_PASSWORD` in `~/.nanoclaw/.env`. If unset on first start, a random password is written to `~/.nanoclaw/var/initial-password` and logged once — copy it to the env file then delete the bootstrap file. HMAC secret auto-generated at `~/.nanoclaw/var/auth-secret`. Web app gates all routes via `web/middleware.ts`; API client (`web/lib/api.ts`) attaches `x-csrf-token` from the `nc_csrf` cookie on mutations.
+Auth: signed-cookie session + double-submit CSRF (`src/server/auth.ts`). Single owner password from `BEARCLAW_PASSWORD` in `~/.bearclaw/.env`. If unset on first start, a random password is written to `~/.bearclaw/var/initial-password` and logged once — copy it to the env file then delete the bootstrap file. HMAC secret auto-generated at `~/.bearclaw/var/auth-secret`. Web app gates all routes via `web/middleware.ts`; API client (`web/lib/api.ts`) attaches `x-csrf-token` from the `nc_csrf` cookie on mutations.
 
 ## Source Layout
 
@@ -36,8 +36,8 @@ web/               # Next.js 15 + PWA. Talks to HTTP server via /api/* rewrite.
 ```
 
 Long-term memory lives in **gbrain**, spawned as a stdio MCP per agent session
-(entry in `~/.nanoclaw/config/mcp.json`). gbrain's PGLite store + cron wrappers
-live at `~/.gbrain/`. NanoClaw never imports gbrain code — coupling is the
+(entry in `~/.bearclaw/config/mcp.json`). gbrain's PGLite store + cron wrappers
+live at `~/.gbrain/`. BearClaw never imports gbrain code — coupling is the
 mcp.json entry only. Drop the entry and the agent still boots, falling back to
 checkpoint + last-N-days conversation window. Mutating gbrain ops are denied
 at the SDK boundary in `runner.ts`, so the agent sees a read-only view; cron
@@ -57,11 +57,11 @@ jobs and the operator's CLI retain full write access.
 | `src/events/scheduler.ts`                      | Cron handler firing                                                  |
 | `src/integrations/email.ts`                    | Gmail polling and reply primitive                                    |
 | `src/db.ts`                                    | SQLite operations (messages, chats, events, handlers)                |
-| `~/.nanoclaw/context/`                         | Shared context: AGENTS.md, CONTEXT.md, SOUL.md, USER.md              |
-| `~/.nanoclaw/agents/{name}/IDENTITY.md`        | Per-agent identity                                                   |
-| `~/.nanoclaw/var/agents/{name}/conversations/` | Daily conversation archives (`YYYY-MM-DD.md`, written by 1am flush)  |
-| `~/.nanoclaw/var/agents/{name}/checkpoints/`   | Live transcript checkpoint per session (crash safety)                |
-| `~/.nanoclaw/skills/`                          | Skill definitions (SKILL.md per skill)                               |
+| `~/.bearclaw/context/`                         | Shared context: AGENTS.md, CONTEXT.md, SOUL.md, USER.md              |
+| `~/.bearclaw/agents/{name}/IDENTITY.md`        | Per-agent identity                                                   |
+| `~/.bearclaw/var/agents/{name}/conversations/` | Daily conversation archives (`YYYY-MM-DD.md`, written by 1am flush)  |
+| `~/.bearclaw/var/agents/{name}/checkpoints/`   | Live transcript checkpoint per session (crash safety)                |
+| `~/.bearclaw/skills/`                          | Skill definitions (SKILL.md per skill)                               |
 | `~/.gbrain/`                                   | gbrain PGLite store + cron wrappers + logs; populated by gbrain sync |
 
 ## Skills
@@ -92,12 +92,12 @@ Service management:
 
 ```bash
 # Main process (channels + scheduler + HTTP API on 127.0.0.1:7878)
-launchctl load   ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl load   ~/Library/LaunchAgents/com.bearclaw.plist
+launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist
 
 # Web UI (Next.js prod, :3030; proxies /api/* -> 7878)
-launchctl load   ~/Library/LaunchAgents/com.nanoclaw.web.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.web.plist
+launchctl load   ~/Library/LaunchAgents/com.bearclaw.web.plist
+launchctl unload ~/Library/LaunchAgents/com.bearclaw.web.plist
 ```
 
-Web service prerequisite: `cd web && bun install && bun run build`. Reload `com.nanoclaw.web` after every rebuild.
+Web service prerequisite: `cd web && bun install && bun run build`. Reload `com.bearclaw.web` after every rebuild.

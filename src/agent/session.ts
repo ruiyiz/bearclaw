@@ -286,7 +286,7 @@ export class AgentSession {
         settingSources: ['project'],
         includePartialMessages: true,
         mcpServers: {
-          nanoclaw: ipcMcp,
+          bearclaw: ipcMcp,
           ...userMcpServers,
         },
         hooks: {

@@ -15,7 +15,7 @@ import {
   IMESSAGE_ENABLED,
   LOG_DIR,
   MAIN_AGENT_FOLDER,
-  NANOCLAW_HOME,
+  BEARCLAW_HOME,
   POLL_INTERVAL,
   RUN_DIR,
   SKILLS_DIR,
@@ -136,7 +136,7 @@ function ensureLayoutDirs(): void {
   for (const d of dirs) fs.mkdirSync(d, { recursive: true });
 
   // Maintain the .claude/skills symlink for SDK auto-discovery.
-  const symlinkDir = path.join(NANOCLAW_HOME, '.claude');
+  const symlinkDir = path.join(BEARCLAW_HOME, '.claude');
   const symlinkPath = path.join(symlinkDir, 'skills');
   if (!fs.existsSync(symlinkPath) && fs.existsSync(SKILLS_DIR)) {
     fs.mkdirSync(symlinkDir, { recursive: true });
@@ -1471,7 +1471,7 @@ async function startMessageLoop(): Promise<void> {
     return;
   }
   messageLoopRunning = true;
-  logger.info(`NanoClaw running (trigger: @${ASSISTANT_NAME})`);
+  logger.info(`BearClaw running (trigger: @${ASSISTANT_NAME})`);
 
   while (true) {
     try {
@@ -1710,6 +1710,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  logger.error({ err }, 'Failed to start NanoClaw');
+  logger.error({ err }, 'Failed to start BearClaw');
   process.exit(1);
 });

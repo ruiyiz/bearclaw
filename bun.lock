@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "nanoclaw",
+      "name": "bearclaw",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.119",
         "@whiskeysockets/baileys": "^7.0.0-rc.9",

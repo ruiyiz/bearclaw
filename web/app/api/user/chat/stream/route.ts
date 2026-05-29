@@ -8,9 +8,9 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 const BACKEND =
-  process.env.NANOCLAW_BACKEND_URL ||
-  `http://${process.env.NANOCLAW_HTTP_HOST || '127.0.0.1'}:${
-    process.env.NANOCLAW_HTTP_PORT || '7878'
+  process.env.BEARCLAW_BACKEND_URL ||
+  `http://${process.env.BEARCLAW_HTTP_HOST || '127.0.0.1'}:${
+    process.env.BEARCLAW_HTTP_PORT || '7878'
   }`;
 
 export async function GET(req: NextRequest) {

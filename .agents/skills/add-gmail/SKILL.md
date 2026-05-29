@@ -1,11 +1,11 @@
 ---
 name: add-gmail
-description: Add Gmail integration to NanoClaw. Can be configured as a tool (agent reads/sends emails when triggered from WhatsApp) or as a full channel (emails can trigger the agent, schedule tasks, and receive replies). Guides through GCP OAuth setup and implements the integration.
+description: Add Gmail integration to BearClaw. Can be configured as a tool (agent reads/sends emails when triggered from WhatsApp) or as a full channel (emails can trigger the agent, schedule tasks, and receive replies). Guides through GCP OAuth setup and implements the integration.
 ---
 
 # Add Gmail Integration
 
-This skill adds Gmail capabilities to NanoClaw. It can be configured in two modes:
+This skill adds Gmail capabilities to BearClaw. It can be configured in two modes:
 
 1. **Tool Mode** - Agent can read/send emails, but only when triggered from WhatsApp
 2. **Channel Mode** - Emails can trigger the agent, schedule tasks, and receive email replies
@@ -14,7 +14,7 @@ This skill adds Gmail capabilities to NanoClaw. It can be configured in two mode
 
 Ask the user:
 
-> How do you want to use Gmail with NanoClaw?
+> How do you want to use Gmail with BearClaw?
 >
 > **Option 1: Tool Mode**
 >
@@ -76,9 +76,9 @@ Wait for user confirmation, then continue:
 >    - Go to **APIs & Services → Credentials** (in the left sidebar)
 >    - Click **+ CREATE CREDENTIALS** at the top
 >    - Select **OAuth client ID**
->    - If prompted for consent screen, choose "External", fill in app name (e.g., "NanoClaw"), your email, and save
+>    - If prompted for consent screen, choose "External", fill in app name (e.g., "BearClaw"), your email, and save
 >    - For Application type, select **Desktop app**
->    - Name it anything (e.g., "NanoClaw Gmail")
+>    - Name it anything (e.g., "BearClaw Gmail")
 >    - Click **Create**
 
 Wait for user confirmation, then continue:
@@ -182,21 +182,21 @@ The result should look like:
 
 ```typescript
 mcpServers: {
-  nanoclaw: ipcMcp,
+  bearclaw: ipcMcp,
   gmail: { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] }
 },
 allowedTools: [
   'Bash',
   'Read', 'Write', 'Edit', 'Glob', 'Grep',
   'WebSearch', 'WebFetch',
-  'mcp__nanoclaw__*',
+  'mcp__bearclaw__*',
   'mcp__gmail__*'
 ],
 ```
 
 ### Step 2: Update Group Memory
 
-Append to `~/.nanoclaw/context/MEMORY.md` (the global memory file):
+Append to `~/.bearclaw/context/MEMORY.md` (the global memory file):
 
 ```markdown
 ## Email (Gmail)
@@ -212,7 +212,7 @@ You have access to Gmail via MCP tools:
 Example: "Check my unread emails from today" or "Send an email to john@example.com about the meeting"
 ```
 
-Also append the same section to `~/.nanoclaw/agents/main/IDENTITY.md`.
+Also append the same section to `~/.bearclaw/agents/main/IDENTITY.md`.
 
 ### Step 3: Rebuild and Restart
 
@@ -225,13 +225,13 @@ npm run build
 Wait for TypeScript compilation, then restart the service:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 ```
 
 Check that it started:
 
 ```bash
-sleep 2 && launchctl list | grep nanoclaw
+sleep 2 && launchctl list | grep bearclaw
 ```
 
 ### Step 4: Test Gmail Integration
@@ -249,7 +249,7 @@ Tell the user:
 Watch the logs for any errors:
 
 ```bash
-tail -f logs/nanoclaw.log
+tail -f logs/bearclaw.log
 ```
 
 ---
@@ -266,7 +266,7 @@ Ask the user:
 >
 > **Option A: Specific Label**
 >
-> - Create a Gmail label (e.g., "NanoClaw")
+> - Create a Gmail label (e.g., "BearClaw")
 > - Emails with this label trigger the agent
 > - You manually label emails or set up Gmail filters
 >
@@ -326,7 +326,7 @@ Read `src/config.ts` and add this configuration (customize values based on user'
 export const EMAIL_CHANNEL: EmailChannelConfig = {
   enabled: true,
   triggerMode: 'label', // or 'address' or 'subject'
-  triggerValue: 'NanoClaw', // the label name, address pattern, or prefix
+  triggerValue: 'BearClaw', // the label name, address pattern, or prefix
   contextMode: 'thread',
   pollIntervalMs: 60000, // Check every minute
   replyPrefix: '[Andy] ',
@@ -606,10 +606,10 @@ Then add handling in `src/index.ts` in the `processTaskIpc` function or create a
 Create the email agent directory and identity file:
 
 ```bash
-mkdir -p ~/.nanoclaw/agents/email
+mkdir -p ~/.bearclaw/agents/email
 ```
 
-Write `~/.nanoclaw/agents/email/IDENTITY.md`:
+Write `~/.bearclaw/agents/email/IDENTITY.md`:
 
 ```markdown
 # Email Channel
@@ -639,13 +639,13 @@ npm run build
 Restart the service:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.bearclaw
 ```
 
 Verify it started and check for email channel startup message:
 
 ```bash
-sleep 3 && tail -20 logs/nanoclaw.log | grep -i email
+sleep 3 && tail -20 logs/bearclaw.log | grep -i email
 ```
 
 Tell the user:
@@ -661,7 +661,7 @@ Tell the user:
 Monitor for the test:
 
 ```bash
-tail -f logs/nanoclaw.log | grep -E "(email|Email)"
+tail -f logs/bearclaw.log | grep -E "(email|Email)"
 ```
 
 ---
@@ -692,7 +692,7 @@ npx -y @gongrzhe/server-gmail-autoauth-mcp
 ### Agent can't access Gmail
 
 - Verify `~/.gmail-mcp` directory exists and contains `credentials.json`
-- Check logs: `tail -50 logs/nanoclaw.log`
+- Check logs: `tail -50 logs/bearclaw.log`
 
 ---
 
@@ -710,10 +710,10 @@ To remove Gmail entirely:
 
 3. Delete `src/integrations/email.ts` (if created)
 
-4. Remove Gmail sections from `~/.nanoclaw/context/MEMORY.md` and any agent's `~/.nanoclaw/agents/*/IDENTITY.md`
+4. Remove Gmail sections from `~/.bearclaw/context/MEMORY.md` and any agent's `~/.bearclaw/agents/*/IDENTITY.md`
 
 5. Rebuild:
    ```bash
    npm run build
-   launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+   launchctl kickstart -k gui/$(id -u)/com.bearclaw
    ```

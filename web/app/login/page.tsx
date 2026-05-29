@@ -6,7 +6,7 @@ export default function LoginPage() {
     <main className="flex-1 flex flex-col items-center justify-center px-6 py-12">
       <div className="w-full max-w-sm space-y-6">
         <header className="text-center space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">NanoClaw</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">BearClaw</h1>
           <p className="text-sm text-[color:var(--muted)]">Sign in</p>
         </header>
         <Suspense>

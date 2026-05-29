@@ -1,6 +1,6 @@
 # GBrain Cutover Plan
 
-NanoClaw → adopt GBrain as primary memory system. Single commit on main. QMD + dream pipeline removed.
+BearClaw → adopt GBrain as primary memory system. Single commit on main. QMD + dream pipeline removed.
 
 ## Locked decisions
 
@@ -9,9 +9,9 @@ NanoClaw → adopt GBrain as primary memory system. Single commit on main. QMD +
 | GBrain repo clone   | `~/Developer/Repos/gbrain`                                                                                              |
 | Brain path          | `~/Vault/brain` (PGLite)                                                                                                |
 | Topology            | 1 brain, 2 sources (`main`, `coco`), federated=true                                                                     |
-| Identity files      | Manual at `~/.nanoclaw/context/{AGENTS,SOUL,USER}.md` + `~/.nanoclaw/agents/{name}/IDENTITY.md`. Not touched by gbrain. |
+| Identity files      | Manual at `~/.bearclaw/context/{AGENTS,SOUL,USER}.md` + `~/.bearclaw/agents/{name}/IDENTITY.md`. Not touched by gbrain. |
 | Eval bench + doctor | Opt in. Separate gbrain-side cron.                                                                                      |
-| Runtime             | GBrain runs as launchd-managed persistent HTTP MCP. Other tools (Claude Code, Cursor, NanoClaw) connect to same socket. |
+| Runtime             | GBrain runs as launchd-managed persistent HTTP MCP. Other tools (Claude Code, Cursor, BearClaw) connect to same socket. |
 | Branching           | Single commit on main. QMD work uncommitted, folded in.                                                                 |
 | QMD                 | Fully removed (npm uninstall + delete files + drop mcp.json entry).                                                     |
 
@@ -19,11 +19,11 @@ NanoClaw → adopt GBrain as primary memory system. Single commit on main. QMD +
 
 ```
 launchd
-├── com.nanoclaw.plist          chat orchestrator + agent runner
-├── com.nanoclaw.gbrain.plist   gbrain mcp serve (HTTP, persistent)
-└── com.nanoclaw.imsg-watcher
+├── com.bearclaw.plist          chat orchestrator + agent runner
+├── com.bearclaw.gbrain.plist   gbrain mcp serve (HTTP, persistent)
+└── com.bearclaw.imsg-watcher
 
-NanoClaw (gbrain-agnostic)
+BearClaw (gbrain-agnostic)
   src/
     index.ts, config.ts, db.ts, logger.ts, types.ts
     agent/   runner, ipc-mcp, conversation-checkpoint, system-prompt, subprocess-manager, image-gen
@@ -34,7 +34,7 @@ GBrain (~/Developer/Repos/gbrain, separate clone)
   cron: live-sync 15min, dream-cycle 02:00, doctor weekly, eval contributor opt-in
 ```
 
-NanoClaw → gbrain coupling = `~/.nanoclaw/config/mcp.json` HTTP entry only. No code import.
+BearClaw → gbrain coupling = `~/.bearclaw/config/mcp.json` HTTP entry only. No code import.
 
 ## Removals (single commit)
 
@@ -79,10 +79,10 @@ This session has:
 
 ## Persistent gbrain MCP
 
-`~/Library/LaunchAgents/com.nanoclaw.gbrain.plist`:
+`~/Library/LaunchAgents/com.bearclaw.gbrain.plist`:
 
 ```xml
-<key>Label</key><string>com.nanoclaw.gbrain</string>
+<key>Label</key><string>com.bearclaw.gbrain</string>
 <key>ProgramArguments</key>
 <array>
   <string>/Users/ruiyiz/.bun/bin/gbrain</string>
@@ -103,7 +103,7 @@ This session has:
 <key>StandardErrorPath</key><string>/Users/ruiyiz/Vault/brain/.logs/gbrain.error.log</string>
 ```
 
-`~/.nanoclaw/config/mcp.json`:
+`~/.bearclaw/config/mcp.json`:
 
 ```json
 {
@@ -136,36 +136,36 @@ If gbrain CLI lacks HTTP mode, fall back to stdio per-session (degrades persiste
    ```
 4. **Add sources**:
    ```
-   gbrain sources add main --local-path ~/.nanoclaw/var/agents/main/conversations
-   gbrain sources add coco --local-path ~/.nanoclaw/var/agents/coco/conversations
+   gbrain sources add main --local-path ~/.bearclaw/var/agents/main/conversations
+   gbrain sources add coco --local-path ~/.bearclaw/var/agents/coco/conversations
    ```
 5. **Bulk import + embed**:
    ```
-   gbrain import ~/.nanoclaw/var/agents/main/conversations --source main --no-embed
-   gbrain import ~/.nanoclaw/var/agents/coco/conversations --source coco --no-embed
+   gbrain import ~/.bearclaw/var/agents/main/conversations --source main --no-embed
+   gbrain import ~/.bearclaw/var/agents/coco/conversations --source coco --no-embed
    gbrain embed --stale
    gbrain stats
    gbrain query "Roth backdoor" --source main   # smoke test, time it
    ```
-6. **Backup nanoclaw memory state**:
+6. **Backup bearclaw memory state**:
    ```
-   tar -czf ~/.nanoclaw/var/backups/pre-gbrain-$(date +%F).tar.gz \
-     ~/.nanoclaw/var/agents/main/engrams \
-     ~/.nanoclaw/var/agents/coco/engrams \
-     ~/.nanoclaw/var/agents/main/dreams \
-     ~/.nanoclaw/var/agents/coco/dreams \
-     ~/.nanoclaw/var/pending
+   tar -czf ~/.bearclaw/var/backups/pre-gbrain-$(date +%F).tar.gz \
+     ~/.bearclaw/var/agents/main/engrams \
+     ~/.bearclaw/var/agents/coco/engrams \
+     ~/.bearclaw/var/agents/main/dreams \
+     ~/.bearclaw/var/agents/coco/dreams \
+     ~/.bearclaw/var/pending
    ```
-7. **NanoClaw code changes** (one commit). All deletions + edits per Removals section. `npm run build` clean.
+7. **BearClaw code changes** (one commit). All deletions + edits per Removals section. `npm run build` clean.
 8. **Uninstall QMD**:
    ```
    npm uninstall -g @tobilu/qmd
    rm -rf ~/.qmd                  # confirm with user before this
    ```
-9. **Stop nanoclaw**: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist`
-10. **Install gbrain launchd**: write `com.nanoclaw.gbrain.plist`. `launchctl load`. Verify `curl localhost:3457` responds (or whatever gbrain's health endpoint is).
+9. **Stop bearclaw**: `launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist`
+10. **Install gbrain launchd**: write `com.bearclaw.gbrain.plist`. `launchctl load`. Verify `curl localhost:3457` responds (or whatever gbrain's health endpoint is).
 11. **Update mcp.json**: replace qmd entry with gbrain HTTP entry.
-12. **Boot nanoclaw**: `launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist`.
+12. **Boot bearclaw**: `launchctl load ~/Library/LaunchAgents/com.bearclaw.plist`.
 13. **Smoke test via Telegram**: send "what do you know about Angela?" → agent calls `mcp__gbrain__query` → answers using brain. Time response. Target < 30s.
 14. **Removability test**: temp-remove gbrain entry from mcp.json, restart, ask same question → agent answers from 2-day window only. Re-add entry.
 15. **Schedule gbrain crons** (user crontab, gbrain-owned):
@@ -190,16 +190,16 @@ If gbrain CLI lacks HTTP mode, fall back to stdio per-session (degrades persiste
 1. **HTTP MCP support** — gates step 10. Falls back to stdio per-session.
 2. **PGLite single-writer** — gbrain's job queue handles concurrency. Verify before scheduling crons.
 3. **Brain size** — ~97 conversations × 50KB ≈ 5MB raw + embeddings ~100MB. PGLite handles.
-4. **Source-of-truth drift** — `~/.nanoclaw/var/agents/*/conversations/` is canonical. GBrain pages = derived index. Never edit pages via gbrain UI; will be overwritten on sync.
+4. **Source-of-truth drift** — `~/.bearclaw/var/agents/*/conversations/` is canonical. GBrain pages = derived index. Never edit pages via gbrain UI; will be overwritten on sync.
 5. **Single commit blast radius** — pre-flight: build green, smoke unit tests, then push.
 
 ## Rollback
 
 - `git revert` cutover commit
-- Restore `~/.nanoclaw/var/agents/*/engrams/` from pre-gbrain tarball
+- Restore `~/.bearclaw/var/agents/*/engrams/` from pre-gbrain tarball
 - Remove gbrain entry from mcp.json
-- `launchctl unload com.nanoclaw.gbrain.plist`
-- Restart nanoclaw
+- `launchctl unload com.bearclaw.gbrain.plist`
+- Restart bearclaw
 
 ## LOC estimate
 

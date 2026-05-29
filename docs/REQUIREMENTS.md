@@ -1,4 +1,4 @@
-# NanoClaw Requirements
+# BearClaw Requirements
 
 Original requirements and design decisions from the project creator.
 
@@ -8,7 +8,7 @@ Original requirements and design decisions from the project creator.
 
 This is a lightweight, secure alternative to OpenClaw (formerly ClawBot). That project became a monstrosity - 4-5 different processes running different gateways, endless configuration files, endless integrations. It's a security nightmare where agents don't run in isolated processes; there's all kinds of leaky workarounds trying to prevent them from accessing parts of the system they shouldn't. It's impossible for anyone to realistically understand the whole codebase. When you run it you're kind of just yoloing it.
 
-NanoClaw gives you the core functionality without that mess.
+BearClaw gives you the core functionality without that mess.
 
 ---
 
@@ -20,7 +20,7 @@ The entire codebase should be something you can read and understand. One Node.js
 
 ### Session Isolation
 
-Each agent runs with its own working directory (`~/.nanoclaw/agents/{folder}/`) and conversation session. The agent's `cwd` is set to the agent folder, and `settingSources: ['project']` reads project settings from there. IPC authorization ensures non-main agents can only message their own chats and manage their own handlers.
+Each agent runs with its own working directory (`~/.bearclaw/agents/{folder}/`) and conversation session. The agent's `cwd` is set to the agent folder, and `settingSources: ['project']` reads project settings from there. IPC authorization ensures non-main agents can only message their own chats and manage their own handlers.
 
 ### Built for One User
 
@@ -80,7 +80,7 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 - Use existing tools (WhatsApp connector, Claude Agent SDK, MCP servers)
 - Minimal glue code
-- File-based systems where possible (`~/.nanoclaw/context/` for shared memory, `~/.nanoclaw/agents/` for per-agent data)
+- File-based systems where possible (`~/.bearclaw/context/` for shared memory, `~/.bearclaw/agents/` for per-agent data)
 
 ---
 
@@ -95,10 +95,10 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 ### Memory System
 
-- **Shared context**: `~/.nanoclaw/context/{AGENTS,SOUL,USER,MEMORY}.md` is loaded into every agent's prompt
-- **Per-agent identity**: `~/.nanoclaw/agents/{name}/IDENTITY.md` defines the agent's role/persona
-- **Daily memory**: `~/.nanoclaw/agents/{name}/memory/YYYY-MM-DD.md` is appended via `memory_write` and indexed for `memory_search`
-- **Conversations**: archived to `~/.nanoclaw/agents/{name}/conversations/` when sessions reset
+- **Shared context**: `~/.bearclaw/context/{AGENTS,SOUL,USER,MEMORY}.md` is loaded into every agent's prompt
+- **Per-agent identity**: `~/.bearclaw/agents/{name}/IDENTITY.md` defines the agent's role/persona
+- **Daily memory**: `~/.bearclaw/agents/{name}/memory/YYYY-MM-DD.md` is appended via `memory_write` and indexed for `memory_search`
+- **Conversations**: archived to `~/.bearclaw/agents/{name}/conversations/` when sessions reset
 - Agent runs with its folder as `cwd`; the SDK reads `.claude/` project settings from there
 
 ### Session Management
@@ -128,14 +128,14 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 ### Agent Management
 
-- New agents are registered via the `register_agent` MCP tool (main only) or directly via `~/.nanoclaw/data/registered_agents.json`
-- Each agent gets a dedicated folder under `~/.nanoclaw/agents/`
+- New agents are registered via the `register_agent` MCP tool (main only) or directly via `~/.bearclaw/data/registered_agents.json`
+- Each agent gets a dedicated folder under `~/.bearclaw/agents/`
 - Agents can have per-agent configuration: `containerConfig.timeout`, `heartbeat`, `email`, `activeHours`
 
 ### Main Channel Privileges
 
 - Main channel is the admin/control surface (typically self-chat)
-- Can write to shared `~/.nanoclaw/context/MEMORY.md`
+- Can write to shared `~/.bearclaw/context/MEMORY.md`
 - Can register handlers and agents for any folder
 - Can view and manage handlers across all agents
 - Can configure per-agent settings
@@ -158,7 +158,7 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 ### Handlers + MCP Tools
 
 - Scheduler and event bus run in the host process, invoke agents for handler execution
-- The custom `nanoclaw` MCP server (in `src/agent/ipc-mcp.ts`) exposes:
+- The custom `bearclaw` MCP server (in `src/agent/ipc-mcp.ts`) exposes:
   - `send_message`, `schedule_task`, `register_handler`, `pause_handler`, `resume_handler`, `cancel_handler`, `list_handlers`
   - `emit_event`, `register_agent`, `reply_email`
   - `memory_write`, `memory_search`
@@ -208,4 +208,4 @@ These are the creator's settings, stored here for reference:
 
 ## Project Name
 
-**NanoClaw** - A reference to Clawdbot (now OpenClaw).
+**BearClaw** - A reference to Clawdbot (now OpenClaw).

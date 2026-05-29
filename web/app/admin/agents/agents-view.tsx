@@ -730,7 +730,7 @@ function DeleteAgentModal({
           checked={deleteFiles}
           onChange={(e) => setDeleteFiles(e.target.checked)}
         />
-        also delete ~/.nanoclaw/agents/{group.folder}/
+        also delete ~/.bearclaw/agents/{group.folder}/
       </label>
       {deleteFiles && (
         <label className="flex items-center gap-2 text-xs pl-5">

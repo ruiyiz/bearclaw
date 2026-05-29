@@ -1,5 +1,5 @@
 /**
- * Agent Runner for NanoClaw
+ * Agent Runner for BearClaw
  * Runs Claude Agent SDK directly in-process (no containers)
  */
 import fs from 'fs';
@@ -411,7 +411,7 @@ export async function runContainerAgent(
     },
   });
 
-  // Load user-configured MCP servers from ~/.nanoclaw/config/mcp.json
+  // Load user-configured MCP servers from ~/.bearclaw/config/mcp.json
   const userMcpServers = loadUserMcpServers();
 
   let result: string | null = null;
@@ -505,7 +505,7 @@ export async function runContainerAgent(
         settingSources: ['project'],
         includePartialMessages: !!input.onText,
         mcpServers: {
-          nanoclaw: ipcMcp,
+          bearclaw: ipcMcp,
           ...userMcpServers,
         },
         hooks: {

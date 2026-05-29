@@ -10,7 +10,7 @@ import {
   CONTEXT_DIR,
   DATA_DIR,
   MAIN_AGENT_FOLDER,
-  SKILLS_DIR as NANOCLAW_SKILLS_DIR,
+  SKILLS_DIR as BEARCLAW_SKILLS_DIR,
   agentDir,
   agentVarDir,
 } from '../config.js';
@@ -506,7 +506,7 @@ export interface SkillSource {
   builtin: boolean;
 }
 
-const SKILLS_DIR = NANOCLAW_SKILLS_DIR;
+const SKILLS_DIR = BEARCLAW_SKILLS_DIR;
 const SKILL_SOURCES_PATH = path.join(CONFIG_DIR, 'skill_sources.json');
 const SKILL_INSTALL_META_PATH = path.join(
   CONFIG_DIR,

@@ -105,8 +105,8 @@ async function runHandler(
   }
 
   const prompt = `[EVENT TRIGGERED - You are running automatically in response to an internal event.
- Use mcp__nanoclaw__send_message to communicate with the user.
- Use mcp__nanoclaw__emit_event to chain to the next step.]
+ Use mcp__bearclaw__send_message to communicate with the user.
+ Use mcp__bearclaw__emit_event to chain to the next step.]
 
 <event type="${event.type}" emitted_at="${event.emitted_at}">
 ${event.payload}

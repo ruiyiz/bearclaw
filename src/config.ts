@@ -5,7 +5,7 @@ import path from 'path';
 // Load .env before reading any env vars.
 // This MUST happen here (not in index.ts) because ESM hoists imports,
 // so config.ts is evaluated before index.ts body runs.
-dotenv.config({ path: path.join(os.homedir(), '.nanoclaw', '.env') });
+dotenv.config({ path: path.join(os.homedir(), '.bearclaw', '.env') });
 
 export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 export const TELEGRAM_ONLY = process.env.TELEGRAM_ONLY === 'true';
@@ -21,16 +21,16 @@ export const POLL_INTERVAL = 30000; // Recovery sweep interval; normal dispatch 
 export const SCHEDULER_POLL_INTERVAL = 60000;
 export const EVENT_POLL_INTERVAL = 5000;
 
-export const NANOCLAW_HOME = path.resolve(os.homedir(), '.nanoclaw');
+export const BEARCLAW_HOME = path.resolve(os.homedir(), '.bearclaw');
 
 // Persistent (tracked)
-export const CONFIG_DIR = path.resolve(NANOCLAW_HOME, 'config');
-export const CONTEXT_DIR = path.resolve(NANOCLAW_HOME, 'context');
-export const AGENTS_DIR = path.resolve(NANOCLAW_HOME, 'agents');
-export const SKILLS_DIR = path.resolve(NANOCLAW_HOME, 'skills');
+export const CONFIG_DIR = path.resolve(BEARCLAW_HOME, 'config');
+export const CONTEXT_DIR = path.resolve(BEARCLAW_HOME, 'context');
+export const AGENTS_DIR = path.resolve(BEARCLAW_HOME, 'agents');
+export const SKILLS_DIR = path.resolve(BEARCLAW_HOME, 'skills');
 
 // Runtime (gitignored)
-export const VAR_DIR = path.resolve(NANOCLAW_HOME, 'var');
+export const VAR_DIR = path.resolve(BEARCLAW_HOME, 'var');
 export const CACHE_DIR = path.resolve(VAR_DIR, 'cache');
 export const DATA_DIR = VAR_DIR; // top-level state files (sessions.json etc.) live directly under var/
 export const RUN_DIR = path.resolve(VAR_DIR, 'run');
@@ -87,16 +87,16 @@ export const WARM_START_BUDGET_BYTES = parseInt(
 );
 
 // Default model — used when no per-agent override is set in models.json.
-// Required: must be set in ~/.nanoclaw/.env (e.g. DEFAULT_MODEL=claude-sonnet-4-6).
+// Required: must be set in ~/.bearclaw/.env (e.g. DEFAULT_MODEL=claude-sonnet-4-6).
 if (!process.env.DEFAULT_MODEL) {
   throw new Error(
-    'DEFAULT_MODEL is required. Set it in ~/.nanoclaw/.env (e.g. DEFAULT_MODEL=claude-sonnet-4-6).',
+    'DEFAULT_MODEL is required. Set it in ~/.bearclaw/.env (e.g. DEFAULT_MODEL=claude-sonnet-4-6).',
   );
 }
 export const DEFAULT_MODEL = process.env.DEFAULT_MODEL;
 
 // OpenAI key — used by image_generate (gpt-image-2). Long-term memory lives
-// in gbrain (separate process); nanoclaw doesn't embed anything itself.
+// in gbrain (separate process); bearclaw doesn't embed anything itself.
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
 // Google AI (Gemini) — image generation via gemini-2.5-flash-image (nano-banana)

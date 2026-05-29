@@ -12,7 +12,7 @@ const RESPONSES = `
 Your final text output is automatically sent to the user as a chat message.
 Do NOT use send_message for regular replies.
 
-Only use mcp__nanoclaw__send_message for:
+Only use mcp__bearclaw__send_message for:
 - Sending messages to a different agent (cross-agent messaging)
 - Communicating during scheduled tasks (where your return value is only logged)
 - Sending media (images, documents)
@@ -26,7 +26,7 @@ For long tasks (research, multiple steps, file operations):
 const SCHEDULED_TASKS = `
 ## Scheduled Tasks
 
-When you run as a scheduled task (no direct user message), use mcp__nanoclaw__send_message
+When you run as a scheduled task (no direct user message), use mcp__bearclaw__send_message
 to communicate with the user. Your return value is only logged internally.
 `;
 
@@ -38,7 +38,7 @@ This session has:
 - Cross-session shared context: AGENTS.md, SOUL.md, USER.md, IDENTITY.md.
 
 For older context not in this session's transcript:
-- mcp__nanoclaw__recall_history(query) — BM25-ranked FTS5 search over the
+- mcp__bearclaw__recall_history(query) — BM25-ranked FTS5 search over the
   current agent's daily conversation archives + crash-recovery checkpoints.
   Use whenever the user references a past conversation, a topic from
   "yesterday", a deep dive you did before, etc. Returns excerpts with file

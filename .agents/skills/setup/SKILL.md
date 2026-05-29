@@ -1,9 +1,9 @@
 ---
 name: setup
-description: Run initial NanoClaw setup. Use when user wants to install dependencies, authenticate WhatsApp, register their main channel, or start the background services. Triggers on "setup", "install", "configure nanoclaw", or first-time setup requests.
+description: Run initial BearClaw setup. Use when user wants to install dependencies, authenticate WhatsApp, register their main channel, or start the background services. Triggers on "setup", "install", "configure bearclaw", or first-time setup requests.
 ---
 
-# NanoClaw Setup
+# BearClaw Setup
 
 Run all commands automatically. Only pause when user action is required (scanning QR codes).
 
@@ -104,11 +104,11 @@ Ask the user:
 >
 > Messages starting with `@TriggerWord` will be sent to Codex.
 
-If they choose something other than `Andy`, set `ASSISTANT_NAME=NewName` in `~/.nanoclaw/.env`. Then update any "Andy" references in:
+If they choose something other than `Andy`, set `ASSISTANT_NAME=NewName` in `~/.bearclaw/.env`. Then update any "Andy" references in:
 
-1. `~/.nanoclaw/context/SOUL.md` (persona)
-2. `~/.nanoclaw/agents/main/IDENTITY.md` (main agent identity)
-3. `~/.nanoclaw/data/registered_agents.json` — set `"trigger": "@NewName"` when registering agents
+1. `~/.bearclaw/context/SOUL.md` (persona)
+2. `~/.bearclaw/agents/main/IDENTITY.md` (main agent identity)
+3. `~/.bearclaw/data/registered_agents.json` — set `"trigger": "@NewName"` when registering agents
 
 Store their choice — you'll use it when creating `registered_agents.json` and when telling them how to test.
 
@@ -125,7 +125,7 @@ Before registering your main channel, you need to understand an important securi
 > - Can see messages from ALL other registered groups
 > - Can manage and delete tasks across all groups
 > - Can write to global memory that all groups can read
-> - Has read-write access to the entire NanoClaw project
+> - Has read-write access to the entire BearClaw project
 >
 > **Recommendation:** Use your personal "Message Yourself" chat or a solo WhatsApp group as your main channel. This ensures only you have admin control.
 >
@@ -139,7 +139,7 @@ Before registering your main channel, you need to understand an important securi
 
 If they choose option 3, ask a follow-up:
 
-> You've chosen a group with other people. This means everyone in that group will have admin privileges over NanoClaw.
+> You've chosen a group with other people. This means everyone in that group will have admin privileges over BearClaw.
 >
 > Are you sure you want to proceed? The other members will be able to:
 >
@@ -175,13 +175,13 @@ Then find the JID from the database:
 
 ```bash
 # For personal chat (ends with @s.whatsapp.net)
-sqlite3 ~/.nanoclaw/store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@s.whatsapp.net' ORDER BY timestamp DESC LIMIT 5"
+sqlite3 ~/.bearclaw/store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@s.whatsapp.net' ORDER BY timestamp DESC LIMIT 5"
 
 # For group (ends with @g.us)
-sqlite3 ~/.nanoclaw/store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@g.us' ORDER BY timestamp DESC LIMIT 5"
+sqlite3 ~/.bearclaw/store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@g.us' ORDER BY timestamp DESC LIMIT 5"
 ```
 
-Create/update `~/.nanoclaw/data/registered_agents.json` using the JID from above and the assistant name from step 4:
+Create/update `~/.bearclaw/data/registered_agents.json` using the JID from above and the assistant name from step 4:
 
 ```json
 {
@@ -197,7 +197,7 @@ Create/update `~/.nanoclaw/data/registered_agents.json` using the JID from above
 Ensure the agent folder exists:
 
 ```bash
-mkdir -p ~/.nanoclaw/agents/main/logs
+mkdir -p ~/.bearclaw/agents/main/logs
 ```
 
 ## 7. Configure launchd Service
@@ -209,13 +209,13 @@ NODE_PATH=$(which node)
 PROJECT_PATH=$(pwd)
 HOME_PATH=$HOME
 
-cat > ~/Library/LaunchAgents/com.nanoclaw.plist << EOF
+cat > ~/Library/LaunchAgents/com.bearclaw.plist << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.nanoclaw</string>
+    <string>com.bearclaw</string>
     <key>ProgramArguments</key>
     <array>
         <string>${NODE_PATH}</string>
@@ -235,9 +235,9 @@ cat > ~/Library/LaunchAgents/com.nanoclaw.plist << EOF
         <string>${HOME_PATH}</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>${PROJECT_PATH}/logs/nanoclaw.log</string>
+    <string>${PROJECT_PATH}/logs/bearclaw.log</string>
     <key>StandardErrorPath</key>
-    <string>${PROJECT_PATH}/logs/nanoclaw.error.log</string>
+    <string>${PROJECT_PATH}/logs/bearclaw.error.log</string>
 </dict>
 </plist>
 EOF
@@ -252,13 +252,13 @@ Build and start the service:
 ```bash
 npm run build
 mkdir -p logs
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl load ~/Library/LaunchAgents/com.bearclaw.plist
 ```
 
 Verify it's running:
 
 ```bash
-launchctl list | grep nanoclaw
+launchctl list | grep bearclaw
 ```
 
 ## 8. Test
@@ -270,34 +270,34 @@ Tell the user (using the assistant name they configured):
 Check the logs:
 
 ```bash
-tail -f logs/nanoclaw.log
+tail -f logs/bearclaw.log
 ```
 
 The user should receive a response in WhatsApp.
 
 ## Troubleshooting
 
-**Service not starting**: Check `logs/nanoclaw.error.log`
+**Service not starting**: Check `logs/bearclaw.error.log`
 
 **Agent fails**:
 
-- Check agent logs: `cat ~/.nanoclaw/agents/main/logs/agent-*.log | tail -50`
+- Check agent logs: `cat ~/.bearclaw/agents/main/logs/agent-*.log | tail -50`
 - Ensure `.env` has valid credentials
 
 **No response to messages**:
 
 - Verify the trigger pattern matches (e.g., `@AssistantName` at start of message)
-- Check that the chat JID is in `~/.nanoclaw/data/registered_agents.json`
-- Check `logs/nanoclaw.log` for errors
+- Check that the chat JID is in `~/.bearclaw/data/registered_agents.json`
+- Check `logs/bearclaw.log` for errors
 
 **WhatsApp disconnected**:
 
 - The service will show a macOS notification
 - Run `npm run auth` to re-authenticate
-- Restart the service: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
+- Restart the service: `launchctl kickstart -k gui/$(id -u)/com.bearclaw`
 
 **Unload service**:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist
 ```
