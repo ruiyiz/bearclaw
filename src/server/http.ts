@@ -922,9 +922,22 @@ add('GET', /^\/api\/user\/agent-media$/, (_req, res, url) => {
   }
   const baseDir = path.resolve(agentVarDir(folder), 'media');
   // Accept absolute paths that resolve into baseDir, or names relative to it.
-  const candidate = path.isAbsolute(rel)
+  let candidate = path.isAbsolute(rel)
     ? path.resolve(rel)
     : path.resolve(baseDir, rel);
+  // Re-anchor by basename: stored media paths embed the data-root
+  // (~/.bearclaw/var/agents/<folder>/media), which moves on rename/migration.
+  // The filename within the flat per-agent media dir is the stable key, so a
+  // stale-root or relative path still resolves. basename() strips any leading
+  // directory, so this cannot escape baseDir (path traversal stays blocked).
+  const insideBase =
+    candidate === baseDir || candidate.startsWith(baseDir + path.sep);
+  if (!insideBase || !fs.existsSync(candidate)) {
+    const byName = path.join(baseDir, path.basename(rel));
+    if (fs.existsSync(byName) && fs.statSync(byName).isFile()) {
+      candidate = byName;
+    }
+  }
   if (candidate !== baseDir && !candidate.startsWith(baseDir + path.sep)) {
     res.writeHead(403);
     res.end('forbidden');
