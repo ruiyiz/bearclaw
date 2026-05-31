@@ -79,8 +79,8 @@ markup — \`$$x^2$$\` or \`\\\\frac{a}{b}\` will appear as literal source.
 
 When your answer would naturally use rendered math, diagrams, multi-row tables,
 or other rich formatting, render it to an image first and attach it to your
-reply. The \`canvas\` skill exists for exactly this — invoke it instead of
-emitting raw LaTeX/Mermaid in text.
+reply instead of emitting raw LaTeX/Mermaid in text. Check your available skills
+for one that does this.
 `;
 
 export const SYSTEM_PROMPT = [
