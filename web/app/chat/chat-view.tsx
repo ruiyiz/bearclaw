@@ -161,6 +161,7 @@ export function ChatView() {
   const [scrolled, setScrolled] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -174,6 +175,26 @@ export function ChatView() {
   const prevMessageCountRef = useRef(0);
   const bottomSpacerRef = useRef<HTMLDivElement | null>(null);
   const skipReloadForRef = useRef<string | null>(null);
+  const lastUserAnchorRef = useRef<string | null>(null);
+
+  // Scroll a user message to just below the sticky chat-title header. Reused by
+  // the new-message handler and by the keyboard (visualViewport) re-anchor.
+  const anchorUserMessage = useCallback((id: string, animate: boolean) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const node = el.querySelector<HTMLElement>(
+      `[data-msg-id="${CSS.escape(id)}"]`,
+    );
+    if (!node) return;
+    const headerH = headerRef.current?.offsetHeight ?? 0;
+    const relTop =
+      node.getBoundingClientRect().top -
+      el.getBoundingClientRect().top +
+      el.scrollTop;
+    const target = Math.max(0, relTop - headerH - 8);
+    if (animate) animateScrollTop(el, target, 280);
+    else el.scrollTop = target;
+  }, []);
 
   const refreshSessions = useCallback(
     async (f: string): Promise<WebSession[]> => {
@@ -272,6 +293,7 @@ export function ChatView() {
 
   useEffect(() => {
     setScrolled(false);
+    lastUserAnchorRef.current = null;
     if (!folder || !sessionId) {
       setMessages([]);
       return;
@@ -384,21 +406,55 @@ export function ChatView() {
     if (messages.length > prev) {
       const last = messages[messages.length - 1];
       if (last.side === 'user') {
-        requestAnimationFrame(() => {
-          const node = el.querySelector<HTMLElement>(
-            `[data-msg-id="${CSS.escape(last.id)}"]`,
-          );
-          if (!node) return;
-          const target = Math.max(0, relativeTop(node) - 8);
-          animateScrollTop(el, target, 280);
-        });
+        lastUserAnchorRef.current = last.id;
+        requestAnimationFrame(() => anchorUserMessage(last.id, true));
       }
     }
-  }, [messages]);
+  }, [messages, anchorUserMessage]);
 
   useEffect(() => {
     textareaRef.current?.focus();
   }, [folder, sessionId]);
+
+  // iOS on-screen keyboard: the layout viewport (`h-dvh`) stays full height
+  // behind the keyboard, so to keep the composer visible the browser scrolls
+  // the whole document up — pushing the header and top messages off-screen. Our
+  // in-container auto-scroll then looks broken (correct only once the keyboard
+  // is dismissed and the document scroll resets).
+  //
+  // Fix: clamp the body to the visual-viewport height and pin the document
+  // scroll to 0. The app then fills exactly the visible band — composer rides
+  // just above the keyboard, header stays at the top — and the scroll
+  // container's clientHeight reflects the real visible area.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv || !window.matchMedia('(pointer: coarse)').matches) return;
+    let raf = 0;
+    const apply = () => {
+      document.body.style.height = `${vv.height}px`;
+      // Neutralize the document scroll iOS added to reveal the composer; with
+      // the body clamped to the visible height there's nothing left to scroll.
+      if (window.scrollY !== 0 || vv.offsetTop !== 0) window.scrollTo(0, 0);
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const el = scrollRef.current;
+        if (el && bottomSpacerRef.current) {
+          bottomSpacerRef.current.style.minHeight = `${el.clientHeight}px`;
+        }
+        const id = lastUserAnchorRef.current;
+        if (id) anchorUserMessage(id, false);
+      });
+    };
+    apply();
+    vv.addEventListener('resize', apply);
+    vv.addEventListener('scroll', apply);
+    return () => {
+      cancelAnimationFrame(raf);
+      vv.removeEventListener('resize', apply);
+      vv.removeEventListener('scroll', apply);
+      document.body.style.height = '';
+    };
+  }, [anchorUserMessage]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -454,6 +510,21 @@ export function ChatView() {
     }
     setMessages((prev) => {
       switch (evt.type) {
+        case 'user':
+          // Echo of an inbound user message. The client that sent it already
+          // rendered it optimistically (matched by clientId); skip the dup.
+          // Other clients append it, which fires the user-message auto-scroll.
+          if (evt.clientId && prev.some((m) => m.id === evt.clientId))
+            return prev;
+          return [
+            ...prev,
+            {
+              id: `ru-${evt.clientId ?? evt.ts}`,
+              side: 'user',
+              text: evt.text,
+              ts: evt.ts,
+            },
+          ];
         case 'message':
           if (prev.some((m) => m.remoteId === evt.id)) return prev;
           return [
@@ -681,14 +752,15 @@ export function ChatView() {
   async function sendText(text: string) {
     if (!folder || !text.trim()) return;
     setSending(true);
+    const clientId = `u-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setMessages((prev) => [
       ...prev,
-      { id: `u-${Date.now()}`, side: 'user', text, ts: Date.now() },
+      { id: clientId, side: 'user', text, ts: Date.now() },
     ]);
     try {
       const sid = await ensureSession(folder);
       if (!sid) throw new Error('failed to create session');
-      await api.chat(folder, sid, text);
+      await api.chat(folder, sid, text, clientId);
       void refreshSessions(folder).catch(() => {});
     } catch (e) {
       setMessages((prev) => [
@@ -1205,6 +1277,7 @@ export function ChatView() {
           {(() => {
             const pageHeader = (
               <div
+                ref={headerRef}
                 className={
                   'sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-[color:var(--bg)]/70 px-3 md:px-6 lg:px-10 py-2 flex items-center gap-2 ' +
                   (welcomeMode

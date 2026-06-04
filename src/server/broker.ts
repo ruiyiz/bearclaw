@@ -4,6 +4,13 @@ import { EventEmitter } from 'node:events';
 // Events are JSON-serializable so the HTTP layer can stream them verbatim.
 export type WebOutboundEvent =
   | { type: 'message'; jid: string; id: number; text: string; ts: number }
+  | {
+      type: 'user';
+      jid: string;
+      text: string;
+      ts: number;
+      clientId?: string;
+    }
   | { type: 'edit'; jid: string; id: number; text: string; ts: number }
   | { type: 'delete'; jid: string; id: number }
   | { type: 'typing'; jid: string; isTyping: boolean }

@@ -1,6 +1,6 @@
 {
   "name": "bearclaw",
-  "version": "2026.5.31",
+  "version": "2026.6.3",
   "description": "Personal Claude assistant. Lightweight, secure, customizable.",
   "type": "module",
   "main": "dist/index.js",

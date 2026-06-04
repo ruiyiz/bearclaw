@@ -572,6 +572,7 @@ add('POST', /^\/api\/user\/chat$/, async (req, res, _url, opts) => {
     sessionId?: string;
     text?: string;
     senderName?: string;
+    clientId?: string;
   };
   if (!body.folder || !body.text)
     return json(res, 400, { error: 'missing fields' });
@@ -580,6 +581,15 @@ add('POST', /^\/api\/user\/chat$/, async (req, res, _url, opts) => {
   const jid = `web:${body.folder}:${sessionId}`;
   opts.registerWebAgent(body.folder);
   opts.webChannel.ingest(jid, body.text, body.senderName || 'You');
+  // Echo the inbound user message so other clients viewing this session mirror
+  // it (and re-anchor scroll). The originating client dedups via clientId.
+  webBroker.publish(jid, {
+    type: 'user',
+    jid,
+    text: body.text,
+    ts: Date.now(),
+    clientId: body.clientId,
+  });
   json(res, 202, { ok: true, jid, sessionId });
 });
 

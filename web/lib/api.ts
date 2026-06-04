@@ -200,11 +200,11 @@ export const api = {
       'PATCH',
       body,
     ),
-  chat: (folder: string, sessionId: string, text: string) =>
+  chat: (folder: string, sessionId: string, text: string, clientId?: string) =>
     send<{ ok: boolean; jid: string; sessionId: string }>(
       '/api/user/chat',
       'POST',
-      { folder, sessionId, text },
+      { folder, sessionId, text, clientId },
     ),
   chatMessages: (
     folder: string,
@@ -445,6 +445,7 @@ export const api = {
 
 export type ChatStreamEvent =
   | { type: 'message'; jid: string; id: number; text: string; ts: number }
+  | { type: 'user'; jid: string; text: string; ts: number; clientId?: string }
   | { type: 'edit'; jid: string; id: number; text: string; ts: number }
   | { type: 'delete'; jid: string; id: number }
   | { type: 'typing'; jid: string; isTyping: boolean }
