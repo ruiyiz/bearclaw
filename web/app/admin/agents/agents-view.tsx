@@ -6,6 +6,7 @@ import {
   type ChannelKind,
   type RegisteredAgent,
 } from '@/lib/api';
+import { useConfirm } from '@/components/confirm-dialog';
 
 interface AgentGroup {
   folder: string;
@@ -50,6 +51,7 @@ function groupByFolder(agents: RegisteredAgent[]): AgentGroup[] {
 }
 
 export function AgentsView() {
+  const confirm = useConfirm();
   const [agents, setAgents] = useState<RegisteredAgent[]>([]);
   const [folders, setFolders] = useState<string[]>([]);
   const [channels, setChannels] = useState<AvailableChannel[]>([]);
@@ -84,7 +86,13 @@ export function AgentsView() {
   const groups = useMemo(() => groupByFolder(agents), [agents]);
 
   async function unwire(jid: string): Promise<void> {
-    if (!confirm(`Remove channel ${jid}?`)) return;
+    const ok = await confirm({
+      title: 'Remove channel',
+      message: `Remove channel ${jid}?`,
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(jid);
     try {
       await api.unwireAgent(jid);

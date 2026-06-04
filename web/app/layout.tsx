@@ -11,6 +11,7 @@ import {
   Space_Grotesk,
 } from 'next/font/google';
 import { ServiceWorkerRegister } from './sw-register';
+import { ConfirmProvider } from '@/components/confirm-dialog';
 
 const geist = Geist({
   subsets: ['latin'],
@@ -94,7 +95,7 @@ export default function RootLayout({
       <body className={`${fontVars} h-dvh flex flex-col overflow-hidden`}>
         <script dangerouslySetInnerHTML={{ __html: BODY_BOOT_SCRIPT }} />
         <ServiceWorkerRegister />
-        {children}
+        <ConfirmProvider>{children}</ConfirmProvider>
       </body>
     </html>
   );

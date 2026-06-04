@@ -10,6 +10,7 @@ import {
   type ContextListing,
   type ContextScope,
 } from '@/lib/api';
+import { useConfirm } from '@/components/confirm-dialog';
 
 type Selection = { scope: ContextScope; folder: string | null; name: string };
 
@@ -46,6 +47,7 @@ function useTheme(): 'dark' | 'light' {
 }
 
 export function ContextView() {
+  const confirm = useConfirm();
   const [listing, setListing] = useState<ContextListing | null>(null);
   const [selected, setSelected] = useState<Selection | null>(null);
   const [content, setContent] = useState<string>('');
@@ -147,12 +149,13 @@ export function ContextView() {
   async function deleteFile() {
     if (!selected) return;
     const label = selected.scope === 'shared' ? 'shared' : selected.folder;
-    if (
-      !window.confirm(
-        `Delete ${label}/${selected.name}? This cannot be undone.`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: 'Delete file',
+      message: `Delete ${label}/${selected.name}? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     setError(null);
     setStatus(null);
     try {

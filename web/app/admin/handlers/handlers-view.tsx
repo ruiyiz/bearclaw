@@ -1,8 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { api, type Handler } from '@/lib/api';
+import { useConfirm } from '@/components/confirm-dialog';
 
 export function HandlersView() {
+  const confirm = useConfirm();
   const [handlers, setHandlers] = useState<Handler[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -30,7 +32,13 @@ export function HandlersView() {
     }
   }
   async function del(id: string) {
-    if (!confirm(`Delete handler ${id}?`)) return;
+    const ok = await confirm({
+      title: 'Delete handler',
+      message: `Delete handler ${id}?`,
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(id);
     try {
       await api.deleteHandler(id);

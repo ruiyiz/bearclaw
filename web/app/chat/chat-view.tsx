@@ -15,6 +15,7 @@ import {
   type BubbleData,
 } from '@/components/chat-bubble';
 import { SettingsModal } from '@/components/settings-modal';
+import { useConfirm } from '@/components/confirm-dialog';
 import { loadKeepFocusOnSend } from '@/lib/prefs';
 
 const TEXTAREA_MAX_PX = 240;
@@ -137,6 +138,7 @@ function animateScrollTop(
 }
 
 export function ChatView() {
+  const confirm = useConfirm();
   const [agents, setAgents] = useState<UserAgent[]>([]);
   const [sessionsByFolder, setSessionsByFolder] = useState<
     Record<string, WebSession[]>
@@ -888,8 +890,12 @@ export function ChatView() {
   }
 
   async function deleteSession(f: string, id: string) {
-    if (!confirm('Archive this conversation? It will be hidden from the list.'))
-      return;
+    const ok = await confirm({
+      title: 'Archive conversation',
+      message: 'It will be hidden from the list.',
+      confirmLabel: 'Archive',
+    });
+    if (!ok) return;
     try {
       await api.deleteChatSession(f, id, false);
       const remaining = (sessionsByFolder[f] || []).filter((s) => s.id !== id);
