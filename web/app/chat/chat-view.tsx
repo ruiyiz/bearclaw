@@ -786,6 +786,10 @@ export function ChatView() {
   }
 
   async function switchTo(f: string, s: string) {
+    if (f === folder && s === sessionId) {
+      setDrawerOpen(false);
+      return;
+    }
     setScrolled(false);
     setMessages([]);
     setFolder(f);
