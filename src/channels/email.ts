@@ -502,11 +502,16 @@ export class EmailChannel implements Channel {
         );
         return;
       }
+      // Originate from the folder's +tag address (when known) so the user's
+      // reply lands back on the polled address and the conversation can
+      // continue over multiple turns. Falls back to the account default.
+      const from = poll?.address;
       await runGws([
         'gmail',
         '+reply',
         '--message-id',
         msgId,
+        ...(from ? ['--from', from] : []),
         '--body',
         html,
         '--html',
@@ -520,11 +525,15 @@ export class EmailChannel implements Channel {
       return;
     }
     const to = baseAddress(poll.address);
+    // Send from the +tag so replies to this proactive message land back on the
+    // polled address and re-enter the agent.
     await runGws([
       'gmail',
       '+send',
       '--to',
       to,
+      '--from',
+      poll.address,
       '--subject',
       firstLineSubject(text),
       '--body',
