@@ -12,6 +12,12 @@ $(BINARY): main.swift
 	swiftc $< -o $@ -lsqlite3
 	@cp $(PLIST_SRC) $(PLIST_DST)
 	codesign --force --sign - --options runtime $(APP_DIR)
+	@echo ""
+	@echo "*** Ad-hoc re-signing invalidated Full Disk Access. ***"
+	@echo "Re-grant it or launchd will exit(1) and iMessage stops receiving:"
+	@echo "  1. remove + re-add ImsgWatcher.app in the FDA pane (opening now)"
+	@echo "  2. launchctl kickstart -k gui/$$(id -u)/com.bearclaw.imsg-watcher"
+	@open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" || true
 
 install: build
 	@echo "ImsgWatcher.app installed to $(APP_DIR)"

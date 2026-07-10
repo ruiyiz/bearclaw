@@ -13,15 +13,16 @@ try? FileManager.default.createDirectory(
     withIntermediateDirectories: true
 )
 
-if !FileManager.default.fileExists(atPath: outputPath) {
-    FileManager.default.createFile(atPath: outputPath, contents: nil)
-}
-
-guard let outputFile = FileHandle(forWritingAtPath: outputPath) else {
+// Open O_APPEND so every write targets the real EOF. A plain FileHandle caches
+// its offset, so when the BearClaw channel truncates this file to cap its size,
+// the next write lands past EOF and punches a sparse NUL hole the reader can't
+// parse. O_APPEND keeps writes correct across concurrent truncation.
+let outFd = open(outputPath, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+guard outFd >= 0 else {
     fputs("ERROR: Cannot open output file\n", stderr)
     exit(1)
 }
-outputFile.seekToEndOfFile()
+let outputFile = FileHandle(fileDescriptor: outFd, closeOnDealloc: true)
 
 // MARK: - TypedStreamParser (from steipete/imsg)
 
