@@ -220,7 +220,7 @@ query({
     abortController,
     cwd: agentDir,                          // ~/.bearclaw/agents/{folder}/
     resume: input.sessionId,                // Per-agent session resumption
-    model: 'claude-opus-4-7',
+    model: 'claude-opus-4-8',
     systemPrompt: { type: 'preset', preset: 'claude_code', append: ... },
     allowedTools: [
       'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',

@@ -6,8 +6,8 @@ const MODEL_ALIASES: Record<string, string> = {
   h: 'claude-haiku-4-5',
   sonnet: 'claude-sonnet-4-6',
   s: 'claude-sonnet-4-6',
-  opus: 'claude-opus-4-7',
-  o: 'claude-opus-4-7',
+  opus: 'claude-opus-4-8',
+  o: 'claude-opus-4-8',
 };
 
 function aliasForId(id: string): string {
