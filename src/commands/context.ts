@@ -4,6 +4,7 @@ import path from 'path';
 
 import { DEFAULT_MODEL } from '../agent/runner.js';
 import { agentVarDir } from '../config.js';
+import { contextWindowForModel } from '../models.js';
 import { SlashCommand } from './types.js';
 
 interface Usage {
@@ -58,18 +59,6 @@ function findLastAssistantUsage(
   return null;
 }
 
-const MODELS_1M = [
-  'claude-opus-4-8',
-  'claude-opus-4-7',
-  'claude-opus-4-6',
-  'claude-sonnet-4-6',
-  'claude-mythos',
-];
-
-function maxTokensForModel(model: string): number {
-  return MODELS_1M.some((m) => model.startsWith(m)) ? 1_000_000 : 200_000;
-}
-
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
@@ -100,7 +89,7 @@ export const contextCommand: SlashCommand = {
     }
     const configured = getModel();
     const model = configured || data.model || DEFAULT_MODEL;
-    const max = maxTokensForModel(model);
+    const max = contextWindowForModel(model);
     const inp = data.usage.input_tokens || 0;
     const cc = data.usage.cache_creation_input_tokens || 0;
     const cr = data.usage.cache_read_input_tokens || 0;

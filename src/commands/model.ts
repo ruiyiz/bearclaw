@@ -1,26 +1,11 @@
 import { DEFAULT_MODEL } from '../agent/runner.js';
+import { aliasForId, modelAliasList, resolveModelAlias } from '../models.js';
 import { SlashCommand } from './types.js';
-
-const MODEL_ALIASES: Record<string, string> = {
-  haiku: 'claude-haiku-4-5',
-  h: 'claude-haiku-4-5',
-  sonnet: 'claude-sonnet-4-6',
-  s: 'claude-sonnet-4-6',
-  opus: 'claude-opus-4-8',
-  o: 'claude-opus-4-8',
-};
-
-function aliasForId(id: string): string {
-  if (id.includes('haiku')) return 'haiku';
-  if (id.includes('sonnet')) return 'sonnet';
-  if (id.includes('opus')) return 'opus';
-  return id;
-}
 
 export const modelCommand: SlashCommand = {
   name: 'model',
   description:
-    'Show or set the agent model. Usage: `/model` (show) or `/model haiku|sonnet|opus`',
+    'Show or set the agent model. Usage: `/model` (show) or `/model <alias>`',
   handler: async ({ args, getModel, setModel, reply }) => {
     const arg = args.trim().toLowerCase();
     if (!arg) {
@@ -32,11 +17,9 @@ export const modelCommand: SlashCommand = {
       await reply(`Current model: \`${current}\` (${suffix})`);
       return;
     }
-    const target = MODEL_ALIASES[arg];
+    const target = resolveModelAlias(arg);
     if (!target) {
-      await reply(
-        `Unknown model \`${arg}\`. Use \`haiku\`, \`sonnet\`, or \`opus\`.`,
-      );
+      await reply(`Unknown model \`${arg}\`. Use ${modelAliasList()}.`);
       return;
     }
     setModel(target);

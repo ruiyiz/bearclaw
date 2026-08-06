@@ -1,0 +1,124 @@
+import fs from 'fs';
+import path from 'path';
+
+import { CONFIG_DIR } from './config.js';
+
+// Model catalog — the single source of truth for selectable models, their
+// aliases, and context-window sizes. Ships with a built-in lineup and can be
+// overridden by ~/.bearclaw/config/model-catalog.json (same shape as
+// DEFAULT_CATALOG below). Missing or malformed file falls back to the default.
+
+export interface ModelSpec {
+  alias: string; // canonical alias, e.g. 'opus'
+  short?: string; // short alias, e.g. 'o'
+  id: string; // full model id
+  label: string; // human-readable name
+  contextWindow: number; // max input tokens
+}
+
+interface ModelCatalog {
+  models: ModelSpec[];
+  // Prefixes of model ids with a 1M-token context window. Used to resolve the
+  // context window of a model an agent is pinned to but that isn't in the
+  // selectable list above (legacy or preview ids). Anything not matched here
+  // and not in `models` defaults to 200K.
+  largeContextPrefixes: string[];
+}
+
+const DEFAULT_CATALOG: ModelCatalog = {
+  models: [
+    {
+      alias: 'fable',
+      short: 'f',
+      id: 'claude-fable-5',
+      label: 'Claude Fable 5',
+      contextWindow: 1_000_000,
+    },
+    {
+      alias: 'opus',
+      short: 'o',
+      id: 'claude-opus-4-8',
+      label: 'Claude Opus 4.8',
+      contextWindow: 1_000_000,
+    },
+    {
+      alias: 'sonnet',
+      short: 's',
+      id: 'claude-sonnet-5',
+      label: 'Claude Sonnet 5',
+      contextWindow: 1_000_000,
+    },
+    {
+      alias: 'haiku',
+      short: 'h',
+      id: 'claude-haiku-4-5',
+      label: 'Claude Haiku 4.5',
+      contextWindow: 200_000,
+    },
+  ],
+  largeContextPrefixes: [
+    'claude-fable-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'claude-mythos',
+  ],
+};
+
+function loadCatalog(): ModelCatalog {
+  const file = path.join(CONFIG_DIR, 'model-catalog.json');
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(file, 'utf8'),
+    ) as Partial<ModelCatalog>;
+    if (Array.isArray(parsed.models) && parsed.models.length > 0) {
+      return {
+        models: parsed.models,
+        largeContextPrefixes:
+          parsed.largeContextPrefixes ?? DEFAULT_CATALOG.largeContextPrefixes,
+      };
+    }
+  } catch {
+    // No file or malformed — use the built-in lineup.
+  }
+  return DEFAULT_CATALOG;
+}
+
+const CATALOG = loadCatalog();
+
+export const MODELS: ModelSpec[] = CATALOG.models;
+
+const ALIAS_TO_ID = new Map<string, string>();
+for (const m of MODELS) {
+  ALIAS_TO_ID.set(m.alias.toLowerCase(), m.id);
+  if (m.short) ALIAS_TO_ID.set(m.short.toLowerCase(), m.id);
+}
+
+// Resolve a user-supplied alias (canonical or short) to a full model id.
+export function resolveModelAlias(arg: string): string | undefined {
+  return ALIAS_TO_ID.get(arg.trim().toLowerCase());
+}
+
+// Map a full model id back to its friendly alias for display.
+export function aliasForId(id: string): string {
+  const exact = MODELS.find((m) => id.startsWith(m.id));
+  if (exact) return exact.alias;
+  const family = MODELS.find((m) => id.includes(m.alias));
+  return family ? family.alias : id;
+}
+
+// Context window (max input tokens) for a model id.
+export function contextWindowForModel(id: string): number {
+  const spec = MODELS.find((m) => id.startsWith(m.id));
+  if (spec) return spec.contextWindow;
+  return CATALOG.largeContextPrefixes.some((p) => id.startsWith(p))
+    ? 1_000_000
+    : 200_000;
+}
+
+// Comma-separated backtick-quoted alias list for help text.
+export function modelAliasList(): string {
+  return MODELS.map((m) => `\`${m.alias}\``).join(', ');
+}
