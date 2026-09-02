@@ -45,7 +45,11 @@ async function transcribeWithElevenLabs(
   const t0 = Date.now();
   try {
     const form = new FormData();
-    form.append('file', new Blob([buffer], { type: 'audio/ogg' }), 'audio.ogg');
+    form.append(
+      'file',
+      new Blob([new Uint8Array(buffer)], { type: 'audio/ogg' }),
+      'audio.ogg',
+    );
     form.append('model_id', ELEVENLABS_STT_MODEL);
 
     const response = await fetch(
