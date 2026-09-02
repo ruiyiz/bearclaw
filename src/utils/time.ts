@@ -10,7 +10,9 @@ import { HeartbeatConfig } from '../types.js';
 export function intervalToCron(interval: string): string {
   const match = interval.match(/^(\d+)(m|h|d)$/);
   if (!match) {
-    throw new Error(`Invalid interval format: "${interval}". Use e.g. "30m", "1h", "6h", "1d".`);
+    throw new Error(
+      `Invalid interval format: "${interval}". Use e.g. "30m", "1h", "6h", "1d".`,
+    );
   }
 
   const value = parseInt(match[1], 10);
@@ -18,13 +20,16 @@ export function intervalToCron(interval: string): string {
 
   switch (unit) {
     case 'm':
-      if (value < 1 || value > 59) throw new Error(`Invalid minute interval: ${value}`);
+      if (value < 1 || value > 59)
+        throw new Error(`Invalid minute interval: ${value}`);
       return `*/${value} * * * *`;
     case 'h':
-      if (value < 1 || value > 23) throw new Error(`Invalid hour interval: ${value}`);
+      if (value < 1 || value > 23)
+        throw new Error(`Invalid hour interval: ${value}`);
       return `0 */${value} * * *`;
     case 'd':
-      if (value < 1 || value > 28) throw new Error(`Invalid day interval: ${value}`);
+      if (value < 1 || value > 28)
+        throw new Error(`Invalid day interval: ${value}`);
       return `0 9 */${value} * *`; // Run at 9 AM
     default:
       throw new Error(`Unknown interval unit: ${unit}`);
@@ -35,9 +40,13 @@ export function intervalToCron(interval: string): string {
  * Check if the current time falls within a quiet period.
  * Handles overnight ranges like { start: "23:00", end: "07:00" }.
  */
-export function isInQuietPeriod(quiet: NonNullable<HeartbeatConfig['quiet']>): boolean {
+export function isInQuietPeriod(
+  quiet: NonNullable<HeartbeatConfig['quiet']>,
+): boolean {
   const now = new Date();
-  const localTime = new Date(now.toLocaleString('en-US', { timeZone: TIMEZONE }));
+  const localTime = new Date(
+    now.toLocaleString('en-US', { timeZone: TIMEZONE }),
+  );
   const currentMinutes = localTime.getHours() * 60 + localTime.getMinutes();
 
   const [startH, startM] = quiet.start.split(':').map(Number);
@@ -66,7 +75,9 @@ export function isInActiveWindow(cron: string | string[]): boolean {
 
 function isInActiveWindowSingle(cron: string): boolean {
   const now = new Date();
-  const localTime = new Date(now.toLocaleString('en-US', { timeZone: TIMEZONE }));
+  const localTime = new Date(
+    now.toLocaleString('en-US', { timeZone: TIMEZONE }),
+  );
 
   const minute = localTime.getMinutes();
   const hour = localTime.getHours();
@@ -78,7 +89,8 @@ function isInActiveWindowSingle(cron: string): boolean {
   const expr = CronExpressionParser.parse(cron, { tz: TIMEZONE });
   const fields = expr.fields;
 
-  const inSet = (value: number, set: (string | number)[]): boolean => set.includes(value);
+  const inSet = (value: number, set: (string | number)[]): boolean =>
+    set.includes(value);
 
   const mVals = fields.minute.serialize().values;
   const hVals = fields.hour.serialize().values;
@@ -100,8 +112,10 @@ function isInActiveWindowSingle(cron: string): boolean {
  */
 export function getNextActiveTime(cron: string | string[]): Date {
   const exprs = Array.isArray(cron) ? cron : [cron];
-  const times = exprs.map(c => CronExpressionParser.parse(c, { tz: TIMEZONE }).next().toDate());
-  return times.reduce((earliest, t) => t < earliest ? t : earliest);
+  const times = exprs.map((c) =>
+    CronExpressionParser.parse(c, { tz: TIMEZONE }).next().toDate(),
+  );
+  return times.reduce((earliest, t) => (t < earliest ? t : earliest));
 }
 
 /**
@@ -109,10 +123,18 @@ export function getNextActiveTime(cron: string | string[]): Date {
  */
 export function formatNextActiveTime(date: Date): string {
   const now = new Date();
-  const localNow = new Date(now.toLocaleString('en-US', { timeZone: TIMEZONE }));
-  const localDate = new Date(date.toLocaleString('en-US', { timeZone: TIMEZONE }));
+  const localNow = new Date(
+    now.toLocaleString('en-US', { timeZone: TIMEZONE }),
+  );
+  const localDate = new Date(
+    date.toLocaleString('en-US', { timeZone: TIMEZONE }),
+  );
 
-  const timeStr = localDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  const timeStr = localDate.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
 
   const nowDay = localNow.toDateString();
   const nextDay = localDate.toDateString();

@@ -15,7 +15,9 @@ import { parseDefinition, type WorkflowDefinition } from './schema.js';
 import { makeFakeDeps, type FakeDeps } from './testing.js';
 import {
   TriggerError,
+  checkMissedRuns,
   createTrigger,
+  fireTrigger,
   deleteTrigger,
   dispatchEvents,
   findWebhookTrigger,
@@ -312,4 +314,104 @@ test('a run records the trigger that fired it', async () => {
   const run = getRun(listRuns('attributed')[0].id)!;
   assert.equal(run.trigger_id, trigger.id);
   assert.equal(run.context.__trigger_type as string, 'at');
+});
+
+test('a deleted workflow takes its triggers with it', async () => {
+  const def = register({
+    slug: 'doomed',
+    triggers: [{ id: 'cron', type: 'cron', cron: '0 * * * *' }],
+  });
+  syncFileTriggers(def);
+  createTrigger({ slug: 'doomed', type: 'manual' });
+  assert.equal(listTriggerRows('doomed').length, 2);
+
+  const { deleteWorkflowRow, deleteTriggersForSlug } = await import('./db.js');
+  deleteTriggersForSlug('doomed');
+  deleteWorkflowRow('doomed');
+  assert.equal(listTriggerRows('doomed').length, 0);
+});
+
+test('an orphaned trigger disables itself instead of breaking the scan', async () => {
+  register({ slug: 'orphan' });
+  const trigger = createTrigger({
+    slug: 'orphan',
+    type: 'at',
+    config: { at: '2026-09-02T02:05:00.000Z' },
+  });
+  const { deleteWorkflowRow } = await import('./db.js');
+  deleteWorkflowRow('orphan');
+
+  fake.clock = new Date('2026-09-02T02:10:00.000Z');
+  // Must not throw, and must not leave the row armed.
+  await scanDueTriggers();
+  const after = getTriggerRow(trigger.id)!;
+  assert.equal(after.enabled, false);
+  assert.equal(after.next_run_at, null);
+});
+
+test('one bad trigger does not stop the others in the same scan', async () => {
+  register({ slug: 'healthy' });
+  const good = createTrigger({
+    slug: 'healthy',
+    type: 'at',
+    config: { at: '2026-09-02T02:05:00.000Z' },
+  });
+  const bad = createTrigger({
+    slug: 'healthy',
+    type: 'at',
+    config: { at: '2026-09-02T02:04:00.000Z' },
+  });
+  const { updateTriggerRow } = await import('./db.js');
+  // A row the scan cannot make sense of.
+  updateTriggerRow(bad.id, { config: {} as Record<string, unknown> });
+
+  fake.clock = new Date('2026-09-02T02:10:00.000Z');
+  await scanDueTriggers();
+  assert.equal(getTriggerRow(good.id)!.enabled, false);
+  assert.ok(listRuns('healthy').length >= 1);
+});
+
+test('on_missed alerts a stuck run but not one waiting on a person', async () => {
+  const withPolicy = (slug: string, node: Record<string, unknown>) =>
+    register({
+      slug,
+      policies: {
+        alerts: {
+          on_failure: 'owner',
+          on_missed: { trigger: 'schedule', expected_within: '1h' },
+        },
+      },
+      triggers: [{ id: 'schedule', type: 'cron', cron: '0 * * * *' }],
+      nodes: { step: node },
+    });
+
+  // A run parked on a human step: no alert, however long it sits.
+  const waiting = withPolicy('waits-forever', {
+    type: 'human',
+    kind: 'input',
+    prompt: 'reply by number',
+    notify: false,
+    expires: '7d',
+  });
+  syncFileTriggers(waiting);
+  await fireTrigger(getTriggerRow('waits-forever:schedule')!);
+
+  // Run rows carry real wall-clock timestamps, so move the fake clock
+  // relative to now rather than to a fictional date.
+  const wellPast = () => new Date(Date.now() + 3 * 3_600_000);
+  fake.clock = wellPast();
+  await checkMissedRuns();
+  assert.equal(fake.sends.length, 0);
+
+  // A run still going after the window: alert.
+  const stuck = withPolicy('stuck', { type: 'transform', expr: '1' });
+  syncFileTriggers(stuck);
+  await fireTrigger(getTriggerRow('stuck:schedule')!);
+  const { updateRun } = await import('./db.js');
+  updateRun(listRuns('stuck')[0].id, { status: 'running' });
+
+  fake.clock = wellPast();
+  await checkMissedRuns();
+  assert.equal(fake.sends.length, 1);
+  assert.match(fake.sends[0].text, /still running/);
 });

@@ -678,6 +678,7 @@ async function notifyWait(
 ): Promise<void> {
   if (spec.kind !== 'human') return;
   const node = run.definition.nodes[nodeId];
+  if (node && node.type === 'human' && node.notify === false) return;
   const folder =
     (node && 'agent' in node ? node.agent : undefined) ?? run.definition.owner;
   const hint =

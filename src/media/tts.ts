@@ -23,7 +23,10 @@ export async function generateSpeech(text: string): Promise<Buffer | null> {
 
     if (!response.ok) {
       const errText = await response.text().catch(() => '');
-      logger.error({ status: response.status, errText }, 'ElevenLabs TTS failed');
+      logger.error(
+        { status: response.status, errText },
+        'ElevenLabs TTS failed',
+      );
       return null;
     }
 

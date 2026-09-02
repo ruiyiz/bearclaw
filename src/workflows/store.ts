@@ -5,6 +5,7 @@ import path from 'node:path';
 import { WORKFLOWS_DIR } from '../config.js';
 import { logger } from '../logger.js';
 import {
+  deleteTriggersForSlug,
   deleteWorkflowRow,
   getWorkflowRow,
   listWorkflowRows,
@@ -80,6 +81,7 @@ export function syncWorkflowFiles(): LoadReport {
 
   for (const row of listWorkflowRows()) {
     if (!row.file_path || seen.has(row.slug)) continue;
+    deleteTriggersForSlug(row.slug);
     deleteWorkflowRow(row.slug);
     report.removed.push(row.slug);
   }
@@ -117,6 +119,7 @@ export function deleteWorkflow(slug: string): boolean {
   if (!row) return false;
   if (row.file_path && fs.existsSync(row.file_path))
     fs.unlinkSync(row.file_path);
+  deleteTriggersForSlug(slug);
   deleteWorkflowRow(slug);
   return true;
 }

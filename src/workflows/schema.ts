@@ -100,6 +100,10 @@ const humanNode = z.object({
   options: z.array(z.string()).optional(),
   fields: z.array(humanField).optional(),
   expires: z.string().default('3d'),
+  // Set false when the workflow has already told the user how to answer (a
+  // digest email that ends with "reply with ..."), so opening the wait does
+  // not send a second message.
+  notify: z.boolean().default(true),
   on_timeout: z
     .union([
       z.enum(['approve', 'reject', 'skip', 'fail']),

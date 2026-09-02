@@ -232,7 +232,15 @@ export async function fireTrigger(
   runKey?: string,
 ): Promise<StartRunResult> {
   const workflow = getWorkflowRow(trigger.slug);
-  if (!workflow) throw new TriggerError(`unknown workflow: ${trigger.slug}`);
+  if (!workflow) {
+    // Orphaned row: disable it rather than throwing on every scan.
+    updateTriggerRow(trigger.id, { enabled: false, next_run_at: null });
+    logger.warn(
+      { trigger: trigger.id, slug: trigger.slug },
+      'workflow: trigger disabled, its workflow is gone',
+    );
+    return { runId: null, status: 'skipped' };
+  }
   if (!workflow.enabled) return { runId: null, status: 'skipped' };
 
   const mapped: Record<string, unknown> = { ...trigger.args };
@@ -265,48 +273,59 @@ export async function fireTrigger(
 export async function scanDueTriggers(): Promise<void> {
   const now = nowDate();
   for (const trigger of listDueTriggerRows(now.toISOString())) {
-    if (trigger.type === 'at') {
-      await fireTrigger(trigger);
-      updateTriggerRow(trigger.id, { enabled: false, next_run_at: null });
+    try {
+      await fireDueTrigger(trigger, now);
+    } catch (err) {
+      logger.error(
+        { err, trigger: trigger.id },
+        'workflow: trigger scan failed for one row',
+      );
+    }
+  }
+}
+
+async function fireDueTrigger(trigger: TriggerRow, now: Date): Promise<void> {
+  if (trigger.type === 'at') {
+    await fireTrigger(trigger);
+    updateTriggerRow(trigger.id, { enabled: false, next_run_at: null });
+    return;
+  }
+
+  const config = trigger.config as {
+    cron: string;
+    timezone?: string;
+    quiet?: { start: string; end: string };
+    catchup?: 'skip' | 'once' | 'all';
+  };
+  const timezone = config.timezone ?? TIMEZONE;
+  const slots: string[] = [];
+  let cursor = trigger.next_run_at!;
+  while (cursor <= now.toISOString() && slots.length < MAX_CATCHUP_SLOTS) {
+    slots.push(cursor);
+    cursor = nextCronRun(config.cron, new Date(cursor), timezone);
+  }
+
+  const catchup = config.catchup ?? 'skip';
+  const toRun =
+    catchup === 'all'
+      ? slots
+      : catchup === 'once'
+        ? slots.slice(-1)
+        : slots.slice(-1);
+  const skipped = catchup === 'skip' && slots.length > 1;
+
+  for (const slot of skipped ? [] : toRun) {
+    if (inQuietWindow(config.quiet, new Date(slot), timezone)) {
+      logger.info(
+        { trigger: trigger.id, slot },
+        'workflow: cron slot inside quiet window, skipped',
+      );
       continue;
     }
-
-    const config = trigger.config as {
-      cron: string;
-      timezone?: string;
-      quiet?: { start: string; end: string };
-      catchup?: 'skip' | 'once' | 'all';
-    };
-    const timezone = config.timezone ?? TIMEZONE;
-    const slots: string[] = [];
-    let cursor = trigger.next_run_at!;
-    while (cursor <= now.toISOString() && slots.length < MAX_CATCHUP_SLOTS) {
-      slots.push(cursor);
-      cursor = nextCronRun(config.cron, new Date(cursor), timezone);
-    }
-
-    const catchup = config.catchup ?? 'skip';
-    const toRun =
-      catchup === 'all'
-        ? slots
-        : catchup === 'once'
-          ? slots.slice(-1)
-          : slots.slice(-1);
-    const skipped = catchup === 'skip' && slots.length > 1;
-
-    for (const slot of skipped ? [] : toRun) {
-      if (inQuietWindow(config.quiet, new Date(slot), timezone)) {
-        logger.info(
-          { trigger: trigger.id, slot },
-          'workflow: cron slot inside quiet window, skipped',
-        );
-        continue;
-      }
-      await fireTrigger(trigger, { fired_at: slot }, `${trigger.id}@${slot}`);
-    }
-
-    updateTriggerRow(trigger.id, { next_run_at: cursor });
+    await fireTrigger(trigger, { fired_at: slot }, `${trigger.id}@${slot}`);
   }
+
+  updateTriggerRow(trigger.id, { next_run_at: cursor });
 }
 
 // Event triggers replace register_handler: one scan over unprocessed events,
@@ -358,6 +377,9 @@ export async function checkMissedRuns(): Promise<void> {
 
     const run = getRun(trigger.last_run_id);
     if (!run || run.status === 'succeeded') continue;
+    // A run parked on a human step has plainly happened; its wait carries its
+    // own expiry. on_missed is for slots that never got through.
+    if (run.status === 'waiting') continue;
 
     let windowMs: number;
     try {

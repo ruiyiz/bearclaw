@@ -101,9 +101,14 @@ test('deleteWorkflow removes both the file and the row', () => {
 
 test('the watcher reloads on its own, with or without a callback', async () => {
   const stop = watchWorkflowFiles();
-  writeRaw('watched.json', { ...DEF, slug: 'watched', name: 'Watched' });
-  // Debounced at 200ms inside the watcher; wait well clear of it.
-  await new Promise((r) => setTimeout(r, 1200));
-  stop();
-  assert.equal(getWorkflowRow('watched')?.name, 'Watched');
+  try {
+    writeRaw('watched.json', { ...DEF, slug: 'watched', name: 'Watched' });
+    // Debounced inside the watcher; poll rather than guess a sleep.
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline && !getWorkflowRow('watched'))
+      await new Promise((r) => setTimeout(r, 50));
+    assert.equal(getWorkflowRow('watched')?.name, 'Watched');
+  } finally {
+    stop();
+  }
 });

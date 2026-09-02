@@ -666,3 +666,30 @@ test('a failing sub-workflow takes the parent error port', async () => {
   assert.equal(requireRun(runId).status, 'succeeded');
   assert.equal(outputOf(runId!, 'recover'), 'recovered');
 });
+
+test('notify:false opens the wait without sending a second message', async () => {
+  const definition = def({
+    slug: 'silent-ask',
+    nodes: {
+      digest: { type: 'send', text: 'digest — reply with save 1 4' },
+      ask: {
+        type: 'human',
+        kind: 'input',
+        prompt: 'Reply by number',
+        notify: false,
+        expires: '7d',
+      },
+    },
+    edges: [{ from: 'digest', to: 'ask' }],
+  });
+
+  const { runId } = await startRun({ slug: 'silent-ask', definition });
+  assert.equal(requireRun(runId).status, 'waiting');
+  // Only the digest went out; opening the wait added nothing.
+  assert.equal(fake.sends.length, 1);
+  assert.match(fake.sends[0].text, /^digest/);
+  assert.equal(
+    listOpenWaits('human').filter((w) => w.run_id === runId).length,
+    1,
+  );
+});

@@ -775,6 +775,15 @@ export function deleteTriggerRow(id: string): void {
   getDb().prepare(`DELETE FROM workflow_triggers WHERE id = ?`).run(id);
 }
 
+// A workflow that goes away takes its triggers with it. Left behind, they
+// would keep firing at a slug the loader no longer knows.
+export function deleteTriggersForSlug(slug: string): number {
+  const res = getDb()
+    .prepare(`DELETE FROM workflow_triggers WHERE slug = ?`)
+    .run(slug);
+  return res.changes;
+}
+
 export function deleteFileTriggersExcept(
   slug: string,
   keep: string[],
