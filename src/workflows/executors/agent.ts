@@ -62,7 +62,12 @@ export const agentExecutor: Executor = async (ctx) => {
     // A schema'd node that comes back without structured output is a failure,
     // not a success with prose: downstream nodes index into typed fields.
     if (node.output_schema !== undefined && res.structured === undefined)
-      return fail('agent returned no structured output', true);
+      return fail(
+        `agent returned no structured output${
+          res.text ? `: ${res.text.slice(0, 400)}` : ''
+        }`,
+        true,
+      );
 
     return {
       kind: 'done',

@@ -390,7 +390,7 @@ test('an agent node hands typed output to the next node', async () => {
   fake.agentImpl = () => ({
     status: 'success',
     text: null,
-    structured: [{ id: 1, summary: 'first' }],
+    structured: { summaries: [{ id: 1, summary: 'first' }] },
     sessionId: 'sess_1',
   });
   const definition = def({
@@ -400,9 +400,16 @@ test('an agent node hands typed output to the next node', async () => {
         type: 'agent',
         prompt: 'Summarize {{inputs.name}}',
         session: 'run',
-        output_schema: { type: 'array' },
+        output_schema: {
+          type: 'object',
+          properties: { summaries: { type: 'array' } },
+          required: ['summaries'],
+        },
       },
-      first: { type: 'transform', expr: 'nodes.summarize.output[0].summary' },
+      first: {
+        type: 'transform',
+        expr: 'nodes.summarize.output.summaries[0].summary',
+      },
     },
     edges: [{ from: 'summarize', to: 'first' }],
   });
@@ -435,7 +442,11 @@ test('a schema node that returns prose is a failure, not a success', async () =>
       summarize: {
         type: 'agent',
         prompt: 'summarize',
-        output_schema: { type: 'array' },
+        output_schema: {
+          type: 'object',
+          properties: { summaries: { type: 'array' } },
+          required: ['summaries'],
+        },
       },
     },
   });

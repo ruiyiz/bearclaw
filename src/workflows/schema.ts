@@ -341,6 +341,31 @@ export function checkGraph(def: WorkflowDefinition): string[] {
       !node.options?.length
     )
       issues.push(`human node "${id}" of kind choice needs options`);
+    if (node.type === 'agent' && node.output_schema !== undefined) {
+      // The SDK exposes the schema as a tool's input_schema, and the API
+      // requires that to be an object. A bare array 400s at request time.
+      const schema = node.output_schema as { type?: unknown } | null;
+      if (!schema || typeof schema !== 'object' || schema.type !== 'object')
+        issues.push(
+          `agent node "${id}" needs an output_schema of type "object" (wrap an array in a named property)`,
+        );
+    }
+    if (node.type === 'map') {
+      // The mapped node is a full node definition, minus the ones that park.
+      const inner = nodeSchema.safeParse(node.node);
+      if (!inner.success)
+        issues.push(
+          `map node "${id}" has an invalid inner node: ${inner.error.issues
+            .map((i) => i.message)
+            .join('; ')}`,
+        );
+      else if (
+        ['human', 'wait_event', 'delay', 'map'].includes(inner.data.type)
+      )
+        issues.push(
+          `map node "${id}" cannot map a ${inner.data.type} node; it would park per item`,
+        );
+    }
   }
   return issues;
 }
