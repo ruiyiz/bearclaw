@@ -1,0 +1,193 @@
+{
+  "$schema": "bearclaw://workflow/v1",
+  "name": "Feed triage",
+  "slug": "feed-triage",
+  "owner": "main",
+  "description": "Nightly RSS digest by email. Deterministic everywhere except the summaries: the send guard is an edge, marking items read is structurally after a confirmed send, and the watchdog is the on_missed policy.",
+  "inputs": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "default": 15
+      },
+      "to": {
+        "type": "string",
+        "default": "ruiyizhang@gmail.com"
+      },
+      "from": {
+        "type": "string",
+        "default": "ruiyizhang+main@gmail.com"
+      }
+    }
+  },
+  "triggers": [
+    {
+      "id": "schedule",
+      "type": "cron",
+      "cron": "0 20 * * *",
+      "timezone": "America/New_York"
+    },
+    {
+      "id": "manual",
+      "type": "manual"
+    }
+  ],
+  "policies": {
+    "concurrency": "skip",
+    "alerts": {
+      "on_failure": "owner",
+      "on_missed": {
+        "trigger": "schedule",
+        "expected_within": "2h"
+      }
+    }
+  },
+  "nodes": {
+    "count": {
+      "type": "shell",
+      "cmd": "/Users/ruiyiz/.local/bin/feeds count --exclude-category aggregators",
+      "parse": "json"
+    },
+    "unread": {
+      "type": "shell",
+      "cmd": "/Users/ruiyiz/.local/bin/feeds unread --json --newest --per-feed 3 --limit {{inputs.limit}} --exclude-category aggregators",
+      "parse": "json"
+    },
+    "any": {
+      "type": "condition",
+      "expr": "nodes.unread.output.length > 0"
+    },
+    "prep": {
+      "type": "transform",
+      "expr": "(() => {\n  const cap = 3000;\n  return nodes.unread.output.map((it) => ({\n    id: it.id,\n    title: it.title,\n    url: it.url,\n    feed: it.feed && it.feed.title,\n    category: it.feed && it.feed.category && it.feed.category.title,\n    published_at: it.published_at,\n    content: (it.content || '').slice(0, cap),\n    truncated: (it.content || '').length > cap,\n  }));\n})()"
+    },
+    "summarize": {
+      "type": "agent",
+      "model": "sonnet",
+      "prompt": "Summarize each feed item below in 1-2 sentences, written from its `content` field: what it is about and the key takeaway. Do not invent facts that are not in the content, and do not rank, reorder or drop items.\n\nIf an item has `truncated: true` and its content is too thin to summarize honestly, run `/Users/ruiyiz/.local/bin/feeds content <id> --fetch` to read the full article first.\n\nReturn one entry per item under `summaries`, keyed by the item's `id`.\n\n{{json nodes.prep.output}}",
+      "timeout": "10m",
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "summaries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "number"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "required": ["id", "summary"]
+            }
+          }
+        },
+        "required": ["summaries"]
+      }
+    },
+    "compose": {
+      "type": "transform",
+      "expr": "(() => {\n  const items = nodes.unread.output;\n  const total = nodes.count.output;\n  const summaries = {};\n  for (const s of nodes.summarize.output.summaries) summaries[s.id] = s.summary;\n  const emoji = {\n    finance: '\\u{1F4B0}',\n    investing: '\\u{1F4C8}',\n    quant: '\\u{1F4C8}',\n    economics: '\\u{1F9EE}',\n    'data science': '\\u{1F4CA}',\n    kids: '\\u{1F9D2}',\n  };\n  const esc = (t) =>\n    String(t == null ? '' : t)\n      .replace(/&/g, '&amp;')\n      .replace(/</g, '&lt;')\n      .replace(/>/g, '&gt;')\n      .replace(/\"/g, '&quot;');\n  const order = [];\n  const byCategory = {};\n  for (const it of items) {\n    const cat =\n      (it.feed && it.feed.category && it.feed.category.title) || 'misc';\n    if (!byCategory[cat]) { byCategory[cat] = []; order.push(cat); }\n    byCategory[cat].push(it);\n  }\n  const header =\n    '\\u{1F4F0} Feeds \\u2014 ' + items.length + ' shown (' + total + ' unread)';\n  const parts = ['<b>' + header + '</b>'];\n  const batch = [];\n  let n = 0;\n  for (const cat of order) {\n    parts.push(\n      '<h3>' + (emoji[cat.toLowerCase()] || '\\u{1F9E9}') + ' ' + esc(cat) + '</h3>',\n    );\n    parts.push('<ol start=\"' + (n + 1) + '\">');\n    for (const it of byCategory[cat]) {\n      n += 1;\n      batch.push({\n        n: n,\n        id: it.id,\n        title: it.title,\n        url: it.url,\n        feed: it.feed && it.feed.title,\n        category: cat,\n      });\n      parts.push(\n        '<li><a href=\"' + esc(it.url) + '\">' + esc(it.title) + '</a> \\u2014 <i>' +\n          esc(it.feed && it.feed.title) + '</i><br>' +\n          esc(summaries[it.id] || '') + '</li>',\n      );\n    }\n    parts.push('</ol>');\n  }\n  parts.push(\n    '<p>Reply with: <b>save 1 4</b> \\u00b7 <b>summarize 7</b> \\u00b7 <b>dismiss 2</b>. Reply <b>next</b> for another batch.</p>',\n  );\n  return {\n    subject: header,\n    html: parts.join('\\n'),\n    batch: { created_at: run.started_at, items: batch },\n  };\n})()"
+    },
+    "send": {
+      "type": "shell",
+      "cmd": "/Users/ruiyiz/.bun/bin/gws gmail +send --to {{q inputs.to}} --from {{q inputs.from}} --subject {{q nodes.compose.output.subject}} --body {{q nodes.compose.output.html}} --html",
+      "timeout": "2m",
+      "retry": {
+        "max": 2,
+        "backoff": "30s"
+      }
+    },
+    "persist": {
+      "type": "shell",
+      "cmd": "cat > /Users/ruiyiz/.bearclaw/var/agents/main/feed-batch.json",
+      "stdin": "{{nodes.compose.output.batch}}"
+    },
+    "mark_read": {
+      "type": "shell",
+      "cmd": "/Users/ruiyiz/.local/bin/feeds read {{join nodes.unread.output.*.id ' '}}"
+    },
+    "ask": {
+      "type": "human",
+      "kind": "input",
+      "prompt": "Reply to the digest email with: save 1 4 / summarize 7 / dismiss 2 / next",
+      "to": ["email:main"],
+      "expires": "7d",
+      "notify": false
+    },
+    "caught_up": {
+      "type": "shell",
+      "cmd": "/Users/ruiyiz/.bun/bin/gws gmail +send --to {{q inputs.to}} --from {{q inputs.from}} --subject 'Feeds: all caught up' --body '<p>Feeds: all caught up. 🎉</p>' --html",
+      "timeout": "2m",
+      "retry": {
+        "max": 2,
+        "backoff": "30s"
+      }
+    },
+    "empty_batch": {
+      "type": "transform",
+      "expr": "({ created_at: run.started_at, items: [] })"
+    },
+    "persist_empty": {
+      "type": "shell",
+      "cmd": "cat > /Users/ruiyiz/.bearclaw/var/agents/main/feed-batch.json",
+      "stdin": "{{nodes.empty_batch.output}}"
+    }
+  },
+  "edges": [
+    {
+      "from": "count",
+      "to": "unread"
+    },
+    {
+      "from": "unread",
+      "to": "any"
+    },
+    {
+      "from": "any",
+      "port": "true",
+      "to": "prep"
+    },
+    {
+      "from": "any",
+      "port": "false",
+      "to": "caught_up"
+    },
+    {
+      "from": "prep",
+      "to": "summarize"
+    },
+    {
+      "from": "summarize",
+      "to": "compose"
+    },
+    {
+      "from": "compose",
+      "to": "send"
+    },
+    {
+      "from": "send",
+      "to": "persist"
+    },
+    {
+      "from": "persist",
+      "to": "mark_read"
+    },
+    {
+      "from": "mark_read",
+      "to": "ask"
+    },
+    {
+      "from": "caught_up",
+      "to": "empty_batch"
+    },
+    {
+      "from": "empty_batch",
+      "to": "persist_empty"
+    }
+  ]
+}
