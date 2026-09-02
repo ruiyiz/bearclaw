@@ -1,0 +1,1809 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Workflow Engine Design</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbfbfa;
+        --fg: #1c1c1a;
+        --muted: #6b6b66;
+        --line: #e2e2dc;
+        --card: #f2f2ee;
+        --accent: #b3541e;
+        --code: #ecece7;
+        --ok: #2f7a4f;
+        --warn: #a8641a;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #131412;
+          --fg: #e8e6e0;
+          --muted: #9a9890;
+          --line: #2a2b27;
+          --card: #1c1d1a;
+          --accent: #e0885a;
+          --code: #1f201c;
+          --ok: #6fbf8a;
+          --warn: #d9a05b;
+        }
+      }
+      html {
+        background: var(--bg);
+        color: var(--fg);
+      }
+      body {
+        margin: 0;
+        font:
+          16px/1.55 ui-sans-serif,
+          system-ui,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+      }
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 40px 24px 80px;
+      }
+      h1 {
+        font-size: 2rem;
+        letter-spacing: -0.02em;
+        margin: 0 0 8px;
+      }
+      h2 {
+        font-size: 1.35rem;
+        margin: 48px 0 12px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        letter-spacing: -0.01em;
+      }
+      h3 {
+        font-size: 1.05rem;
+        margin: 28px 0 8px;
+      }
+      p {
+        margin: 0 0 12px;
+      }
+      .lede {
+        color: var(--muted);
+        font-size: 1.05rem;
+        margin-bottom: 8px;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin-bottom: 24px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 12px 0 20px;
+        font-size: 0.92rem;
+      }
+      th,
+      td {
+        text-align: left;
+        vertical-align: top;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      th {
+        color: var(--muted);
+        font-weight: 600;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      td:first-child {
+        white-space: nowrap;
+      }
+      .wrap td:first-child {
+        white-space: normal;
+      }
+      code {
+        font:
+          0.86em ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        background: var(--code);
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      pre {
+        background: var(--code);
+        padding: 14px 16px;
+        border-radius: 8px;
+        overflow-x: auto;
+        font-size: 0.82rem;
+        line-height: 1.45;
+        margin: 12px 0 20px;
+      }
+      pre code {
+        background: none;
+        padding: 0;
+        font-size: inherit;
+      }
+      ul,
+      ol {
+        margin: 0 0 14px;
+        padding-left: 22px;
+      }
+      li {
+        margin-bottom: 6px;
+      }
+      .note {
+        background: var(--card);
+        border-left: 3px solid var(--accent);
+        padding: 10px 14px;
+        border-radius: 0 8px 8px 0;
+        margin: 14px 0 20px;
+      }
+      .toc {
+        background: var(--card);
+        border-radius: 8px;
+        padding: 14px 18px;
+        margin: 20px 0 8px;
+        font-size: 0.92rem;
+      }
+      .toc ol {
+        margin: 0;
+        columns: 2;
+        column-gap: 24px;
+      }
+      .toc a {
+        color: inherit;
+        text-decoration: none;
+      }
+      .toc a:hover {
+        color: var(--accent);
+      }
+      figure {
+        margin: 16px 0 24px;
+      }
+      figcaption {
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin-top: 6px;
+      }
+      svg text {
+        font:
+          12px ui-sans-serif,
+          system-ui,
+          sans-serif;
+        fill: var(--fg);
+      }
+      svg .box {
+        fill: var(--card);
+        stroke: var(--line);
+        stroke-width: 1.2;
+      }
+      svg .llm {
+        stroke: var(--accent);
+        stroke-width: 1.6;
+      }
+      svg .human {
+        stroke: var(--ok);
+        stroke-width: 1.6;
+        stroke-dasharray: 4 3;
+      }
+      svg .edge {
+        stroke: var(--muted);
+        stroke-width: 1.3;
+        fill: none;
+        marker-end: url(#arrow);
+      }
+      svg .fail {
+        stroke: var(--warn);
+        stroke-dasharray: 5 3;
+      }
+      svg .lbl {
+        fill: var(--muted);
+        font-size: 10.5px;
+      }
+      .legend {
+        display: flex;
+        gap: 18px;
+        font-size: 0.82rem;
+        color: var(--muted);
+        flex-wrap: wrap;
+      }
+      .legend span::before {
+        content: '';
+        display: inline-block;
+        width: 14px;
+        height: 10px;
+        margin-right: 6px;
+        border: 1.5px solid var(--line);
+        border-radius: 2px;
+        vertical-align: -1px;
+      }
+      .legend .l-llm::before {
+        border-color: var(--accent);
+      }
+      .legend .l-human::before {
+        border-color: var(--ok);
+        border-style: dashed;
+      }
+      .legend .l-fail::before {
+        border-color: var(--warn);
+        border-style: dashed;
+        height: 0;
+      }
+      @media (max-width: 640px) {
+        .toc ol {
+          columns: 1;
+        }
+        main {
+          padding: 24px 16px 60px;
+        }
+        h1 {
+          font-size: 1.6rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Workflow Engine Design</h1>
+      <p class="lede">
+        Replace handlers and heartbeat with one primitive: a
+        <strong>workflow</strong>, a small flowchart of typed nodes with
+        explicit human-in-the-loop steps, run by a durable step interpreter in
+        the host process, and managed from a first-class
+        <strong>Workflows</strong> module in the web UI alongside Chat.
+      </p>
+      <p class="meta">
+        BearClaw · 2026-09-01 · branch <code>feat/workflows</code> · status:
+        proposal
+      </p>
+
+      <nav class="toc">
+        <ol>
+          <li><a href="#problem">Problem</a></li>
+          <li><a href="#concepts">Concepts</a></li>
+          <li><a href="#format">Definition format</a></li>
+          <li><a href="#engine">Engine</a></li>
+          <li><a href="#human">Human in the loop</a></li>
+          <li><a href="#tools">Agent-facing tools</a></li>
+          <li><a href="#web">Web UI restructure</a></li>
+          <li><a href="#migration">Migration</a></li>
+          <li><a href="#prior-art">Prior art</a></li>
+          <li><a href="#phases">Phases</a></li>
+          <li><a href="#decisions">Decisions to confirm</a></li>
+        </ol>
+      </nav>
+
+      <h2 id="problem">Problem</h2>
+      <p>
+        Today a "workflow" is a <code>handlers</code> row: one prompt, one agent
+        run, one 500-character log line. Heartbeat is the same thing with a
+        special prompt and a quiet window. What the codebase does not have shows
+        up in the live handler prompts:
+      </p>
+
+      <table class="wrap">
+        <thead>
+          <tr>
+            <th style="width: 38%">Gap</th>
+            <th>Evidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              Structure lives in prose. Branches, guards and side-effect
+              ordering are enforced by the LLM's obedience, not by the system.
+            </td>
+            <td>
+              <code>feed-triage</code> is a six-step pipeline with a zero-unread
+              branch, a "SEND GUARD" paragraph, and a rule that marking items
+              read must happen only after a confirmed send.
+            </td>
+          </tr>
+          <tr>
+            <td>Deterministic steps cost an LLM turn.</td>
+            <td>
+              <code>feeds count</code>, <code>feeds unread</code>,
+              <code>gws gmail +send</code>, <code>feeds read</code>,
+              <code>pipeline.mjs next</code> all run inside an agent with every
+              tool enabled, <code>bypassPermissions</code>, and a 5-minute
+              timeout.
+            </td>
+          </tr>
+          <tr>
+            <td>No human-in-the-loop primitive.</td>
+            <td>
+              No <code>ask_user</code>, no approval gate, no
+              <code>canUseTool</code>. Workarounds:
+              <code>newsletter-plan-ping</code> "ends its turn, the brainstorm
+              continues as normal chat";
+              <code>feed-triage</code> reply-by-number rides on the
+              <code>+main</code> email poll; <code>HEARTBEAT.md</code> says
+              "seek clarifications from the user".
+            </td>
+          </tr>
+          <tr>
+            <td>Chaining is loose.</td>
+            <td>
+              <code>handler_complete</code> is emitted but nothing consumes it.
+              <code>emit_event</code> has no authorization. Filters are
+              exact-match JSON. No data flows between steps except through
+              payloads or files. No run identity, so
+              <code>feed-triage-watchdog</code> is a second, uncoordinated
+              handler that infers the previous run's outcome from a file's
+              mtime.
+            </td>
+          </tr>
+          <tr>
+            <td>Cross-agent workflows are three handlers and a JSON file.</td>
+            <td>
+              Newsletter: <code>newsletter-plan-ping</code> (main) → skill queue
+              file → <code>newsletter-send</code> (coco) →
+              <code>newsletter_queue_empty</code> event →
+              <code>newsletter-empty-alert</code> (main).
+            </td>
+          </tr>
+          <tr>
+            <td>Observability is thin.</td>
+            <td>
+              <code>handler_logs.result</code> is 500 chars.
+              <code>events</code> are purged after 24 h and take dependent logs
+              with them. Admin UI: read-only list with pause/resume/delete, no
+              create, no edit, no run view.
+            </td>
+          </tr>
+          <tr>
+            <td>No tests.</td>
+            <td>
+              <code>bus.ts</code>, <code>scheduler.ts</code>,
+              <code>heartbeat.ts</code> untested;
+              <code>initDatabase()</code> hardcodes the path;
+              <code>config.ts</code> throws without <code>DEFAULT_MODEL</code>.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Worth keeping: <code>runContainerAgent</code> (one-shot agent run with
+        model, effort, session resume, timeout, streaming callbacks), the IPC
+        message fan-out (primary channel resolution, per-agent authorization),
+        the <code>events</code> table as a signal bus,
+        <code>cron-parser</code> + <code>TIMEZONE</code>, the web broker/SSE
+        plumbing, and the Agent SDK's
+        <code>outputFormat: { type: 'json_schema' }</code> (available in the
+        pinned SDK), which lets an LLM node hand typed data to a non-LLM node.
+      </p>
+
+      <h2 id="concepts">Concepts</h2>
+
+      <p>
+        <strong>Workflow</strong>: a definition file. Name, owner agent (default
+        agent for LLM nodes), triggers, nodes, edges, policies. Lives at
+        <code>~/.bearclaw/workflows/&lt;slug&gt;.json</code>. Files are the
+        source of truth so the owner and the agent can edit them with ordinary
+        file tools, they diff in git, and they match how skills and context
+        files already work.
+      </p>
+
+      <p>
+        <strong>Run</strong>: one execution of a workflow. Has an id, the
+        trigger payload, a status (<code
+          >running | waiting | succeeded | failed | cancelled</code
+        >), and a <strong>context</strong> object that accumulates node outputs
+        (<code>nodes.&lt;id&gt;.output</code>). Persisted to SQLite after every
+        step so a restart resumes where it left off.
+      </p>
+
+      <p>
+        <strong>Node</strong>: an execution unit. Most nodes are not LLM calls.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>What it does</th>
+            <th>Output</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>agent</code></td>
+            <td>
+              One <code>runContainerAgent</code> call. Prompt template, agent
+              folder override, model, effort, <code>tools</code> allowlist,
+              <code>max_turns</code>, timeout, optional
+              <code>output_schema</code> (SDK structured output; a success
+              without structured output counts as a failure and retries),
+              session mode <code>fresh | run | chat</code>, optional
+              <code>approve_tools</code> (named tool calls pause the run as a
+              human wait).
+            </td>
+            <td>text or typed JSON</td>
+          </tr>
+          <tr>
+            <td><code>shell</code></td>
+            <td>
+              Command with cwd/env/timeout; stdout parsed as
+              <code>json | text | lines</code>. Non-zero exit is a failure.
+            </td>
+            <td>parsed stdout</td>
+          </tr>
+          <tr>
+            <td><code>http</code></td>
+            <td>Request with method/url/headers/body.</td>
+            <td>status + parsed body</td>
+          </tr>
+          <tr>
+            <td><code>template</code></td>
+            <td>
+              Mustache-style string rendering over the context. Replaces "ask
+              the LLM to write HTML in this exact shape".
+            </td>
+            <td>string</td>
+          </tr>
+          <tr>
+            <td><code>transform</code></td>
+            <td>Expression over the context producing a value.</td>
+            <td>any</td>
+          </tr>
+          <tr>
+            <td><code>condition</code></td>
+            <td>
+              Boolean expression. Ports <code>true</code> / <code>false</code>.
+            </td>
+            <td>boolean</td>
+          </tr>
+          <tr>
+            <td><code>switch</code></td>
+            <td>
+              Expression producing a label. One port per case plus
+              <code>default</code>.
+            </td>
+            <td>string</td>
+          </tr>
+          <tr>
+            <td><code>send</code></td>
+            <td>
+              Message or media to channel targets. Reuses the IPC fan-out
+              (explicit jid, primary channel, or all). No LLM.
+            </td>
+            <td>delivery report</td>
+          </tr>
+          <tr>
+            <td><code>human</code></td>
+            <td>
+              Pauses the run and asks a person. Kinds:
+              <code>approve</code> (approve/reject + comment),
+              <code>choice</code> (labelled options), <code>input</code> (small
+              form or free text). One port per action plus <code>timeout</code>.
+              Targets, expiry (default 3 days) and on-timeout behaviour are
+              configurable.
+            </td>
+            <td>the response, responder, responded_via</td>
+          </tr>
+          <tr>
+            <td><code>wait_event</code></td>
+            <td>
+              Pauses until an event matching a filter arrives. Matches events
+              already persisted since the run started (or a
+              <code>lookback</code> window), so a signal that lands before the
+              node is reached is not lost. Ports <code>received</code> /
+              <code>timeout</code>; a timeout is required.
+            </td>
+            <td>event payload</td>
+          </tr>
+          <tr>
+            <td><code>emit</code></td>
+            <td>Emits an event onto the bus.</td>
+            <td>event id</td>
+          </tr>
+          <tr>
+            <td><code>delay</code></td>
+            <td>Durable sleep until a duration or wall-clock time.</td>
+            <td>none</td>
+          </tr>
+          <tr>
+            <td><code>workflow</code></td>
+            <td>Runs another workflow as a sub-run and waits for it.</td>
+            <td>sub-run output</td>
+          </tr>
+          <tr>
+            <td><code>map</code></td>
+            <td>
+              Runs one node (or sub-workflow) per item of an array, with a
+              concurrency cap.
+            </td>
+            <td>array of outputs</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        <strong>Edge</strong>: <code>from → to</code> leaving a named
+        <strong>port</strong>. Every node has <code>success</code> and
+        <code>error</code> ports; branching nodes replace
+        <code>success</code> with their own
+        (<code>true</code>/<code>false</code>, switch cases, human actions,
+        <code>received</code>/<code>timeout</code>). <code>port</code> defaults
+        to <code>success</code>, so a plain chain stays terse. Several edges
+        from one port fan out in parallel; a node with several incoming edges
+        joins, waiting for every incoming edge whose source node actually ran
+        (edges from untaken branches never block; <code>join: any</code> is
+        available for races). An unwired <code>error</code> port fails the run.
+        Definitions must be acyclic; retry is a per-node setting, iteration is
+        <code>map</code>. Canvas positions live in an optional top-level
+        <code>layout</code> block, never in nodes, so the graph stays
+        canvas-agnostic and auto-layout applies when the block is absent.
+      </p>
+
+      <p>
+        <strong>Trigger</strong>: one or more per workflow.
+        <code>cron</code> (expression, timezone, quiet window, catch-up policy),
+        <code>event</code> (type + filter, replaces
+        <code>register_handler</code>), <code>manual</code> (dashboard button,
+        <code>/run &lt;slug&gt;</code> in chat, MCP tool),
+        <code>webhook</code> (<code>POST /api/hooks/&lt;token&gt;</code>,
+        authenticated by token only), <code>at</code> (one-shot, replaces
+        <code>schedule_task run_at</code>).
+      </p>
+
+      <p>
+        <strong>Policies</strong> (workflow-level):
+        <code>concurrency: skip | queue | replace</code> when a run is already
+        active, <code>alerts: { on_failure, on_missed }</code> (replaces the
+        watchdog pattern; <code>on_missed</code> fires when a cron run has not
+        succeeded within <code>expected_within</code> of its slot),
+        <code>retention</code>.
+      </p>
+
+      <div class="note">
+        <strong>Heartbeat is gone as a concept.</strong> What it did (wake an
+        agent on an interval with a standing brief, skip a quiet window, use a
+        cheaper model) is an ordinary cron-triggered workflow with one
+        <code>agent</code> node: the brief is the node's prompt, the quiet
+        window is a property of the cron trigger, the model is a node setting,
+        <code>concurrency: skip</code> prevents overlap. No
+        <code>heartbeat</code> block in the registry, no
+        <code>HEARTBEAT.md</code> convention, no
+        <code>HEARTBEAT_OK</code> sentinel, no special-casing anywhere in the
+        engine.
+      </div>
+
+      <p>
+        The default remains one workflow, one agent: <code>owner</code> sets the
+        agent for every <code>agent</code>, <code>send</code> and
+        <code>human</code> node unless a node overrides it. Cross-agent
+        workflows are the same file with per-node <code>agent</code> overrides.
+      </p>
+
+      <h2 id="format">Definition format</h2>
+
+      <p>
+        Feed triage, rewritten from the current prose prompt into typed nodes:
+      </p>
+
+      <figure>
+        <svg
+          viewBox="0 0 880 300"
+          width="100%"
+          role="img"
+          aria-label="Feed triage workflow graph"
+        >
+          <defs>
+            <marker
+              id="arrow"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="7"
+              markerHeight="7"
+              orient="auto-start-reverse"
+            >
+              <path d="M0 0L10 5L0 10z" fill="var(--muted)" />
+            </marker>
+          </defs>
+          <!-- row 1 -->
+          <rect class="box" x="10" y="60" width="80" height="34" rx="6" />
+          <text x="50" y="82" text-anchor="middle">count</text>
+          <rect class="box" x="120" y="60" width="80" height="34" rx="6" />
+          <text x="160" y="82" text-anchor="middle">unread</text>
+          <path class="box" d="M275 55 L320 77 L275 99 L230 77 Z" />
+          <text x="275" y="81" text-anchor="middle">any?</text>
+          <rect class="box llm" x="360" y="60" width="96" height="34" rx="6" />
+          <text x="408" y="82" text-anchor="middle">summarize</text>
+          <rect class="box" x="486" y="60" width="80" height="34" rx="6" />
+          <text x="526" y="82" text-anchor="middle">render</text>
+          <rect class="box" x="596" y="60" width="80" height="34" rx="6" />
+          <text x="636" y="82" text-anchor="middle">send</text>
+          <rect class="box" x="706" y="60" width="80" height="34" rx="6" />
+          <text x="746" y="82" text-anchor="middle">persist</text>
+          <!-- row 2 -->
+          <rect class="box" x="360" y="150" width="96" height="34" rx="6" />
+          <text x="408" y="172" text-anchor="middle">caught_up</text>
+          <rect class="box" x="596" y="150" width="80" height="34" rx="6" />
+          <text x="636" y="172" text-anchor="middle">failed</text>
+          <rect class="box" x="706" y="150" width="80" height="34" rx="6" />
+          <text x="746" y="172" text-anchor="middle">mark_read</text>
+          <!-- row 3 -->
+          <rect
+            class="box human"
+            x="706"
+            y="240"
+            width="80"
+            height="34"
+            rx="6"
+          />
+          <text x="746" y="262" text-anchor="middle">reply</text>
+          <rect class="box llm" x="596" y="240" width="80" height="34" rx="6" />
+          <text x="636" y="262" text-anchor="middle">act</text>
+          <!-- edges -->
+          <path class="edge" d="M90 77 H118" />
+          <path class="edge" d="M200 77 H228" />
+          <path class="edge" d="M320 77 H358" />
+          <text class="lbl" x="338" y="70" text-anchor="middle">yes</text>
+          <path class="edge" d="M275 99 V167 H358" />
+          <text class="lbl" x="300" y="160">no</text>
+          <path class="edge" d="M456 77 H484" />
+          <path class="edge" d="M566 77 H594" />
+          <path class="edge" d="M676 77 H704" />
+          <path class="edge fail" d="M636 94 V148" />
+          <text class="lbl" x="644" y="125">on failure</text>
+          <path class="edge" d="M746 94 V148" />
+          <path class="edge" d="M746 184 V238" />
+          <path class="edge" d="M706 257 H678" />
+          <path class="edge" d="M408 184 V212 H692 V77 H704" />
+        </svg>
+        <figcaption>
+          Rectangles are deterministic nodes.
+          <span class="legend" style="display: inline-flex"
+            ><span class="l-llm">LLM node</span
+            ><span class="l-human">human wait</span
+            ><span class="l-fail">failure edge</span></span
+          >
+        </figcaption>
+      </figure>
+
+      <pre><code>{
+  "$schema": "bearclaw://workflow/v1",
+  "name": "Feed triage",
+  "slug": "feed-triage",
+  "owner": "main",
+  "triggers": [
+    { "type": "cron", "cron": "0 20 * * *" },
+    { "type": "manual" }
+  ],
+  "policies": {
+    "concurrency": "skip",
+    "alerts": { "on_failure": "owner", "on_missed": { "expected_within": "2h" } }
+  },
+  "nodes": {
+    "count":   { "type": "shell", "cmd": "feeds count --exclude-category aggregators", "parse": "json" },
+    "unread":  { "type": "shell", "cmd": "feeds unread --json --newest --per-feed 3 --limit 15 --exclude-category aggregators", "parse": "json" },
+    "any":     { "type": "condition", "expr": "nodes.unread.output.length > 0" },
+    "summarize": {
+      "type": "agent",
+      "model": "sonnet",
+      "prompt": "Summarize each item in 1-2 sentences from its content field. Do not invent facts.\n{{json nodes.unread.output}}",
+      "output_schema": { "type": "array", "items": { "type": "object",
+        "properties": { "id": {"type":"number"}, "summary": {"type":"string"} }, "required": ["id","summary"] } }
+    },
+    "render":  { "type": "template", "file": "templates/feed-digest.html" },
+    "send":    { "type": "shell", "cmd": "gws gmail +send --to {{env.OWNER_EMAIL}} --from ruiyizhang+main@gmail.com --subject {{q subject}} --body {{q nodes.render.output}} --html",
+                 "retry": { "max": 2, "backoff": "30s" } },
+    "persist": { "type": "shell", "cmd": "cat > ~/.bearclaw/var/agents/main/feed-batch.json", "stdin": "{{json batch}}" },
+    "mark_read": { "type": "shell", "cmd": "feeds read {{join nodes.unread.output.*.id ' '}}" },
+    "caught_up": { "type": "shell", "cmd": "gws gmail +send --to {{env.OWNER_EMAIL}} --from ruiyizhang+main@gmail.com --subject 'Feeds: all caught up' --body '&lt;p&gt;All caught up.&lt;/p&gt;' --html" },
+    "reply":   { "type": "human", "kind": "input", "to": ["email:main"],
+                 "prompt": "Reply with: save 1 4 · summarize 7 · dismiss 2 · next", "expires": "7d" },
+    "act":     { "type": "agent", "prompt": "Apply the user's reply to the batch: {{nodes.reply.output}}\nBatch: {{json batch}}" },
+    "failed":  { "type": "send", "text": "Feed digest failed at {{error.node}}: {{error.message}}" }
+  },
+  "edges": [
+    { "from": "count", "to": "unread" },
+    { "from": "unread", "to": "any" },
+    { "from": "any", "port": "true", "to": "summarize" },
+    { "from": "any", "port": "false", "to": "caught_up" },
+    { "from": "caught_up", "to": "persist" },
+    { "from": "summarize", "to": "render" },
+    { "from": "render", "to": "send" },
+    { "from": "send", "to": "persist" },
+    { "from": "send", "port": "error", "to": "failed" },
+    { "from": "persist", "to": "mark_read" },
+    { "from": "mark_read", "to": "reply" },
+    { "from": "reply", "port": "submitted", "to": "act" }
+  ]
+}</code></pre>
+
+      <p>
+        Compared with the prose version: the send guard is an edge, the "write
+        the empty batch file even when caught up" rule is an edge from
+        <code>caught_up</code> into the same <code>persist</code> node, marking
+        items read is structurally after a confirmed send, the LLM does exactly
+        one thing and returns typed data, and the watchdog is a one-line policy.
+        The <code>reply</code> node's unwired <code>timeout</code> port simply
+        ends the run after seven days.
+      </p>
+
+      <p>
+        Templates use <code>{{ }}</code> with a handful of helpers
+        (<code>json</code>, <code>q</code> for shell quoting, <code>join</code>,
+        <code>default</code>). Expressions run in a <code>node:vm</code> context
+        with a frozen
+        <code>{ trigger, nodes, env, run, item, error }</code> object, no
+        globals, no <code>Date</code>/<code>Math.random</code> (use
+        <code>run.started_at</code>), and a 50 ms budget. The sandbox is for
+        determinism and accident containment, not security: the only authors are
+        the owner and an agent that already has shell access. This is
+        deliberately not a full language; anything that needs logic beyond a
+        predicate belongs in a <code>shell</code> or <code>agent</code> node.
+      </p>
+
+      <h2 id="engine">Engine</h2>
+
+      <p>New module <code>src/workflows/</code>:</p>
+      <pre><code>src/workflows/
+├── schema.ts        zod schema for definitions; validation (acyclic, edge refs, unique ids)
+├── store.ts         load/watch ~/.bearclaw/workflows/*.json; index rows in SQLite
+├── engine.ts        run loop: ready-set computation, step execution, persistence, recovery
+├── triggers.ts      cron ticker, event subscription, webhook, one-shot `at`
+├── waits.ts         human / event / delay waits; resolution; notification delivery
+├── expr.ts          vm-sandboxed expressions + template rendering
+├── executors/       one file per node type, each `execute(node, ctx, run, signal) → Result`
+└── migrate.ts       handlers rows + heartbeat config → workflow files (one time)</code></pre>
+
+      <p>Tables (in <code>db.ts</code>):</p>
+      <pre><code>workflows       (slug PK, name, owner, enabled, file_hash, next_run_at, last_run_id, last_status)
+workflow_runs   (id PK, slug, definition, definition_hash, run_key UNIQUE NULL, trigger_type,
+                 trigger_payload, status, context, started_at, finished_at, error,
+                 parent_run_id, forked_at_node)
+workflow_steps  (id PK, run_id, node_id, attempt, status, input, output, error, log_path,
+                 agent_session_id, started_at, finished_at)
+workflow_waits  (id PK, run_id, node_id, kind, prompt, options, targets, notify_refs,
+                 resume_at, on_timeout, token_hash, response, responder, responded_via, resolved_at)
+workflow_events (id PK, run_id, ts, node_id, kind, payload)      -- append-only timeline for the UI</code></pre>
+
+      <p>
+        <strong>Decider loop.</strong> A run advances by computing the set of
+        nodes whose incoming edges are all satisfied, executing them (parallel
+        where the graph allows), writing outputs into the context, and
+        persisting. Anything that changes a run (a step finishing, a wait
+        resolving, a timer firing) re-runs the decider over that run from
+        persisted state; there are no long-lived coroutines to lose. A node that
+        returns a wait flips the run to <code>waiting</code>. Large outputs
+        above a cap are spilled to
+        <code>var/workflows/&lt;run&gt;/&lt;node&gt;.json</code> and the context
+        stores a reference.
+      </p>
+
+      <p>
+        <strong>Snapshot per run.</strong> A run copies the definition JSON into
+        its own row when it starts and executes against that snapshot, so a wait
+        that resolves a week later runs the graph it began with, even if the
+        file changed. Editing the file affects new runs only; "replay on latest"
+        is a separate action.
+      </p>
+
+      <p>
+        <strong>At-least-once, keyed.</strong> Every attempt gets a key
+        <code>&lt;run&gt;:&lt;node&gt;:&lt;attempt&gt;</code>, exposed to
+        <code>shell</code> as <code>BEARCLAW_STEP_KEY</code>, to
+        <code>http</code> as a header, to <code>agent</code> in the prompt
+        frame, and used by <code>send</code> to dedupe. Retry precedence is
+        fixed: the node's retry policy exhausts first, then the wired
+        <code>error</code> port, then the workflow-level
+        <code>on_error</code> handler, then the run fails. Executors classify
+        errors as retryable or fatal (a non-zero exit is retryable by default, a
+        4xx is fatal, an SDK structured-output miss is retryable with a stricter
+        prompt).
+      </p>
+
+      <p>
+        <strong>Recovery.</strong> On boot, steps that were
+        <code>running</code> are marked interrupted and re-dispatched under
+        their retry policy; waits are untouched; <code>delay</code> and expiring
+        waits are rows with a <code>resume_at</code> column, scanned on boot and
+        on a coarse tick, never bare <code>setTimeout</code>s. Cron catch-up
+        policy decides whether missed slots during downtime run once, run all,
+        or are skipped.
+      </p>
+
+      <p>
+        <strong>Rerun from a node is a fork.</strong> Retry-from-X creates a new
+        run with <code>parent_run_id</code> and <code>forked_at_node</code>,
+        copies the completed step rows for X's ancestors, optionally overrides
+        X's input, and starts the decider. Agent nodes in the fork resume from
+        the parent's SDK session. Nothing is ever rewound in place.
+      </p>
+
+      <p>
+        <strong>Reuse.</strong> The <code>agent</code> executor calls
+        <code>runContainerAgent</code> with <code>outputFormat</code> when a
+        schema is set and with workflow metadata in the prompt frame so an agent
+        node can still call <code>send_message</code>,
+        <code>emit_event</code> and the new workflow tools. The
+        <code>send</code> executor calls the same fan-out code as the IPC
+        message watcher (extracted from <code>index.ts</code> into a function
+        that takes a source agent and a target spec). The
+        <code>events</code> table stays as the signal bus;
+        <code>triggers.ts</code> and <code>wait_event</code> are its only
+        consumers.
+      </p>
+
+      <h2 id="human">Human in the loop</h2>
+
+      <p>
+        A <code>human</code> node creates a wait, notifies, and parks the run.
+        Three resolution paths, all writing the same
+        <code>workflow_waits.response</code>:
+      </p>
+      <ol>
+        <li>
+          <strong>Web inbox.</strong> <code>/inbox</code> lists open waits with
+          approve/reject buttons, choice buttons, or a form generated from the
+          node's <code>fields</code>. Badge count in the top-level nav.
+        </li>
+        <li>
+          <strong>Channel replies.</strong> Telegram gets inline keyboard
+          buttons whose callback data is
+          <code>wf:&lt;wait_id&gt;:&lt;choice&gt;</code>. iMessage, WhatsApp and
+          email get the prompt as text, a short reply hint, and for approvals a
+          signed one-shot link per action (<code>/r/&lt;token&gt;</code>, HMAC
+          over wait id + action + nonce + expiry, single use, bound to the
+          wait). The router checks for open waits targeting the inbound chat jid
+          before dispatching to the agent; an exact match on a choice label or
+          <code>yes/no/approve/reject</code> resolves the wait directly.
+        </li>
+        <li>
+          <strong>Agent-mediated.</strong> Anything that is not an exact match
+          goes to the chat agent as usual, with the open waits for that chat
+          injected into its turn context, and the agent calls
+          <code>workflow_respond(wait_id, response)</code>. This is how
+          free-text replies like "save 1 4, summarize 7" resolve an
+          <code>input</code> wait without a parser per workflow.
+        </li>
+      </ol>
+      <p>
+        Every resolution records <code>responder</code> (jid or web session) and
+        <code>responded_via</code> (<code
+          >web | telegram | link | agent | timeout</code
+        >). Waits target people, not only the owner:
+        <code>to: ["imsg:17"]</code> asks the kids a question and branches on
+        the answer. Every wait has an expiry (default 3 days); on expiry the
+        engine follows the <code>timeout</code> port if wired, otherwise applies
+        <code>on_timeout: approve | reject | skip | fail | { value }</code>,
+        otherwise fails the run. On restart, all pending waits are re-emitted to
+        the SSE bus so the inbox is never stale.
+      </p>
+
+      <p>
+        <strong>Tool-level approval inside an agent node</strong> is a different
+        feature from node-level approval, and both are needed.
+        <code>approve_tools: ["Bash"]</code> on an <code>agent</code> node
+        installs a <code>PreToolUse</code> hook that returns
+        <code>defer</code> for matching calls: the query ends, the pending call
+        becomes an ordinary wait row (kind <code>tool</code>, payload = tool
+        input), and on approval the engine resumes the SDK session.
+        <code>canUseTool</code> cannot be used for this because the SDK skips it
+        under <code>bypassPermissions</code>, which the runner sets.
+        <code>AskUserQuestion</code> from an agent routes through the same wait
+        table so the inbox renders it as a form.
+      </p>
+
+      <h2 id="tools">Agent-facing tools</h2>
+
+      <p>
+        Replaces <code>schedule_task</code>, <code>register_handler</code>,
+        <code>list_handlers</code>, <code>pause_handler</code>,
+        <code>resume_handler</code>, <code>cancel_handler</code>, and the
+        <code>current_handlers.json</code> snapshot.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Tool</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>workflow_list</code></td>
+            <td>Slugs, triggers, next run, last status, open waits.</td>
+          </tr>
+          <tr>
+            <td><code>workflow_upsert</code></td>
+            <td>
+              Validate and write a definition file. Non-main agents may only
+              write workflows they own.
+            </td>
+          </tr>
+          <tr>
+            <td><code>workflow_run</code></td>
+            <td>Start a run with an optional payload.</td>
+          </tr>
+          <tr>
+            <td><code>workflow_set_enabled</code></td>
+            <td>Pause or resume triggers.</td>
+          </tr>
+          <tr>
+            <td><code>workflow_respond</code></td>
+            <td>Resolve a wait on behalf of the user in the current chat.</td>
+          </tr>
+          <tr>
+            <td><code>run_cancel</code></td>
+            <td>Cancel a run.</td>
+          </tr>
+          <tr>
+            <td><code>emit_event</code></td>
+            <td>
+              Unchanged, but now authorized: non-main agents may only emit types
+              prefixed with their folder.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        One-shot reminders ("remind me tomorrow at 9") become
+        <code>workflow_upsert</code> with an <code>at</code> trigger and a
+        single <code>send</code> node. The agent no longer needs an LLM run to
+        deliver a fixed string. A periodic check-in (what heartbeat used to be)
+        is <code>workflow_upsert</code> with a cron trigger and one
+        <code>agent</code> node.
+      </p>
+
+      <h2 id="web">Web UI restructure</h2>
+
+      <p>
+        Top-level modules, one nav for all of them (sidebar on desktop, tab bar
+        on mobile):
+      </p>
+      <table class="wrap">
+        <thead>
+          <tr>
+            <th>Module</th>
+            <th>Pages</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Chat</td>
+            <td>unchanged</td>
+          </tr>
+          <tr>
+            <td>Workflows</td>
+            <td>
+              <code>/workflows</code> list ·
+              <code>/workflows/[slug]</code> (graph, triggers, runs, definition
+              editor) · <code>/workflows/[slug]/runs/[id]</code> (graph coloured
+              by step status, live) · <code>/workflows/events</code> (bus log,
+              moved from admin)
+            </td>
+          </tr>
+          <tr>
+            <td>Inbox</td>
+            <td>
+              <code>/inbox</code> open human waits across all workflows, badge
+              in nav
+            </td>
+          </tr>
+          <tr>
+            <td>Admin</td>
+            <td>
+              agents, skills, context, health, transcripts (handlers and
+              heartbeat pages removed)
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The run view is the centre of the module: the same graph as the
+        definition, nodes coloured by step status, a side panel with
+        input/output/error/log for the selected node and a link to the agent
+        transcript for <code>agent</code> nodes, and controls for cancel, retry
+        from a node, and respond to a wait. Live updates arrive over the
+        existing broker as a <code>wf:*</code> topic (<code>run.status</code>,
+        <code>step.status</code>, <code>wait.opened</code>,
+        <code>wait.resolved</code>).
+      </p>
+
+      <p>
+        Editing in v1 is the definition JSON in CodeMirror (already a
+        dependency) with schema validation and a live graph preview that
+        re-renders on every keystroke, the two views always in sync. A per-node
+        form editor in the side panel is the v2 step, drag-and-drop on the
+        canvas the v3 step; the file format is the contract either way, and the
+        file stays hot-reloadable from disk so the owner or an agent can edit it
+        outside the UI. Graph rendering uses <code>@xyflow/react</code> with
+        <code>@dagrejs/dagre</code> for auto-layout, the one new UI dependency
+        worth taking; ReactFlow state is derived at render time and never
+        written back into the definition. Node config opens in a side sheet, not
+        a modal. Lists and inbox are mobile-first; the canvas pans and zooms on
+        touch.
+      </p>
+
+      <p>HTTP additions in <code>http.ts</code>:</p>
+      <pre><code>GET    /api/workflows                    list with status
+GET    /api/workflows/:slug              definition + index row
+PUT    /api/workflows/:slug              validate + write file
+DELETE /api/workflows/:slug
+POST   /api/workflows/:slug/run
+POST   /api/workflows/:slug/enabled      { enabled }
+GET    /api/workflows/:slug/runs
+GET    /api/runs/:id                     run + steps
+POST   /api/runs/:id/cancel
+POST   /api/runs/:id/retry               { from: nodeId }
+GET    /api/waits                        open waits
+POST   /api/waits/:id/respond
+GET    /api/workflows/stream             SSE
+POST   /api/hooks/:token                 webhook trigger (public, token-authed, run_key dedupe)
+GET    /r/:token                         signed one-shot approval link (public)</code></pre>
+
+      <h2 id="migration">Migration</h2>
+      <p><code>migrate.ts</code> runs once on first boot after the upgrade:</p>
+      <ul>
+        <li>
+          Every <code>handlers</code> row becomes
+          <code>~/.bearclaw/workflows/&lt;id&gt;.json</code> with a single
+          <code>agent</code> node carrying the old prompt,
+          <code>session: chat</code> for <code>context_mode: agent</code>, the
+          cron or event trigger, and <code>enabled</code> from
+          <code>status</code>. Completed one-shots are skipped.
+        </li>
+        <li>
+          Each agent with a <code>heartbeat</code> block becomes
+          <code>&lt;folder&gt;-checkin.json</code>: cron trigger from the
+          interval with the quiet window, one <code>agent</code> node whose
+          prompt is the current <code>HEARTBEAT.md</code> content, model from
+          the old override, <code>enabled</code> from the old handler status
+          (coco's is currently paused). The <code>heartbeat</code> block is then
+          deleted from the registry.
+        </li>
+        <li>
+          <code>handler_logs</code> are left in place read-only until the
+          retention window passes; the old tables are dropped in a later
+          release.
+        </li>
+        <li>
+          Once migrated, the owner can refactor the prose workflows into typed
+          nodes one at a time. Nothing forces that; a one-node agent workflow
+          keeps working.
+        </li>
+      </ul>
+      <p>
+        Removed: <code>src/events/bus.ts</code>,
+        <code>src/events/scheduler.ts</code>,
+        <code>src/events/heartbeat.ts</code>, the handler branches of
+        <code>processTaskIpc</code>, the handler MCP tools,
+        <code>src/commands/jobs.ts</code> (replaced by <code>/workflows</code>),
+        the admin handlers and heartbeat pages, <code>HeartbeatConfig</code> in
+        <code>types.ts</code>, <code>HEARTBEAT_*</code> in
+        <code>config.ts</code>, the <code>HEARTBEAT.md</code> convention, the
+        quiet-period special case in the bus.
+      </p>
+
+      <h2 id="prior-art">Prior art</h2>
+
+      <p>
+        Three families of open-source projects solve parts of this problem.
+        Licenses and behaviour below were checked against LICENSE files and
+        current docs on 2026-09-01; items marked <em>unverified</em> come from
+        secondary sources.
+      </p>
+
+      <h3>Landscape</h3>
+      <table class="wrap">
+        <thead>
+          <tr>
+            <th style="width: 15%">Project</th>
+            <th style="width: 14%">License</th>
+            <th style="width: 16%">
+              Runs inside one Node process with SQLite?
+            </th>
+            <th>Model and human-in-the-loop primitive</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td colspan="4">
+              <strong>Durable execution engines</strong> (code-first, crash-safe
+              steps)
+            </td>
+          </tr>
+          <tr>
+            <td>Temporal</td>
+            <td>MIT</td>
+            <td>No. Go server; dev server has SQLite.</td>
+            <td>
+              Workflow-as-code replayed against an event history. Signals,
+              Updates, Queries; Reset = retry from a point by copying history
+              into a new run. History caps force Continue-As-New.
+            </td>
+          </tr>
+          <tr>
+            <td>Restate</td>
+            <td>BSL 1.1 (source-available)</td>
+            <td>No. Rust sidecar, RocksDB, no external DB.</td>
+            <td>
+              Journaling. Awakeables resolved by HTTP; durable promises can be
+              resolved before the waiter exists.
+            </td>
+          </tr>
+          <tr>
+            <td>DBOS Transact</td>
+            <td>MIT</td>
+            <td>Library, but TS needs Postgres (SQLite only in Python/Go).</td>
+            <td>
+              Step checkpointing; steps never re-execute once complete.
+              <code>recv</code>/<code>getEvent</code> with timeouts;
+              <code>forkWorkflow</code> starts a new run from a step.
+            </td>
+          </tr>
+          <tr>
+            <td>Inngest</td>
+            <td>SSPL, Apache after 3 years</td>
+            <td>No. Go sidecar with SQLite.</td>
+            <td>
+              Step memoisation over HTTP. <code>waitForEvent</code> with
+              timeout, but only listens from the moment the step runs. "Rerun
+              from step" with input replacement.
+            </td>
+          </tr>
+          <tr>
+            <td>Hatchet</td>
+            <td>MIT</td>
+            <td>No. Postgres.</td>
+            <td>
+              DAGs declared in code plus durable tasks; event waits with a
+              lookback window.
+            </td>
+          </tr>
+          <tr>
+            <td>Trigger.dev</td>
+            <td>Apache-2.0</td>
+            <td>No. Eight containers.</td>
+            <td>
+              Process snapshots (CRIU). Waitpoint tokens completed by API or
+              browser-scoped public token; default 10-minute timeout.
+            </td>
+          </tr>
+          <tr>
+            <td>Vercel Workflow DevKit</td>
+            <td>Apache-2.0</td>
+            <td>Yes. Local "world" stores runs as JSON files.</td>
+            <td>
+              Code with <code>"use workflow"</code>/<code>"use step"</code>
+              directives, event log + memoisation, sandboxed determinism.
+              <code>createHook</code>/<code>resumeHook</code>, typed via Zod; no
+              hook timeout.
+            </td>
+          </tr>
+          <tr>
+            <td>Conductor</td>
+            <td>Apache-2.0</td>
+            <td>No. Java, Redis + Elasticsearch.</td>
+            <td>
+              Declarative JSON DAG; <code>HUMAN</code> and
+              <code>WAIT</code> tasks completed by API; <code>rerun</code> from
+              a task with input override.
+            </td>
+          </tr>
+          <tr>
+            <td>Windmill</td>
+            <td>AGPL-3.0 + EE</td>
+            <td>No. Rust, Postgres.</td>
+            <td>
+              OpenFlow YAML; any step can suspend with N required approvals,
+              timeout, resume form, signed resume/cancel URLs, restart from any
+              step.
+            </td>
+          </tr>
+          <tr>
+            <td>Kestra</td>
+            <td>Apache-2.0</td>
+            <td>No. Java; H2 embedded for dev.</td>
+            <td>
+              YAML flows; <code>Pause</code> task with
+              <code>pauseDuration</code> and
+              <code>behavior: RESUME|WARN|FAIL|CANCEL</code>, typed
+              <code>onResume</code> form; replay from any task; concurrency
+              <code>QUEUE|CANCEL|FAIL</code>.
+            </td>
+          </tr>
+          <tr>
+            <td colspan="4">
+              <strong>Node-based automation builders</strong> (visual,
+              IFTTT-style)
+            </td>
+          </tr>
+          <tr>
+            <td>n8n</td>
+            <td>Sustainable Use (not OSI)</td>
+            <td>Yes (SQLite default), but not embeddable.</td>
+            <td>
+              JSON keyed by node <em>name</em>; item arrays per output. Wait
+              node with resume URL/form; "Send and Wait" on Slack/Telegram/Gmail
+              with approval, free text or form; per-node retry and error output
+              port; Error Workflow.
+            </td>
+          </tr>
+          <tr>
+            <td>Activepieces</td>
+            <td>MIT core + EE</td>
+            <td>Yes (SQLite), separate server.</td>
+            <td>
+              Linked-list JSON with Router/Loop; Todos piece for approval; runs
+              viewer is the builder read-only. React 19 + @xyflow/react 12 +
+              Tailwind 4.
+            </td>
+          </tr>
+          <tr>
+            <td>Node-RED</td>
+            <td>Apache-2.0</td>
+            <td>Yes (flat JSON flows file).</td>
+            <td>
+              Flat <code>{id,type,wires}</code> array, one <code>msg</code> per
+              wire, Function node in <code>vm</code>. No runs, no HITL, no
+              retry.
+            </td>
+          </tr>
+          <tr>
+            <td>Huginn</td>
+            <td>MIT</td>
+            <td>No. Rails + MySQL/Postgres.</td>
+            <td>
+              Agents exchanging events; Liquid templates; per-agent memory. No
+              canvas.
+            </td>
+          </tr>
+          <tr>
+            <td>Automatisch</td>
+            <td>AGPL-3.0</td>
+            <td>No. Postgres + Redis.</td>
+            <td>Linear Zapier-style; Filter only; no HITL.</td>
+          </tr>
+          <tr>
+            <td>Dify</td>
+            <td>Apache-2.0 with conditions</td>
+            <td>No. ~8 containers.</td>
+            <td>
+              ReactFlow-dump DSL; Human Input node (web form or email link, one
+              output branch per button, 3-day default timeout, not allowed in
+              loops); fail branch port; schedule/webhook triggers.
+            </td>
+          </tr>
+          <tr>
+            <td>Sim</td>
+            <td>Apache-2.0</td>
+            <td>No. Postgres, Trigger.dev.</td>
+            <td>
+              YAML with <code>connections: {success, error}</code>;
+              Human-in-the-Loop block with per-run approval portal + resume
+              form, notifications via Slack/Gmail/SMS; no timeout.
+            </td>
+          </tr>
+          <tr>
+            <td>Flowise</td>
+            <td>Apache-2.0</td>
+            <td>Archived 2026-08-13.</td>
+            <td>
+              Team's stated reason: rigid low-code hits its limits against
+              coding agents.
+            </td>
+          </tr>
+          <tr>
+            <td>Langflow</td>
+            <td>MIT</td>
+            <td>Yes (SQLite), separate server.</td>
+            <td>ReactFlow-dump JSON; Human Input component; no scheduler.</td>
+          </tr>
+          <tr>
+            <td colspan="4">
+              <strong>LLM agent graph frameworks</strong> (libraries,
+              in-process)
+            </td>
+          </tr>
+          <tr>
+            <td>LangGraph</td>
+            <td>MIT</td>
+            <td>Yes (SQLite checkpointer).</td>
+            <td>
+              State graph with reducers; <code>interrupt(payload)</code> →
+              <code>Command(resume={id: value})</code>; node re-runs from its
+              start on resume; checkpoint per super-step; time travel forks.
+              Cron, webhooks and run inbox only in the paid LangSmith
+              deployment.
+            </td>
+          </tr>
+          <tr>
+            <td>Mastra</td>
+            <td>Apache-2.0</td>
+            <td>Yes (libSQL).</td>
+            <td>
+              Code-chained <code>.then/.branch/.parallel/.foreach</code>, Zod
+              schemas on every step; <code>suspend()</code> with
+              <code>suspendSchema</code>/<code>resumeSchema</code>; snapshot on
+              suspend.
+            </td>
+          </tr>
+          <tr>
+            <td>Microsoft Agent Framework</td>
+            <td>MIT</td>
+            <td>Yes (file checkpoints).</td>
+            <td>
+              Typed executors, Pregel supersteps, <code>request_info</code> →
+              <code>run(responses={id: v})</code>, pending requests survive
+              checkpoints and are re-emitted on restore; also a declarative YAML
+              dialect.
+            </td>
+          </tr>
+          <tr>
+            <td>OpenAI Agents SDK</td>
+            <td>MIT</td>
+            <td>Yes.</td>
+            <td>
+              No graph. <code>needs_approval</code> on tools →
+              <code>interruptions</code> → serialisable <code>RunState</code> →
+              approve/reject → resume.
+            </td>
+          </tr>
+          <tr>
+            <td>Pydantic AI / pydantic-graph</td>
+            <td>MIT</td>
+            <td>Yes (file persistence).</td>
+            <td>
+              Return-type annotations are the edges; deferred tools with
+              <code>DeferredToolResults</code>; delegates durability to
+              Temporal/DBOS/Prefect.
+            </td>
+          </tr>
+          <tr>
+            <td>CrewAI Flows</td>
+            <td>MIT</td>
+            <td>Yes (SQLite).</td>
+            <td>
+              Event decorators; <code>@human_feedback</code> with LLM collapsing
+              free text into an <code>emit</code> outcome enum.
+            </td>
+          </tr>
+          <tr>
+            <td>Google ADK</td>
+            <td>Apache-2.0</td>
+            <td>Yes (SQLite sessions).</td>
+            <td>
+              Sequential/Parallel/Loop agents; long-running tools resumed by
+              function-call id; tool confirmation.
+            </td>
+          </tr>
+          <tr>
+            <td>Strands, Agno, LlamaIndex Workflows</td>
+            <td>Apache/MIT</td>
+            <td>Yes.</td>
+            <td>
+              Interrupts with ids and typed responses; Agno has step-level
+              <code>requires_confirmation</code> inside its own workflow DSL.
+            </td>
+          </tr>
+          <tr>
+            <td>Claude Agent SDK</td>
+            <td>Anthropic terms</td>
+            <td>The substrate.</td>
+            <td>
+              <code>outputFormat</code> JSON schema, session
+              <code>resume</code>/<code>forkSession</code>,
+              <code>canUseTool</code> (skipped under
+              <code>bypassPermissions</code>), <code>PreToolUse</code> hook with
+              <code>defer</code> to end a query and resume later, subagents
+              return text only, a <code>Workflow</code> tool for memoised
+              multi-agent scripts with no mid-run user input.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Closest alternatives, and why build</h3>
+      <p>
+        Only two projects run inside a single Node process with local storage:
+        <strong>Vercel Workflow DevKit</strong> (Apache-2.0, JSON files on disk,
+        code-first with a build transform, no declarative graph, no run UI
+        beyond a local inspector) and <strong>DBOS</strong> (MIT, but the
+        TypeScript SDK requires Postgres). Both are workflow-as-code: the
+        workflow is a function, and the graph exists only in the developer's
+        head. That is the wrong shape here for two reasons. A definition an
+        agent can write, validate and edit with file tools has to be data, and a
+        run view that colours nodes by status has to know the graph before it
+        runs. Everything else is a server (Temporal, Restate, Inngest, Hatchet,
+        Kestra, Windmill, Conductor) or a product with its own UI, auth and
+        storage (n8n, Activepieces, Dify, Sim), and would replace half of
+        BearClaw rather than slot into it. The engine this design describes is a
+        few hundred lines because it is a JSON DAG with persisted node outputs;
+        the hard parts the servers solve (deterministic replay, history caps,
+        process snapshots) do not arise when every node's result is a row.
+      </p>
+
+      <p>
+        Flowise's archive notice is the cautionary tale worth taking seriously:
+        a rigid visual builder loses to a coding agent that can edit a text
+        file. The definition format, the validator and the hot-reload from disk
+        are the product; the canvas is a viewer first and an editor last.
+      </p>
+
+      <h3>Borrowed into this design</h3>
+      <ul>
+        <li>
+          <strong>Named output ports</strong> instead of edge predicates (Sim
+          <code>connections: {success, error}</code>, n8n's red error output,
+          Dify's fail branch and one-branch-per-button Human Input). Every node
+          has <code>success</code>/<code>error</code>; branching nodes define
+          their own. Silent "continue on error" that passes input through
+          unchanged (n8n's plain Continue) is deliberately not offered.
+        </li>
+        <li>
+          <strong>Graph keyed by stable ids with layout kept separate</strong>
+          (Windmill OpenFlow, Node-RED flat array). n8n keys edges by node name
+          so a rename rewrites every edge; Dify and Langflow dump ReactFlow
+          state so every drag dirties git.
+        </li>
+        <li>
+          <strong>Decider loop over persisted state</strong> rather than
+          long-lived coroutines (Conductor, Kestra, Windmill). Recovery on boot
+          is "run the decider over every open run".
+        </li>
+        <li>
+          <strong
+            >Per-node results keyed by (run, node, attempt), never re-executed
+            once complete</strong
+          >
+          (Inngest, DBOS). No replay-determinism contract, no history caps.
+        </li>
+        <li>
+          <strong
+            >Human wait = row + signed one-shot resume links + typed response
+            schema + default timeout with explicit expiry behaviour</strong
+          >
+          (Windmill resume/cancel URLs and resume form, Kestra
+          <code>behavior</code> enum, Dify's 3-day default, Mastra
+          <code>resumeSchema</code>). Record who responded and via what (n8n
+          "Capture Who Responded", Windmill <code>approvers</code>).
+        </li>
+        <li>
+          <strong>Buttons where the human already is</strong> (n8n Send-and-Wait
+          on Telegram/Slack, Windmill interactive Slack approvals, Sim
+          notifications). Telegram inline keyboard and keyword replies map to
+          the same resolve path as the web inbox.
+        </li>
+        <li>
+          <strong
+            >Interrupts addressed by id, resumed with a value map, re-emitted on
+            restore</strong
+          >
+          (LangGraph <code>__interrupt__</code>, Microsoft Agent Framework
+          pending requests, Strands). Never matched by position.
+        </li>
+        <li>
+          <strong>Persist signals before matching</strong> (Restate promises
+          resolved before the waiter exists, Hatchet lookback). The Inngest
+          failure mode, where an event that arrives before
+          <code>waitForEvent</code> runs is lost, is avoided by matching
+          <code>wait_event</code> against the already-persisted events table.
+        </li>
+        <li>
+          <strong>Timers as rows</strong> (DBOS durable sleep, Kestra
+          <code>pauseDuration</code>): a <code>resume_at</code> column, scanned
+          on boot and on a tick.
+        </li>
+        <li>
+          <strong>Retry precedence and fatal/retryable split</strong> (Vercel
+          <code>FatalError</code>/<code>RetryableError</code>, DBOS
+          <code>shouldRetry</code>, n8n's documented retry-vs-continue
+          conflict).
+        </li>
+        <li>
+          <strong>Rerun from a node as a fork</strong> (Windmill
+          restart-from-step, DBOS <code>forkWorkflow</code>, Conductor
+          <code>rerun</code>, LangGraph time travel), combined with the SDK's
+          <code>forkSession</code> for agent nodes.
+        </li>
+        <li>
+          <strong>Snapshot the definition into the run</strong> (Activepieces
+          DRAFT/LOCKED versions, Kestra revisions, Microsoft AF's requirement of
+          identical topology on resume). A wait that resolves days later runs
+          the graph it started with.
+        </li>
+        <li>
+          <strong
+            >Node-level and tool-level approval are separate features</strong
+          >
+          (OpenAI <code>needs_approval</code> vs Mastra <code>suspend</code>;
+          Microsoft AF has both). The <code>human</code> node covers the first;
+          <code>approve_tools</code> via the SDK's <code>PreToolUse</code>
+          <code>defer</code> covers the second.
+        </li>
+        <li>
+          <strong
+            >Typed handoff between LLM steps via structured output, not
+            transcripts</strong
+          >
+          (LangGraph/Mastra typed state; the Claude SDK's own advice to pass
+          results as application state rather than shipping transcripts). Only
+          <code>session_id</code> and <code>structured_output</code> are stored
+          per agent node.
+        </li>
+        <li>
+          <strong
+            >Single payload per edge plus an explicit <code>map</code></strong
+          >
+          (Node-RED, Windmill) rather than n8n's implicit item arrays. Map items
+          get stable ids so fork and memoisation keys stay unambiguous
+          (Windmill's restart-inside-loops bug), and failed items are kept as
+          error entries rather than dropped (Claude SDK workflows, Dify
+          iteration modes).
+        </li>
+        <li>
+          <strong
+            >Concurrency policy per workflow and a unique run key for idempotent
+            triggers</strong
+          >
+          (Kestra <code>QUEUE|CANCEL|FAIL</code>, Restate/DBOS workflow-id
+          dedupe).
+        </li>
+        <li>
+          <strong>Three synced views</strong> (Kestra: YAML, form, topology). v1
+          ships JSON + graph; the form editor comes second, drag-and-drop last.
+        </li>
+        <li>
+          <strong>Run timeline as an append-only event log</strong> (Temporal
+          history, Hatchet event log) feeding the per-node UI.
+        </li>
+      </ul>
+
+      <h3>Deliberately not borrowed</h3>
+      <ul>
+        <li>
+          Replay determinism as a programming contract (Temporal, Vercel's
+          sandboxed workflow context). Unnecessary when node outputs are rows.
+        </li>
+        <li>
+          Process snapshotting (Trigger.dev). Needs a supervisor; waits are
+          explicit node boundaries here instead.
+        </li>
+        <li>
+          Item-array semantics on every edge (n8n). The largest learning-curve
+          complaint about n8n.
+        </li>
+        <li>
+          Unbounded waits (Sim, Activepieces, Kestra without duration,
+          LangGraph, OpenAI, Claude SDK). Every wait here expires.
+        </li>
+        <li>
+          Bearer links with no scoping (n8n link buttons, Dify email links, Sim
+          portal URLs). Links here are signed, single-use, bound to one wait and
+          one action, and the web inbox sits behind the existing session auth.
+        </li>
+        <li>
+          Out-of-process code sandboxes (n8n task runners, QuickJS in Windmill).
+          The threat model has one author with shell access;
+          <code>node:vm</code> is enough for determinism, and heavy logic goes
+          in <code>shell</code> or <code>agent</code> nodes anyway.
+        </li>
+        <li>
+          Platform-gated basics (LangGraph's cron and inbox in LangSmith,
+          AgentKit's HITL only inside Inngest). Scheduling and the SSE bus
+          already exist in-process.
+        </li>
+      </ul>
+
+      <h3>Sources</h3>
+      <p style="font-size: 0.85rem; color: var(--muted)">
+        Temporal
+        <a href="https://docs.temporal.io/encyclopedia/workflow-message-passing"
+          >message passing</a
+        >,
+        <a href="https://docs.temporal.io/workflow-execution/event"
+          >event history</a
+        >
+        · Restate
+        <a href="https://docs.restate.dev/develop/ts/awakeables">awakeables</a>,
+        <a href="https://github.com/restatedev/restate/blob/main/LICENSE"
+          >license</a
+        >
+        · DBOS
+        <a
+          href="https://docs.dbos.dev/typescript/tutorials/workflow-communication"
+          >communication</a
+        >,
+        <a href="https://docs.dbos.dev/typescript/reference/client">client</a> ·
+        Inngest
+        <a
+          href="https://www.inngest.com/docs/reference/functions/step-wait-for-event"
+          >waitForEvent</a
+        >,
+        <a href="https://github.com/inngest/inngest/blob/main/LICENSE.md"
+          >license</a
+        >
+        · Hatchet
+        <a href="https://docs.hatchet.run/v1/durable-event-waits"
+          >durable event waits</a
+        >
+        · Trigger.dev
+        <a href="https://trigger.dev/docs/wait-for-token">wait for token</a> ·
+        Vercel
+        <a href="https://workflow-sdk.dev/docs/foundations/hooks">hooks</a>,
+        <a href="https://workflow-sdk.dev/docs/ai/human-in-the-loop">HITL</a> ·
+        Conductor
+        <a
+          href="https://conductor-oss.github.io/conductor/documentation/api/workflow.html"
+          >workflow API</a
+        >
+        · Windmill
+        <a href="https://www.windmill.dev/docs/flows/flow_approval">approvals</a
+        >, <a href="https://www.windmill.dev/docs/openflow">OpenFlow</a>,
+        <a href="https://www.windmill.dev/blog/launch-week-1/restartable-flows"
+          >restartable flows</a
+        >
+        · Kestra
+        <a
+          href="https://kestra.io/plugins/core/flow/io.kestra.plugin.core.flow.pause"
+          >Pause</a
+        >, <a href="https://kestra.io/docs/concepts/replay">replay</a>,
+        <a href="https://kestra.io/docs/workflow-components/concurrency"
+          >concurrency</a
+        >
+        · n8n
+        <a href="https://docs.n8n.io/sustainable-use-license/">license</a>,
+        <a
+          href="https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.wait.md"
+          >Wait</a
+        >,
+        <a
+          href="https://docs.n8n.io/integrations/builtin/app-nodes/n8n-nodes-base.slack/approvals.md"
+          >approvals</a
+        >,
+        <a
+          href="https://docs.n8n.io/build/flow-logic/handle-errors-gracefully.md"
+          >errors</a
+        >
+        · Activepieces
+        <a href="https://www.activepieces.com/docs/endpoints/flows/schema.md"
+          >flow schema</a
+        >
+        · Node-RED
+        <a href="https://nodered.org/docs/user-guide/writing-functions"
+          >functions</a
+        >
+        · Dify
+        <a href="https://docs.dify.ai/en/use-dify/nodes/human-input"
+          >Human Input</a
+        >,
+        <a href="https://github.com/langgenius/dify/blob/main/LICENSE"
+          >license</a
+        >
+        · Sim <a href="https://docs.sim.ai/blocks/human-in-the-loop">HITL</a>,
+        <a href="https://docs.sim.ai/execution/basics">execution</a> · Flowise
+        <a href="https://github.com/FlowiseAI/Flowise/discussions/6727"
+          >archive notice</a
+        >
+        · LangGraph
+        <a href="https://docs.langchain.com/oss/python/langgraph/interrupts"
+          >interrupts</a
+        >,
+        <a href="https://docs.langchain.com/oss/python/langgraph/persistence"
+          >persistence</a
+        >
+        · Mastra
+        <a href="https://mastra.ai/docs/workflows/suspend-and-resume"
+          >suspend and resume</a
+        >
+        · Microsoft Agent Framework
+        <a
+          href="https://learn.microsoft.com/en-us/agent-framework/workflows/human-in-the-loop"
+          >HITL</a
+        >,
+        <a
+          href="https://learn.microsoft.com/en-us/agent-framework/workflows/checkpoints"
+          >checkpoints</a
+        >
+        · OpenAI Agents
+        <a
+          href="https://openai.github.io/openai-agents-js/guides/human-in-the-loop/"
+          >HITL</a
+        >
+        · Pydantic AI
+        <a href="https://pydantic.dev/docs/ai/tools-toolsets/deferred-tools/"
+          >deferred tools</a
+        >
+        · Claude Agent SDK
+        <a href="https://code.claude.com/docs/en/agent-sdk/hooks">hooks</a>,
+        <a href="https://code.claude.com/docs/en/agent-sdk/permissions"
+          >permissions</a
+        >,
+        <a href="https://code.claude.com/docs/en/agent-sdk/structured-outputs"
+          >structured outputs</a
+        >,
+        <a href="https://code.claude.com/docs/en/agent-sdk/sessions"
+          >sessions</a
+        >
+      </p>
+
+      <h2 id="phases">Phases</h2>
+      <ol>
+        <li>
+          <strong>Engine core.</strong> Schema, store, engine, executors for
+          <code>shell</code>, <code>agent</code>, <code>condition</code>,
+          <code>switch</code>, <code>template</code>, <code>transform</code>,
+          <code>send</code>, <code>emit</code>, <code>delay</code>,
+          <code>human</code> (web resolution only), <code>wait_event</code>.
+          Tables. Tests against an in-memory SQLite (make
+          <code>initDatabase</code> accept a path) and a fake agent runner.
+        </li>
+        <li>
+          <strong>Triggers and cut-over.</strong> <code>cron</code>,
+          <code>event</code>, <code>manual</code>, <code>at</code>,
+          <code>webhook</code>. Migration script. Agent tools swapped. Old
+          bus/scheduler/heartbeat deleted. <code>/workflows</code> slash
+          command. Existing handlers keep running as one-node workflows.
+        </li>
+        <li>
+          <strong>Web module.</strong> Nav restructure, workflows list, run view
+          with live graph and timeline, fork-from-node, inbox, JSON editor with
+          synced graph preview. Admin handlers/heartbeat pages removed.
+        </li>
+        <li>
+          <strong>Channel-side human loop.</strong> Telegram buttons, signed
+          approval links, router wait matching, agent-mediated
+          <code>workflow_respond</code>, <code>approve_tools</code> via
+          <code>PreToolUse</code> defer, alerts (<code>on_failure</code>,
+          <code>on_missed</code>), <code>map</code>, sub-workflows.
+        </li>
+        <li>
+          <strong>Editor.</strong> Per-node form editor in the side sheet, then
+          drag-and-drop on the canvas. Optional.
+        </li>
+      </ol>
+      <p>Each phase ships on its own; the system is usable after phase 2.</p>
+
+      <h2 id="decisions">Decisions to confirm</h2>
+      <ul>
+        <li>
+          Declarative JSON graph, not workflow-as-code. The two in-process
+          alternatives (Vercel Workflow DevKit, DBOS) are code-first; a graph an
+          agent can write as data and a run view that knows the shape up front
+          both need the declarative form.
+        </li>
+        <li>
+          Definition files in JSON, not YAML, to avoid a parser dependency. A
+          <code>$schema</code> key gives editor completion.
+        </li>
+        <li>
+          Expressions are sandboxed JS predicates in <code>node:vm</code>, not a
+          custom language and not an out-of-process runner. The sandbox exists
+          for determinism, not as a security boundary.
+        </li>
+        <li>
+          No external engine (Temporal, Inngest, n8n). The interpreter is a few
+          hundred lines and fits the "small enough to understand" rule.
+        </li>
+        <li>
+          Every wait expires. Default 3 days for <code>human</code>;
+          <code>wait_event</code> requires an explicit timeout.
+        </li>
+        <li>
+          <code>@xyflow/react</code> + <code>@dagrejs/dagre</code> are the only
+          new web dependencies.
+        </li>
+        <li>
+          Feed-triage reply-by-number is modelled as a long-lived
+          <code>human</code> wait on the same run rather than a separate
+          email-triggered workflow. A night's run stays
+          <code>waiting</code> until the reply or a 7-day expiry, which is also
+          what the run list should show.
+        </li>
+      </ul>
+    </main>
+  </body>
+</html>
