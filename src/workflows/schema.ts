@@ -258,6 +258,31 @@ export function portsOf(node: WorkflowNode): string[] {
   }
 }
 
+// Every `nodes.<id>` a node reads, taken from its {{ holes }} and from the
+// expression fields that are evaluated directly.
+function nodeRefsIn(node: WorkflowNode): Set<string> {
+  const sources: string[] = [];
+  const walk = (value: unknown): void => {
+    if (typeof value === 'string') sources.push(value);
+    else if (Array.isArray(value)) value.forEach(walk);
+    else if (value && typeof value === 'object')
+      Object.values(value).forEach(walk);
+  };
+  walk(node);
+
+  const refs = new Set<string>();
+  const collect = (text: string) => {
+    for (const m of text.matchAll(/\bnodes\.([A-Za-z_$][\w$]*)/g))
+      refs.add(m[1]);
+  };
+  for (const text of sources) {
+    for (const hole of text.matchAll(/\{\{([\s\S]*?)\}\}/g)) collect(hole[1]);
+  }
+  if ('expr' in node && typeof node.expr === 'string') collect(node.expr);
+  if ('over' in node && typeof node.over === 'string') collect(node.over);
+  return refs;
+}
+
 export class WorkflowValidationError extends Error {
   constructor(
     message: string,
@@ -329,6 +354,41 @@ export function checkGraph(def: WorkflowDefinition): string[] {
   }
   for (const id of ids)
     if (!reachable.has(id)) issues.push(`node "${id}" is unreachable`);
+
+  // A node can only read what has certainly run before it. Referencing
+  // `nodes.X` where X is on no upstream path is a wiring mistake that would
+  // otherwise surface at 3am as "cannot read properties of undefined".
+  const parents = new Map<string, string[]>();
+  for (const e of def.edges) {
+    if (!ids.has(e.from) || !ids.has(e.to)) continue;
+    const list = parents.get(e.to) ?? [];
+    list.push(e.from);
+    parents.set(e.to, list);
+  }
+  const ancestorsOf = (target: string): Set<string> => {
+    const seen = new Set<string>();
+    const queue = [...(parents.get(target) ?? [])];
+    while (queue.length) {
+      const next = queue.shift()!;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      for (const up of parents.get(next) ?? []) queue.push(up);
+    }
+    return seen;
+  };
+  for (const [id, node] of Object.entries(def.nodes)) {
+    const upstream = ancestorsOf(id);
+    for (const ref of nodeRefsIn(node)) {
+      if (ref === id || upstream.has(ref)) continue;
+      if (!ids.has(ref)) {
+        issues.push(`node "${id}" reads nodes.${ref}, which does not exist`);
+      } else {
+        issues.push(
+          `node "${id}" reads nodes.${ref}, which is not upstream of it (no edge path from "${ref}" to "${id}")`,
+        );
+      }
+    }
+  }
 
   for (const [id, node] of Object.entries(def.nodes)) {
     if (node.type === 'template' && !node.template && !node.file)

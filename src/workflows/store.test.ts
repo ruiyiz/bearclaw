@@ -102,6 +102,8 @@ test('deleteWorkflow removes both the file and the row', () => {
 test('the watcher reloads on its own, with or without a callback', async () => {
   const stop = watchWorkflowFiles();
   try {
+    // fs.watch on macOS can miss a create that lands the same tick it arms.
+    await new Promise((r) => setTimeout(r, 150));
     writeRaw('watched.json', { ...DEF, slug: 'watched', name: 'Watched' });
     // Debounced inside the watcher; poll rather than guess a sleep.
     const deadline = Date.now() + 8000;

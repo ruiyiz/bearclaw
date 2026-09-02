@@ -96,16 +96,21 @@
     "send": {
       "type": "shell",
       "cmd": "/Users/ruiyiz/.bun/bin/gws gmail +send --to {{q inputs.to}} --from {{q inputs.from}} --subject {{q nodes.compose.output.subject}} --body {{q nodes.compose.output.html}} --html",
+      "parse": "json",
       "timeout": "2m",
       "retry": {
         "max": 2,
         "backoff": "30s"
       }
     },
+    "batch": {
+      "type": "transform",
+      "expr": "({\n  created_at: run.started_at,\n  run_id: run.id,\n  wait_node: 'ask',\n  thread_id: nodes.send.output.threadId,\n  message_id: nodes.send.output.id,\n  items: nodes.compose.output.batch.items,\n})"
+    },
     "persist": {
       "type": "shell",
       "cmd": "cat > /Users/ruiyiz/.bearclaw/var/agents/main/feed-batch.json",
-      "stdin": "{{nodes.compose.output.batch}}"
+      "stdin": "{{nodes.batch.output}}"
     },
     "mark_read": {
       "type": "shell",
@@ -118,6 +123,11 @@
       "to": ["email:main"],
       "expires": "7d",
       "notify": false
+    },
+    "act": {
+      "type": "agent",
+      "prompt": "The user answered this run's digest. Apply their reply to THIS run's batch and nothing else.\n\nTheir reply:\n{{json nodes.ask.output.response}}\n\nThis run's batch — numbers resolve against `n` here, never against the batch file on disk, which a later digest may already have overwritten:\n{{json nodes.batch.output}}\n\nActions, all reversible, so just do them:\n- save N: `/Users/ruiyiz/.local/bin/feeds star <id>`, then append a note (title, URL, date, one-line summary) to /Users/ruiyiz/Vault/ruiyiz/inbox/feeds/<YYYY-MM-DD>.md\n- summarize N: `/Users/ruiyiz/.local/bin/feeds content <id>` (add --fetch if the content looks truncated) and write the summary into your reply\n- dismiss N: no action, it is only a negative-interest signal\n- next: serve the next batch by the same rules the nightly digest uses\n\nA number with no matching `n` in the batch above: say so, do not guess.\n\nThen send the confirmation on the same email thread, in one command:\n  /Users/ruiyiz/.bun/bin/gws gmail +reply --message-id {{nodes.batch.output.message_id}} --from {{q inputs.from}} --body <your html> --html\n\nReport what you did in one line (e.g. \"saved 1,4 · summarized 7 · dismissed 2\"). Do not call send_message; the emailed reply above is the whole delivery.",
+      "timeout": "10m"
     },
     "caught_up": {
       "type": "shell",
@@ -171,6 +181,10 @@
     },
     {
       "from": "send",
+      "to": "batch"
+    },
+    {
+      "from": "batch",
       "to": "persist"
     },
     {
@@ -180,6 +194,11 @@
     {
       "from": "mark_read",
       "to": "ask"
+    },
+    {
+      "from": "ask",
+      "port": "submitted",
+      "to": "act"
     },
     {
       "from": "caught_up",

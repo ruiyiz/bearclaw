@@ -40,8 +40,13 @@ test('parseDefinition rejects an unknown node type', () => {
 });
 
 test('checkGraph catches dangling edges, bad ports and cycles', () => {
+  // Edgeless, so `b` must not read `a` — that is its own error now.
   const dangling = parseDefinition({
     ...MINIMAL,
+    nodes: {
+      a: { type: 'transform', expr: '1' },
+      b: { type: 'transform', expr: '2' },
+    },
     edges: [],
   });
   assert.deepEqual(
@@ -176,4 +181,102 @@ test('map rejects an inner node that would park per item', () => {
     ),
   );
   assert.deepEqual(issuesFor({ type: 'shell', cmd: 'echo {{item}}' }), []);
+});
+
+test('a node cannot read one that is not upstream of it', () => {
+  const base = { name: 'Wiring', slug: 'wiring', owner: 'main' };
+
+  // The exact mistake: a node added to the middle of a chain but never wired,
+  // so it becomes a second entry and runs before what it reads.
+  const issues = (() => {
+    try {
+      parseDefinition({
+        ...base,
+        nodes: {
+          send: { type: 'shell', cmd: 'send-it', parse: 'json' },
+          batch: {
+            type: 'transform',
+            expr: '({ id: nodes.send.output.threadId })',
+          },
+          persist: {
+            type: 'shell',
+            cmd: 'cat > out',
+            stdin: '{{nodes.batch.output}}',
+          },
+        },
+        edges: [{ from: 'send', to: 'persist' }],
+      });
+      return [];
+    } catch (err) {
+      return (err as WorkflowValidationError).issues;
+    }
+  })();
+  assert.ok(issues.some((i) => i.includes('"batch" reads nodes.send')));
+  assert.ok(issues.some((i) => i.includes('not upstream')));
+
+  // Wired through, the same three nodes are fine.
+  const ok = parseDefinition({
+    ...base,
+    nodes: {
+      send: { type: 'shell', cmd: 'send-it', parse: 'json' },
+      batch: {
+        type: 'transform',
+        expr: '({ id: nodes.send.output.threadId })',
+      },
+      persist: {
+        type: 'shell',
+        cmd: 'cat > out',
+        stdin: '{{nodes.batch.output}}',
+      },
+    },
+    edges: [
+      { from: 'send', to: 'batch' },
+      { from: 'batch', to: 'persist' },
+    ],
+  });
+  assert.equal(Object.keys(ok.nodes).length, 3);
+});
+
+test('a join may read either branch above it', () => {
+  const def = parseDefinition({
+    name: 'Join',
+    slug: 'join',
+    owner: 'main',
+    nodes: {
+      any: { type: 'condition', expr: 'true' },
+      left: { type: 'transform', expr: '"l"' },
+      right: { type: 'transform', expr: '"r"' },
+      persist: {
+        type: 'shell',
+        cmd: 'cat > out',
+        stdin: '{{ nodes.left ? nodes.left.output : nodes.right.output }}',
+      },
+    },
+    edges: [
+      { from: 'any', port: 'true', to: 'left' },
+      { from: 'any', port: 'false', to: 'right' },
+      { from: 'left', to: 'persist' },
+      { from: 'right', to: 'persist' },
+    ],
+  });
+  assert.equal(def.slug, 'join');
+});
+
+test('reading a node that does not exist at all is caught', () => {
+  try {
+    parseDefinition({
+      name: 'Ghost',
+      slug: 'ghost',
+      owner: 'main',
+      nodes: { a: { type: 'transform', expr: 'nodes.nope.output' } },
+      edges: [],
+    });
+    assert.fail('expected a validation error');
+  } catch (err) {
+    assert.ok(
+      (err as WorkflowValidationError).issues.some((i) =>
+        i.includes('does not exist'),
+      ),
+    );
+  }
 });
