@@ -157,7 +157,7 @@ export const triggerDeclSchema = z.object({
   type: z.enum(['cron', 'event', 'manual', 'webhook', 'at']),
   cron: z.string().optional(),
   timezone: z.string().optional(),
-  quiet: z.tuple([z.number(), z.number()]).optional(),
+  quiet: z.object({ start: z.string(), end: z.string() }).optional(),
   catchup: z.enum(['skip', 'once', 'all']).default('skip'),
   event: z.string().optional(),
   filter: z.record(z.string(), jsonValue).optional(),

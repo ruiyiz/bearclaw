@@ -22,7 +22,6 @@ import {
   TELEGRAM_BOT_POOL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
-  TIMEZONE,
   TMP_DIR,
   VAR_DIR,
   STT_ECHO_ENABLED,
@@ -35,7 +34,6 @@ import {
   DEFAULT_MODEL,
   runContainerAgent,
   writeAgentsSnapshot,
-  writeHandlersSnapshot,
 } from './agent/runner.js';
 import { AgentSession } from './agent/session.js';
 import type { EffortLevel } from './agent/runner.js';
@@ -54,13 +52,8 @@ import { startHttpServer } from './server/http.js';
 import { isNestedRegistry, resolveRegistry } from './agent-registry.js';
 import { guessMimetype, resolveMediaSource } from './media/source.js';
 import {
-  createHandler,
-  deleteHandler,
-  emitEvent,
   getAllChats,
-  getAllHandlers,
   deleteMessageById,
-  getHandlerById,
   getMessagesSince,
   getNewMessages,
   initDatabase,
@@ -69,19 +62,15 @@ import {
   storeChatMetadata,
   storeMessage,
   touchWebSession,
-  updateHandler,
   updateMessageContent,
 } from './db.js';
 import { commandMap } from './commands/registry.js';
-import { startEventBusLoop } from './events/bus.js';
-import { registerHeartbeatHandlers } from './events/heartbeat.js';
 import {
   isInActiveWindow,
   getNextActiveTime,
   formatNextActiveTime,
 } from './utils/time.js';
 import { findChannel } from './channels/router.js';
-import { startSchedulerEmitter } from './events/scheduler.js';
 import { generateSpeech } from './media/tts.js';
 import {
   AgentRegistry,
@@ -99,6 +88,7 @@ import { generateAndPersistTitle } from './agent/title-gen.js';
 import { logger } from './logger.js';
 import { initSubprocessManager } from './agent/subprocess-manager.js';
 import { startMaintenance } from './maintenance.js';
+import { startWorkflowService } from './workflows/service.js';
 
 let lastTimestamp = '';
 let sessions: Session = {};
@@ -802,9 +792,6 @@ async function runAgent(
     new Set(Object.keys(registeredAgents)),
   );
 
-  const handlers = getAllHandlers();
-  writeHandlersSnapshot(agent.folder, isMain, handlers);
-
   try {
     const session = getOrCreateStreamingSession(agent, chatJid);
     const turn = await session.runTurn(prompt, { onText, onActivity });
@@ -888,7 +875,6 @@ async function runBgAgent(
     availableGroups,
     new Set(Object.keys(registeredAgents)),
   );
-  writeHandlersSnapshot(agent.folder, isMain, getAllHandlers());
 
   logger.info(
     { agent: agent.name, chatJid, promptLen: prompt.length },
@@ -1162,11 +1148,6 @@ function startIpcWatcher(): void {
 async function processTaskIpc(
   data: {
     type: string;
-    prompt?: string;
-    cron?: string | null;
-    runAt?: string | null;
-    context_mode?: string;
-    agentFolder?: string;
     jid?: string;
     name?: string;
     folder?: string;
@@ -1176,218 +1157,12 @@ async function processTaskIpc(
     to?: string;
     subject?: string;
     body?: string;
-    eventType?: string;
-    payload?: Record<string, unknown>;
-    handlerId?: string;
-    filter?: string | null;
-    contextMode?: string;
-    cooldownMs?: number;
-    maxTriggers?: number | null;
-    targetAgent?: string;
     activeHours?: { cron: string; autoReply?: string };
   },
   sourceAgent: string,
   isMain: boolean,
 ): Promise<void> {
-  const { CronExpressionParser } = await import('cron-parser');
-
   switch (data.type) {
-    case 'schedule_task':
-      if (data.prompt && data.agentFolder) {
-        const targetAgent = data.agentFolder;
-        if (!isMain && targetAgent !== sourceAgent) {
-          logger.warn(
-            { sourceAgent, targetAgent },
-            'Unauthorized schedule_task attempt blocked',
-          );
-          break;
-        }
-
-        const handlerId = `handler-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const contextMode =
-          data.context_mode === 'agent' || data.context_mode === 'isolated'
-            ? data.context_mode
-            : 'isolated';
-
-        let cron: string | null = data.cron || null;
-        let nextRun: string | null = null;
-        let maxTriggers: number | null = null;
-
-        if (cron) {
-          try {
-            const interval = CronExpressionParser.parse(cron, {
-              tz: TIMEZONE,
-            });
-            nextRun = interval.next().toISOString();
-          } catch {
-            logger.warn({ cron }, 'Invalid cron expression');
-            break;
-          }
-        } else if (data.runAt) {
-          const scheduled = new Date(data.runAt);
-          if (isNaN(scheduled.getTime())) {
-            logger.warn({ runAt: data.runAt }, 'Invalid timestamp');
-            break;
-          }
-          nextRun = scheduled.toISOString();
-          maxTriggers = 1;
-        } else {
-          logger.warn('schedule_task requires cron or runAt');
-          break;
-        }
-
-        const filter = JSON.stringify({ handler_id: handlerId });
-        createHandler({
-          id: handlerId,
-          group_folder: targetAgent,
-          prompt: data.prompt,
-          context_mode: contextMode,
-          event_type: 'cron_trigger',
-          filter,
-          cron,
-          next_run: nextRun,
-          cooldown_ms: 0,
-          max_triggers: maxTriggers,
-          status: 'active',
-          created_at: new Date().toISOString(),
-        });
-        logger.info(
-          { handlerId, sourceAgent, targetAgent, contextMode, cron },
-          'Scheduled handler created via IPC',
-        );
-      }
-      break;
-
-    case 'refresh_agents':
-      if (isMain) {
-        logger.info(
-          { sourceAgent },
-          'Agent metadata refresh requested via IPC',
-        );
-        for (const ch of channels) {
-          await ch.syncMetadata?.(true);
-        }
-        const availableGroups = getAvailableGroups();
-        writeAgentsSnapshot(
-          sourceAgent,
-          true,
-          availableGroups,
-          new Set(Object.keys(registeredAgents)),
-        );
-      } else {
-        logger.warn(
-          { sourceAgent },
-          'Unauthorized refresh_agents attempt blocked',
-        );
-      }
-      break;
-
-    case 'emit_event':
-      if (data.eventType) {
-        emitEvent(data.eventType, data.payload || {});
-        logger.info(
-          { eventType: data.eventType, sourceAgent },
-          'Event emitted via IPC',
-        );
-      }
-      break;
-
-    case 'register_handler':
-      if (data.eventType && data.prompt) {
-        const handlerTarget = data.targetAgent || sourceAgent;
-        if (!isMain && handlerTarget !== sourceAgent) {
-          logger.warn(
-            { sourceAgent, targetAgent: handlerTarget },
-            'Unauthorized register_handler attempt blocked',
-          );
-          break;
-        }
-
-        const handlerId = `handler-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const handlerContextMode =
-          data.contextMode === 'agent' || data.contextMode === 'isolated'
-            ? data.contextMode
-            : 'isolated';
-        createHandler({
-          id: handlerId,
-          event_type: data.eventType,
-          filter: data.filter ?? null,
-          group_folder: handlerTarget,
-          prompt: data.prompt,
-          context_mode: handlerContextMode,
-          cron: null,
-          next_run: null,
-          cooldown_ms: data.cooldownMs || 0,
-          max_triggers: data.maxTriggers ?? null,
-          status: 'active',
-          created_at: new Date().toISOString(),
-        });
-        logger.info(
-          {
-            handlerId,
-            eventType: data.eventType,
-            sourceAgent,
-            targetAgent: handlerTarget,
-          },
-          'Handler registered via IPC',
-        );
-      }
-      break;
-
-    case 'pause_handler':
-      if (data.handlerId) {
-        const handler = getHandlerById(data.handlerId);
-        if (handler && (isMain || handler.group_folder === sourceAgent)) {
-          updateHandler(data.handlerId, { status: 'paused' });
-          logger.info(
-            { handlerId: data.handlerId, sourceAgent },
-            'Handler paused via IPC',
-          );
-        } else {
-          logger.warn(
-            { handlerId: data.handlerId, sourceAgent },
-            'Unauthorized handler pause attempt',
-          );
-        }
-      }
-      break;
-
-    case 'resume_handler':
-      if (data.handlerId) {
-        const handler = getHandlerById(data.handlerId);
-        if (handler && (isMain || handler.group_folder === sourceAgent)) {
-          updateHandler(data.handlerId, { status: 'active' });
-          logger.info(
-            { handlerId: data.handlerId, sourceAgent },
-            'Handler resumed via IPC',
-          );
-        } else {
-          logger.warn(
-            { handlerId: data.handlerId, sourceAgent },
-            'Unauthorized handler resume attempt',
-          );
-        }
-      }
-      break;
-
-    case 'cancel_handler':
-      if (data.handlerId) {
-        const handler = getHandlerById(data.handlerId);
-        if (handler && (isMain || handler.group_folder === sourceAgent)) {
-          deleteHandler(data.handlerId);
-          logger.info(
-            { handlerId: data.handlerId, sourceAgent },
-            'Handler cancelled via IPC',
-          );
-        } else {
-          logger.warn(
-            { handlerId: data.handlerId, sourceAgent },
-            'Unauthorized handler cancel attempt',
-          );
-        }
-      }
-      break;
-
     case 'register_agent':
       if (!isMain) {
         logger.warn(
@@ -1506,8 +1281,6 @@ async function main(): Promise<void> {
   });
   initSubprocessManager();
   startMaintenance();
-
-  registerHeartbeatHandlers(registeredAgents);
 
   // Initialize channels based on config
   if (!TELEGRAM_ONLY) {
@@ -1699,12 +1472,7 @@ async function main(): Promise<void> {
   ensureWebAgentRegistered(MAIN_AGENT_FOLDER);
 
   // Start all subsystems unconditionally
-  startSchedulerEmitter();
-  startEventBusLoop({
-    registeredAgents: () => registeredAgents,
-    getSessions: () => sessions,
-    saveSessions: () => persistSessions(),
-  });
+  void startWorkflowService();
   startIpcWatcher();
   startMessageLoop();
 }

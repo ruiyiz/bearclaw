@@ -25,7 +25,7 @@ import {
 import { createIpcMcp } from './ipc-mcp.js';
 import { emitEvent, getDb, type StoredMessage } from '../db.js';
 import { logger } from '../logger.js';
-import { Handler, RegisteredAgent } from '../types.js';
+import { RegisteredAgent } from '../types.js';
 import { loadUserMcpServers } from './mcp-config.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 
@@ -702,54 +702,12 @@ export interface AvailableGroup {
   isRegistered: boolean;
 }
 
-// Per-agent caches of the last-written snapshot JSON. We write only when the
+// Per-agent cache of the last-written snapshot JSON. We write only when the
 // content differs, and we hand the actual disk write to fs.promises so the
 // pre-query path doesn't block on it. The next IPC MCP read inside the agent
 // happens hundreds of ms later (after SDK init + first tool dispatch), so a
 // fire-and-forget write lands well before any reader.
-const lastHandlersJson: Record<string, string> = {};
 const lastGroupsJson: Record<string, string> = {};
-
-export function writeHandlersSnapshot(
-  agentFolder: string,
-  isMain: boolean,
-  handlers: Handler[],
-): void {
-  const filteredHandlers = isMain
-    ? handlers
-    : handlers.filter((h) => h.group_folder === agentFolder);
-
-  const json = JSON.stringify(
-    filteredHandlers.map((h) => ({
-      id: h.id,
-      event_type: h.event_type,
-      filter: h.filter,
-      group_folder: h.group_folder,
-      prompt: h.prompt.slice(0, 100),
-      context_mode: h.context_mode,
-      cron: h.cron,
-      next_run: h.next_run,
-      cooldown_ms: h.cooldown_ms,
-      max_triggers: h.max_triggers,
-      trigger_count: h.trigger_count,
-      status: h.status,
-    })),
-    null,
-    2,
-  );
-  if (lastHandlersJson[agentFolder] === json) return;
-  lastHandlersJson[agentFolder] = json;
-
-  const agentIpcDir = path.join(RUN_DIR, 'ipc', agentFolder);
-  const handlersFile = path.join(agentIpcDir, 'current_handlers.json');
-  void fs.promises
-    .mkdir(agentIpcDir, { recursive: true })
-    .then(() => fs.promises.writeFile(handlersFile, json))
-    .catch((err) => {
-      delete lastHandlersJson[agentFolder];
-      logger.warn({ err, agentFolder }, 'Handlers snapshot write failed');
-    });
-}
 
 export function writeAgentsSnapshot(
   agentFolder: string,

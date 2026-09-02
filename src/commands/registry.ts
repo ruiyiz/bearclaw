@@ -2,12 +2,12 @@ import { bgCommand } from './bg.js';
 import { cancelCommand } from './cancel.js';
 import { contextCommand } from './context.js';
 import { effortCommand } from './effort.js';
-import { jobsCommand } from './jobs.js';
 import { mcpCommand } from './mcp.js';
 import { modelCommand } from './model.js';
 import { newCommand } from './new.js';
 import { skillsCommand } from './skills.js';
 import { statusCommand } from './status.js';
+import { workflowsCommand } from './workflows.js';
 import { SlashCommand } from './types.js';
 
 const helpCommand: SlashCommand = {
@@ -25,12 +25,12 @@ export const commands: SlashCommand[] = [
   contextCommand,
   effortCommand,
   helpCommand,
-  jobsCommand,
   mcpCommand,
   modelCommand,
   newCommand,
   skillsCommand,
   statusCommand,
+  workflowsCommand,
 ].sort((a, b) => a.name.localeCompare(b.name));
 
 export const commandMap = new Map(commands.map((c) => [c.name, c]));

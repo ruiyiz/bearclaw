@@ -617,3 +617,171 @@ export function listRunEvents(runId: string): RunEventRow[] {
     };
   });
 }
+
+// ─── triggers ───────────────────────────────────────────────────────────────
+
+export type TriggerType = 'cron' | 'event' | 'manual' | 'webhook' | 'at';
+export type TriggerSource = 'file' | 'runtime';
+
+export interface TriggerRow {
+  id: string;
+  slug: string;
+  type: TriggerType;
+  source: TriggerSource;
+  config: Record<string, unknown>;
+  args: Record<string, unknown>;
+  enabled: boolean;
+  next_run_at: string | null;
+  last_run_id: string | null;
+  last_fired_at: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+function toTriggerRow(raw: Record<string, unknown>): TriggerRow {
+  const r = decodeBlobs(raw);
+  return {
+    id: String(r.id),
+    slug: String(r.slug),
+    type: r.type as TriggerType,
+    source: r.source as TriggerSource,
+    config: p(r.config, {} as Record<string, unknown>),
+    args: p(r.args, {} as Record<string, unknown>),
+    enabled: Number(r.enabled) === 1,
+    next_run_at: (r.next_run_at as string) ?? null,
+    last_run_id: (r.last_run_id as string) ?? null,
+    last_fired_at: (r.last_fired_at as string) ?? null,
+    created_by: (r.created_by as string) ?? null,
+    created_at: String(r.created_at),
+  };
+}
+
+export function upsertTrigger(row: {
+  id: string;
+  slug: string;
+  type: TriggerType;
+  source: TriggerSource;
+  config: Record<string, unknown>;
+  args: Record<string, unknown>;
+  enabled: boolean;
+  next_run_at?: string | null;
+  created_by?: string | null;
+}): void {
+  getDb()
+    .prepare(
+      `INSERT INTO workflow_triggers
+         (id, slug, type, source, config, args, enabled, next_run_at, created_by, created_at)
+       VALUES (@id, @slug, @type, @source, @config, @args, @enabled, @next_run_at, @created_by, @created_at)
+       ON CONFLICT(id) DO UPDATE SET
+         slug = excluded.slug, type = excluded.type, source = excluded.source,
+         config = excluded.config, args = excluded.args,
+         next_run_at = excluded.next_run_at`,
+    )
+    .run({
+      id: row.id,
+      slug: row.slug,
+      type: row.type,
+      source: row.source,
+      config: JSON.stringify(row.config),
+      args: JSON.stringify(row.args),
+      enabled: row.enabled ? 1 : 0,
+      next_run_at: row.next_run_at ?? null,
+      created_by: row.created_by ?? null,
+      created_at: new Date().toISOString(),
+    });
+}
+
+export function getTriggerRow(id: string): TriggerRow | undefined {
+  const row = getDb()
+    .prepare(`SELECT * FROM workflow_triggers WHERE id = ?`)
+    .get(id) as Record<string, unknown> | undefined;
+  return row ? toTriggerRow(row) : undefined;
+}
+
+export function listTriggerRows(slug?: string): TriggerRow[] {
+  const rows = slug
+    ? getDb()
+        .prepare(
+          `SELECT * FROM workflow_triggers WHERE slug = ? ORDER BY created_at`,
+        )
+        .all(slug)
+    : getDb()
+        .prepare(`SELECT * FROM workflow_triggers ORDER BY next_run_at`)
+        .all();
+  return (rows as Record<string, unknown>[]).map(toTriggerRow);
+}
+
+export function listTriggerRowsByType(type: TriggerType): TriggerRow[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM workflow_triggers WHERE type = ? AND enabled = 1 ORDER BY created_at`,
+      )
+      .all(type) as Record<string, unknown>[]
+  ).map(toTriggerRow);
+}
+
+export function listDueTriggerRows(nowIso: string): TriggerRow[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM workflow_triggers
+         WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+           AND type IN ('cron','at')
+         ORDER BY next_run_at`,
+      )
+      .all(nowIso) as Record<string, unknown>[]
+  ).map(toTriggerRow);
+}
+
+export function updateTriggerRow(
+  id: string,
+  patch: Partial<{
+    enabled: boolean;
+    config: Record<string, unknown>;
+    args: Record<string, unknown>;
+    next_run_at: string | null;
+    last_run_id: string | null;
+    last_fired_at: string | null;
+  }>,
+): void {
+  const sets: string[] = [];
+  const params: Record<string, unknown> = { id };
+  if (patch.enabled !== undefined) {
+    sets.push('enabled = @enabled');
+    params.enabled = patch.enabled ? 1 : 0;
+  }
+  if (patch.config !== undefined) {
+    sets.push('config = @config');
+    params.config = JSON.stringify(patch.config);
+  }
+  if (patch.args !== undefined) {
+    sets.push('args = @args');
+    params.args = JSON.stringify(patch.args);
+  }
+  for (const key of ['next_run_at', 'last_run_id', 'last_fired_at'] as const) {
+    if (patch[key] !== undefined) {
+      sets.push(`${key} = @${key}`);
+      params[key] = patch[key];
+    }
+  }
+  if (!sets.length) return;
+  getDb()
+    .prepare(`UPDATE workflow_triggers SET ${sets.join(', ')} WHERE id = @id`)
+    .run(params);
+}
+
+export function deleteTriggerRow(id: string): void {
+  getDb().prepare(`DELETE FROM workflow_triggers WHERE id = ?`).run(id);
+}
+
+export function deleteFileTriggersExcept(
+  slug: string,
+  keep: string[],
+): string[] {
+  const rows = listTriggerRows(slug).filter(
+    (t) => t.source === 'file' && !keep.includes(t.id),
+  );
+  for (const row of rows) deleteTriggerRow(row.id);
+  return rows.map((r) => r.id);
+}

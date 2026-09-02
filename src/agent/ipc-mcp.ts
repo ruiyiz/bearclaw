@@ -8,8 +8,8 @@ import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { CronExpressionParser } from 'cron-parser';
 import { GOOGLE_API_KEY, OPENAI_API_KEY, agentVarDir } from '../config.js';
+import { emitEvent } from '../db.js';
 import {
   startSubprocess,
   readSubprocessOutput,
@@ -20,6 +20,7 @@ import {
 } from './subprocess-manager.js';
 import { generateImage } from './image-gen.js';
 import { queryRecall, syncRecallIndex } from './recall-index.js';
+import { createWorkflowTools } from './workflow-tools.js';
 import { logger } from '../logger.js';
 
 interface IpcMcpContext {
@@ -193,139 +194,20 @@ The text parameter becomes the caption for media messages. For documents, also p
         },
       ),
 
-      tool(
-        'schedule_task',
-        `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools.
+      ...createWorkflowTools({ agentFolder, isMain, chatJid }),
 
-RECURRING: Provide a cron expression.
-ONE-TIME: Provide a run_at timestamp.
-
-CONTEXT MODE:
-• "agent" (recommended): Task runs with chat history and memory
-• "isolated": Task runs in a fresh session (include all context in prompt)
-
-CRON FORMAT (5-field, all times LOCAL timezone):
-• "*/5 * * * *" = every 5 minutes
-• "0 9 * * *" = daily at 9am
-• "0 9 * * 1-5" = weekdays at 9am
-• "0 */2 * * *" = every 2 hours`,
-        {
-          prompt: z
-            .string()
-            .describe('What the agent should do when the task runs'),
-          cron: z
-            .string()
-            .optional()
-            .describe(
-              'Cron expression for recurring tasks (e.g., "0 9 * * *")',
-            ),
-          run_at: z
-            .string()
-            .optional()
-            .describe(
-              'Local timestamp for one-time tasks (e.g., "2026-02-01T15:30:00", no Z suffix)',
-            ),
-          context_mode: z
-            .enum(['agent', 'isolated'])
-            .default('agent')
-            .describe('agent=shared session, isolated=fresh session'),
-          target_agent: z
-            .string()
-            .optional()
-            .describe(
-              'Target agent folder (main only, defaults to current agent)',
-            ),
-        },
-        async (args) => {
-          if (!args.cron && !args.run_at) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: 'Must provide either "cron" (recurring) or "run_at" (one-time).',
-                },
-              ],
-              isError: true,
-            };
-          }
-
-          // Validate cron expression
-          if (args.cron) {
-            try {
-              CronExpressionParser.parse(args.cron);
-            } catch {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Invalid cron: "${args.cron}". Use format like "0 9 * * *" (daily 9am) or "*/5 * * * *" (every 5 min).`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-          }
-
-          // Validate run_at timestamp
-          if (args.run_at) {
-            const date = new Date(args.run_at);
-            if (isNaN(date.getTime())) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Invalid timestamp: "${args.run_at}". Use format like "2026-02-01T15:30:00".`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-          }
-
-          // Non-main agents can only schedule for themselves
-          const targetAgent =
-            isMain && args.target_agent ? args.target_agent : agentFolder;
-
-          const data = {
-            type: 'schedule_task',
-            prompt: args.prompt,
-            cron: args.cron || null,
-            runAt: args.run_at || null,
-            context_mode: args.context_mode || 'agent',
-            agentFolder: targetAgent,
-            createdBy: agentFolder,
-            timestamp: new Date().toISOString(),
-          };
-
-          const filename = writeIpcFile(tasksDir, data);
-
-          const scheduleDesc = args.cron
-            ? `cron: ${args.cron}`
-            : `run_at: ${args.run_at}`;
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Task scheduled (${filename}): ${scheduleDesc}`,
-              },
-            ],
-          };
-        },
-      ),
-
-      // ─── Event handler tools ─────────────────────────────────────────────
+      // ─── Event bus ───────────────────────────────────────────────────────
 
       tool(
         'emit_event',
-        `Emit a custom event into the event bus. Use this to chain pipeline steps.
-Events are processed by registered handlers that match the event type.
+        `Emit an event onto the bus. Event triggers on workflows subscribe to these,
+so this is how one workflow or agent kicks off another.
 
-Built-in event types (emitted automatically):
-• cron_trigger — when a scheduled handler is due (payload: handler_id)
-• handler_complete — after a handler finishes (payload: handler_id, group_folder, status, result_summary)
+Built-in event types:
 • agent_complete — after any agent run (payload: group_folder, trigger_type, status, duration_ms)
 
-You can emit any custom event type for pipeline chaining (e.g., "earnings_released", "filings_collected").`,
+Any custom type works for chaining (e.g., "newsletter_queue_empty"). Non-main agents may only
+emit types prefixed with their own folder, e.g. "coco.batch_ready".`,
         {
           type: z
             .string()
@@ -336,271 +218,28 @@ You can emit any custom event type for pipeline chaining (e.g., "earnings_releas
             .describe('Event payload as key-value pairs'),
         },
         async (args) => {
-          const data = {
-            type: 'emit_event',
-            eventType: args.type,
-            payload: args.payload || {},
-            agentFolder,
-            timestamp: new Date().toISOString(),
-          };
-
-          writeIpcFile(tasksDir, data);
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Event "${args.type}" emitted.`,
-              },
-            ],
-          };
-        },
-      ),
-
-      tool(
-        'register_handler',
-        `Register an event handler. When an event matching the type (and optional filter) is emitted, a new agent session runs with the handler's prompt and the event payload.
-
-Use this to build multi-step pipelines where each step is independent with its own timeout and retry.
-
-CONTEXT MODE:
-• "agent": Handler runs in the agent's conversation context (shared session)
-• "isolated" (default): Handler runs in a fresh session. Include all needed context in the prompt.
-
-FILTER: Optional JSON object. All keys must match the event payload for the handler to trigger.
-  Example: { "ticker": "AAPL" } — only triggers when payload contains ticker=AAPL.
-
-COOLDOWN: Minimum milliseconds between triggers. Prevents rapid re-triggering.
-
-MAX_TRIGGERS: Maximum number of times this handler can fire. After reaching the limit, it auto-completes.
-  Set to 1 for one-shot handlers. Omit for unlimited.`,
-        {
-          event_type: z
-            .string()
-            .describe(
-              'Event type to listen for (e.g., "earnings_released", "task_complete")',
-            ),
-          prompt: z
-            .string()
-            .describe(
-              'Instructions for the agent when the event fires. The event payload will be injected automatically.',
-            ),
-          filter: z
-            .record(z.string(), z.unknown())
-            .optional()
-            .describe(
-              'Optional filter: all keys must match event payload to trigger',
-            ),
-          context_mode: z
-            .enum(['agent', 'isolated'])
-            .default('isolated')
-            .describe('agent=shared session, isolated=fresh session (default)'),
-          cooldown_ms: z
-            .number()
-            .default(0)
-            .describe('Minimum ms between triggers (default: 0)'),
-          max_triggers: z
-            .number()
-            .optional()
-            .describe('Max times this handler can fire. Omit for unlimited.'),
-          target_agent: z
-            .string()
-            .optional()
-            .describe(
-              'Target agent folder (main only, defaults to current agent)',
-            ),
-        },
-        async (args) => {
-          // Non-main agents can only register handlers for themselves
-          const targetAgent =
-            isMain && args.target_agent ? args.target_agent : agentFolder;
-
-          const data = {
-            type: 'register_handler',
-            eventType: args.event_type,
-            prompt: args.prompt,
-            filter: args.filter ? JSON.stringify(args.filter) : null,
-            contextMode: args.context_mode || 'isolated',
-            cooldownMs: args.cooldown_ms || 0,
-            maxTriggers: args.max_triggers ?? null,
-            targetAgent,
-            createdBy: agentFolder,
-            timestamp: new Date().toISOString(),
-          };
-
-          writeIpcFile(tasksDir, data);
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Event handler registered for "${args.event_type}" in agent "${targetAgent}".`,
-              },
-            ],
-          };
-        },
-      ),
-
-      tool(
-        'list_handlers',
-        "List all registered handlers (both scheduled tasks and event handlers). From main: shows all. From other agents: shows only that agent's handlers.",
-        {},
-        async () => {
-          const handlersFile = path.join(ipcDir, 'current_handlers.json');
-
-          try {
-            if (!fs.existsSync(handlersFile)) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: 'No handlers registered.',
-                  },
-                ],
-              };
-            }
-
-            const allHandlers = JSON.parse(
-              fs.readFileSync(handlersFile, 'utf-8'),
-            );
-
-            const handlers = isMain
-              ? allHandlers
-              : allHandlers.filter(
-                  (h: { group_folder: string }) =>
-                    h.group_folder === agentFolder,
-                );
-
-            if (handlers.length === 0) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: 'No handlers registered.',
-                  },
-                ],
-              };
-            }
-
-            const formatted = handlers
-              .map(
-                (h: {
-                  id: string;
-                  event_type: string;
-                  cron: string | null;
-                  next_run: string | null;
-                  prompt: string;
-                  status: string;
-                  trigger_count: number;
-                  max_triggers: number | null;
-                }) => {
-                  const schedule = h.cron
-                    ? `cron: ${h.cron}, next: ${h.next_run || 'N/A'}`
-                    : `on "${h.event_type}"`;
-                  return `- [${h.id}] ${schedule}: ${h.prompt.slice(0, 50)}... - ${h.status} (fired ${h.trigger_count}${h.max_triggers !== null ? `/${h.max_triggers}` : ''} times)`;
-                },
-              )
-              .join('\n');
-
+          if (!isMain && !args.type.startsWith(`${agentFolder}.`)) {
             return {
               content: [
                 {
                   type: 'text',
-                  text: `Handlers:\n${formatted}`,
+                  text: `Not allowed: "${args.type}". Emit types prefixed with your folder, e.g. "${agentFolder}.${args.type}".`,
                 },
               ],
-            };
-          } catch (err) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Error reading handlers: ${err instanceof Error ? err.message : String(err)}`,
-                },
-              ],
+              isError: true,
             };
           }
-        },
-      ),
 
-      tool(
-        'pause_handler',
-        'Pause an event handler. It will not trigger until resumed.',
-        {
-          handler_id: z.string().describe('The handler ID to pause'),
-        },
-        async (args) => {
-          const data = {
-            type: 'pause_handler',
-            handlerId: args.handler_id,
-            agentFolder,
-            isMain,
-            timestamp: new Date().toISOString(),
-          };
-
-          writeIpcFile(tasksDir, data);
+          const id = emitEvent(args.type, {
+            ...(args.payload || {}),
+            emitted_by: agentFolder,
+          });
 
           return {
             content: [
               {
                 type: 'text',
-                text: `Handler ${args.handler_id} pause requested.`,
-              },
-            ],
-          };
-        },
-      ),
-
-      tool(
-        'resume_handler',
-        'Resume a paused event handler.',
-        {
-          handler_id: z.string().describe('The handler ID to resume'),
-        },
-        async (args) => {
-          const data = {
-            type: 'resume_handler',
-            handlerId: args.handler_id,
-            agentFolder,
-            isMain,
-            timestamp: new Date().toISOString(),
-          };
-
-          writeIpcFile(tasksDir, data);
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Handler ${args.handler_id} resume requested.`,
-              },
-            ],
-          };
-        },
-      ),
-
-      tool(
-        'cancel_handler',
-        'Cancel and delete an event handler.',
-        {
-          handler_id: z.string().describe('The handler ID to cancel'),
-        },
-        async (args) => {
-          const data = {
-            type: 'cancel_handler',
-            handlerId: args.handler_id,
-            agentFolder,
-            isMain,
-            timestamp: new Date().toISOString(),
-          };
-
-          writeIpcFile(tasksDir, data);
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Handler ${args.handler_id} cancellation requested.`,
+                text: `Event "${args.type}" emitted (id ${id}).`,
               },
             ],
           };

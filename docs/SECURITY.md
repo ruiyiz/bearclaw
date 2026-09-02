@@ -83,6 +83,6 @@ Outbound messages and handler operations are verified against the source agent's
 ## Recommendations
 
 - Only register trusted chats as agents
-- Review registered handlers periodically (`list_handlers`, or the TUI handlers view)
+- Review workflows and their triggers periodically (`workflow_list` / `trigger_list`, or the Workflows module in the web UI)
 - Monitor logs for unusual activity (`logs/bearclaw.log`, `~/.bearclaw/agents/*/logs/`)
 - For stronger isolation, consider running BearClaw itself inside a container or VM

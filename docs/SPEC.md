@@ -1,6 +1,6 @@
 # BearClaw Specification
 
-A personal Claude assistant accessible via chat platforms (WhatsApp, Telegram, iMessage) and Gmail, with persistent per-agent state, scheduled and event-driven handlers, and shared context. Long-term memory is delegated to a separate **gbrain** process exposed over MCP.
+A personal Claude assistant accessible via chat platforms (WhatsApp, Telegram, iMessage) and Gmail, with persistent per-agent state, scheduled and event-driven workflows, and shared context. Long-term memory is delegated to a separate **gbrain** process exposed over MCP.
 
 This document describes design and architecture decisions. Not a code reference; for that, follow the source from `src/index.ts`.
 
@@ -15,7 +15,7 @@ This document describes design and architecture decisions. Not a code reference;
 5. [Daily Conversation Flush](#daily-conversation-flush)
 6. [Session Management](#session-management)
 7. [Message Flow](#message-flow)
-8. [Handlers (Scheduled + Event-Driven)](#handlers-scheduled--event-driven)
+8. [Workflows](#workflows)
 9. [MCP Servers](#mcp-servers)
 10. [Deployment](#deployment)
 11. [Security Considerations](#security-considerations)
@@ -67,8 +67,8 @@ This document describes design and architecture decisions. Not a code reference;
 │                                                                    │
 │              ┌────────────────────────────────────────────┐        │
 │              │         SQLite (~/.bearclaw/var/)          │        │
-│              │   chats, messages, events, handlers,       │        │
-│              │   handler_logs                             │        │
+│              │   chats, messages, events, workflows,      │        │
+│              │   runs, steps, waits, triggers             │        │
 │              └────────────────────────────────────────────┘        │
 │                                                                    │
 └────────────────────────────────────────────────────────────────────┘
@@ -92,7 +92,7 @@ This document describes design and architecture decisions. Not a code reference;
 | Telegram  | `grammy`                              | Bot API + agent-swarm bot pool         |
 | iMessage  | `imsg` CLI + file tail                | macOS Messages                         |
 | Email     | `gog` CLI                             | Gmail polling and sending              |
-| Storage   | `better-sqlite3`                      | Messages, handlers, event bus          |
+| Storage   | `better-sqlite3`                      | Messages, workflow state, event bus    |
 | Long-term | gbrain (PGLite + pgvector + tsvector) | Out-of-process knowledge base over MCP |
 | Agent     | `@anthropic-ai/claude-agent-sdk`      | In-process Claude execution            |
 | TUI       | `ink` + `react`                       | Status terminal UI                     |
@@ -123,7 +123,7 @@ BearClaw separates source repo, runtime config (`~/.bearclaw/config/`), and runt
 │       └── IDENTITY.md               # Per-agent role/personality (manual)
 ├── skills/                           # User-installed skills
 └── var/                              # Volatile runtime state
-    ├── messages.db                   # SQLite (chats, messages, events, handlers)
+    ├── messages.db                   # SQLite (chats, messages, events, workflow state)
     ├── sessions.json                 # Active session IDs per agent folder
     ├── auth/                         # Channel credentials
     ├── run/ipc/{folder}/             # IPC inbox per agent
@@ -174,7 +174,7 @@ OPENAI_API_KEY=sk-...                      # image_generate + gbrain embeddings
 
 BearClaw's memory layers are designed around two principles:
 
-1. **Files are authoritative; the database is auxiliary.** Conversations and context files live as markdown on disk. SQLite carries channel state, event bus, and handler bookkeeping — no curated content.
+1. **Files are authoritative; the database is auxiliary.** Conversations and context files live as markdown on disk. SQLite carries channel state, event bus, and workflow bookkeeping — no curated content.
 2. **In-process layers stay simple; long-term memory lives elsewhere.** BearClaw owns checkpoints + daily conversations + manual context files. Anything richer (semantic search, timeline reasoning, cross-conversation graph) is delegated to gbrain over MCP. BearClaw works without gbrain — falls back to the warm-start window.
 
 | Layer                  | Location                                         | Owner            | Purpose                                         |
@@ -261,8 +261,9 @@ The conversation checkpoint provides crash safety; the daily flush prevents `che
                  + IDENTITY.md + SYSTEM_PROMPT
      mcpServers: { bearclaw: ipcMcp, ...userMcpServers }   # gbrain in userMcpServers
      SessionStart hook: warm-start budget (today's checkpoint + last N days)
-5. The agent streams output. MCP-side effects (send_message, schedule_task, …) are
-   written to var/run/ipc/{folder}/ and dispatched by the IPC watcher.
+5. The agent streams output. Channel side effects (send_message, register_agent, …)
+   are written to var/run/ipc/{folder}/ and dispatched by the IPC watcher; the
+   workflow tools act on the engine directly.
 6. Final assistant text is sent to the channel.
 7. lastAgentTimestamp is updated.
 ```
@@ -271,24 +272,50 @@ A recovery sweep runs every poll interval to catch messages missed during channe
 
 ---
 
-## Handlers (Scheduled + Event-Driven)
+## Workflows
 
-A unified `handlers` table stores both cron-scheduled and event-driven runs.
+A workflow is a definition file at `~/.bearclaw/workflows/<slug>.json`: a name, an
+owner agent, an `inputs` schema, typed nodes, and edges leaving named ports. Node
+types are `agent`, `shell`, `http`, `template`, `transform`, `condition`, `switch`,
+`send`, `human`, `wait_event`, `emit` and `delay` — most of them are not LLM calls.
+Files are the source of truth; SQLite holds the index, runs, steps, waits and
+triggers.
 
-| Shape        | Storage                                       | Trigger                                               |
-| ------------ | --------------------------------------------- | ----------------------------------------------------- |
-| Cron         | `cron` field set                              | scheduler emits `cron_trigger` when `next_run <= now` |
-| One-shot     | `next_run` set, `cron` null, `max_triggers=1` | same as cron                                          |
-| Event-driven | `event_type != 'cron_trigger'`, `filter` JSON | event bus matches event type + filter                 |
+A run copies the definition into its own row and executes against that snapshot.
+The decider computes the nodes whose incoming edges are satisfied, runs them,
+persists, and repeats; anything that changes a run re-runs the decider from
+persisted state. Untaken branches never block a join. Retry precedence is the
+node's retry policy, then a wired `error` port, then the workflow-level
+`on_error`, then the run fails. Waits and delays are rows with `resume_at`;
+nothing depends on a live timer surviving a restart.
 
-### Built-in handler families
+### Triggers
 
-- **`heartbeat-{folder}`** — proactive wake-up loop per agent; configurable interval and quiet window.
-- **`email-{folder}`** — per-agent Gmail polling; emits `email_received`.
+A trigger is a separate row binding a firing condition to a workflow and supplying
+its `args`, validated against the workflow's `inputs` schema.
 
-Custom handlers are registered by agents via `register_handler` (event-driven) or `schedule_task` (cron / one-shot). Every handler completion emits `handler_complete`, which can drive subsequent handlers.
+| Type      | Fires when                                                         |
+| --------- | ------------------------------------------------------------------ |
+| `cron`    | `next_run_at` passes; honours a quiet window and a catch-up policy |
+| `at`      | one-shot, then disables itself                                     |
+| `event`   | a matching event lands on the bus                                  |
+| `webhook` | `POST /api/hooks/<token>`                                          |
+| `manual`  | dashboard button, `/workflows run <slug>`, or `workflow_run`       |
 
-The earlier `dream-{folder}` and `dream-cycle-report` handler families are gone; gbrain owns long-term consolidation now and runs its own crons (separate launchd plists, not via BearClaw's handler table).
+A definition file may declare triggers; the loader owns those rows and rewrites
+them on every reload. Triggers created at runtime (a reminder for tomorrow, a
+second schedule with different args) are rows with `source: runtime` and never
+touch the file.
+
+### Built-ins
+
+- **`reminder`** — one shared workflow with a single `send` node; "remind me
+  tomorrow at 9" is an `at` trigger on it with `args: { text, to }`.
+- **`<folder>-checkin`** — what heartbeat used to be: a cron trigger with a quiet
+  window and one `agent` node carrying the standing brief. There is no heartbeat
+  concept in the engine.
+
+Email polling still emits `email_received`; an event trigger subscribes to it.
 
 ---
 
@@ -298,16 +325,17 @@ The earlier `dream-{folder}` and `dream-cycle-report` handler families are gone;
 
 Per-call MCP server with the agent's identity. Tools:
 
-| Tool                                                                 | Purpose                                                |
-| -------------------------------------------------------------------- | ------------------------------------------------------ |
-| `send_message`                                                       | Outbound channel message (text and/or media)           |
-| `schedule_task`, `register_handler`                                  | Register handlers                                      |
-| `list_handlers`, `pause_handler`, `resume_handler`, `cancel_handler` | Handler management                                     |
-| `emit_event`                                                         | Custom event emission                                  |
-| `register_agent`                                                     | Register a new chat as an agent (main only)            |
-| `reply_email`                                                        | Thread a Gmail reply                                   |
-| `subprocess_*`                                                       | PTY subprocess driver                                  |
-| `image_generate`                                                     | OpenAI gpt-image / Google nano-banana image generation |
+| Tool                                               | Purpose                                                |
+| -------------------------------------------------- | ------------------------------------------------------ |
+| `send_message`                                     | Outbound channel message (text and/or media)           |
+| `workflow_*`                                       | List, upsert, run, pause and inspect workflows         |
+| `trigger_*`                                        | Create, list, pause and delete triggers                |
+| `workflow_waits`, `workflow_respond`, `run_cancel` | Human steps and run control                            |
+| `emit_event`                                       | Custom event emission (folder-prefixed for non-main)   |
+| `register_agent`                                   | Register a new chat as an agent (main only)            |
+| `reply_email`                                      | Thread a Gmail reply                                   |
+| `subprocess_*`                                     | PTY subprocess driver                                  |
+| `image_generate`                                   | OpenAI gpt-image / Google nano-banana image generation |
 
 The previous `memory_search` / `memory_write` tools are removed. The agent uses gbrain MCP for retrieval.
 
@@ -344,9 +372,9 @@ BearClaw runs as a single macOS launchd service (`~/Library/LaunchAgents/com.bea
 4. Start the conversation checkpoint ticker.
 5. Schedule the daily 01:00 conversation flush.
 6. Initialize the subprocess manager.
-7. Register heartbeat / email handlers from `registered_agents.json`.
+7. Start the workflow service: seed built-ins, migrate legacy handlers once, load definition files, recover interrupted runs.
 8. Connect channels.
-9. Start: scheduler, event bus, IPC watcher, message recovery loop, email poll loops.
+9. Start: workflow service loop, IPC watcher, message recovery loop, email poll loops.
 
 ### Service management
 
@@ -366,7 +394,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model. Highlights:
 
 - **No OS-level isolation.** Agents have host filesystem and network access.
 - **Per-agent `cwd`.** Each agent's working directory is its own `var/agents/{folder}/`.
-- **IPC authorization.** The IPC watcher rejects cross-agent operations from non-main agents (sending to other chats, registering handlers for other agents, calling `register_agent` / `refresh_agents`).
+- **IPC authorization.** The IPC watcher rejects cross-agent operations from non-main agents (sending to other chats, managing workflows owned by other agents, calling `register_agent` / `refresh_agents`).
 - **Trigger gate.** Non-main agents only fire on messages matching their configured trigger.
 - **gbrain is read-only at the agent boundary.** Mutating ops are denied via `disallowedTools` in `runner.ts`. The cron jobs and the operator's CLI retain full write access.
 - **Manual context applies; no auto-write.** `~/.bearclaw/context/` is never written by BearClaw or by gbrain. The user holds the commit button — agents propose changes via chat, the user replies with instructions, the agent edits via Read/Edit.

@@ -15,6 +15,7 @@ import {
   parseDefinition,
   type WorkflowDefinition,
 } from './schema.js';
+import { syncFileTriggers } from './triggers.js';
 
 export function workflowFilePath(slug: string): string {
   return path.join(WORKFLOWS_DIR, `${slug}.json`);
@@ -65,6 +66,7 @@ export function syncWorkflowFiles(): LoadReport {
         file_hash: hashOf(raw),
         definition: def,
       });
+      syncFileTriggers(def);
       seen.add(def.slug);
       report.loaded.push(def.slug);
     } catch (err) {
@@ -106,6 +108,7 @@ export function writeWorkflowFile(def: WorkflowDefinition): WorkflowDefinition {
     file_hash: hashOf(text),
     definition: validated,
   });
+  syncFileTriggers(validated);
   return validated;
 }
 

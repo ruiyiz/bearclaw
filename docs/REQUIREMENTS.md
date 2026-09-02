@@ -20,7 +20,7 @@ The entire codebase should be something you can read and understand. One Node.js
 
 ### Session Isolation
 
-Each agent runs with its own working directory (`~/.bearclaw/agents/{folder}/`) and conversation session. The agent's `cwd` is set to the agent folder, and `settingSources: ['project']` reads project settings from there. IPC authorization ensures non-main agents can only message their own chats and manage their own handlers.
+Each agent runs with its own working directory (`~/.bearclaw/agents/{folder}/`) and conversation session. The agent's `cwd` is set to the agent folder, and `settingSources: ['project']` reads project settings from there. IPC authorization ensures non-main agents can only message their own chats and manage their own workflows.
 
 ### Built for One User
 
@@ -73,7 +73,7 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 - **Channels** (WhatsApp, Telegram, iMessage) as I/O surfaces
 - **Integrations** (Gmail) as event sources
 - **Persistent memory** per agent and shared across all agents
-- **Scheduled tasks & event handlers** that run Claude and can message back
+- **Workflows** — scheduled or event-driven flowcharts of typed nodes, with human steps
 - **Web access** for search and browsing
 
 **Implementation approach:**
@@ -115,29 +115,29 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 - Session isolation is per-agent (each has its own `cwd` and session ID)
 - IPC authorization enforces per-agent permission boundaries
 
-### Handlers (Scheduled Tasks + Event Handlers)
+### Workflows (Scheduled + Event-Driven)
 
-- A unified `handlers` table in SQLite stores both cron-scheduled handlers and event-driven handlers
-- The scheduler emits `cron_trigger` events when handlers are due; the event bus runs matching handlers
-- Handlers run as full agents (with all tools) in either `agent` (shared session) or `isolated` (fresh session) context mode
-- Handlers can optionally send messages via the IPC MCP, or complete silently
-- Each run is logged to the database with duration and result
-- Built-in event types: `cron_trigger`, `handler_complete`, `agent_complete`, `email_received`, `subprocess_exit`, `subprocess_notification`
-- From main: can register/manage handlers for any agent
-- From other agents: can only manage their own handlers
+- A workflow is a flowchart of typed nodes stored as JSON at `~/.bearclaw/workflows/<slug>.json`; most nodes are not LLM calls
+- Triggers are separate rows binding a firing condition (cron, at, event, webhook, manual) to a workflow and supplying its inputs
+- A run snapshots the definition, persists after every step, and resumes from the database after a restart
+- Human steps park a run on a `workflow_waits` row and resolve from the web inbox, a channel reply, or the agent's `workflow_respond`
+- Every run, step and wait is recorded, with an append-only timeline per run
+- Built-in event types: `agent_complete`, `email_received`, `subprocess_exit`, `subprocess_notification`
+- From main: can manage workflows and triggers for any agent
+- From other agents: only their own workflows, and events prefixed with their folder
 
 ### Agent Management
 
 - New agents are registered via the `register_agent` MCP tool (main only) or directly via `~/.bearclaw/data/registered_agents.json`
 - Each agent gets a dedicated folder under `~/.bearclaw/agents/`
-- Agents can have per-agent configuration: `containerConfig.timeout`, `heartbeat`, `email`, `activeHours`
+- Agents can have per-agent configuration: `containerConfig.timeout`, `email`, `activeHours`
 
 ### Main Channel Privileges
 
 - Main channel is the admin/control surface (typically self-chat)
 - Can write to shared `~/.bearclaw/context/MEMORY.md`
-- Can register handlers and agents for any folder
-- Can view and manage handlers across all agents
+- Can register workflows, triggers and agents for any folder
+- Can view and manage workflows across all agents
 - Can configure per-agent settings
 
 ---
@@ -155,17 +155,17 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 - **Email** (`src/integrations/email.ts`): polls Gmail via the `gog` CLI, emits `email_received` events; reply primitive available to agents via the `reply_email` MCP tool
 
-### Handlers + MCP Tools
+### Workflows + MCP Tools
 
-- Scheduler and event bus run in the host process, invoke agents for handler execution
+- Workflows (`src/workflows/`) are the only invocation primitive: a definition file of typed nodes, triggers that bind a firing condition to it, and a durable interpreter in the host process
 - The custom `bearclaw` MCP server (in `src/agent/ipc-mcp.ts`) exposes:
-  - `send_message`, `schedule_task`, `register_handler`, `pause_handler`, `resume_handler`, `cancel_handler`, `list_handlers`
-  - `emit_event`, `register_agent`, `reply_email`
-  - `memory_write`, `memory_search`
+  - `send_message`, `emit_event`, `register_agent`, `reply_email`
+  - `workflow_list`, `workflow_upsert`, `workflow_delete`, `workflow_run`, `workflow_runs`, `workflow_set_enabled`, `workflow_waits`, `workflow_respond`, `run_cancel`
+  - `trigger_create`, `trigger_list`, `trigger_set_enabled`, `trigger_delete`
   - `subprocess_start/read/write/poll/kill/list`
   - `image_generate` (registered when either `OPENAI_API_KEY` or `GOOGLE_API_KEY` is set; routes by model — `gpt-image-*` → OpenAI, `nano-banana`/`gemini-*` → Google)
-- Handlers stored in SQLite with run history
-- Scheduler checks for due cron handlers every minute; the event bus drains the queue every 5 seconds
+- Definitions live at `~/.bearclaw/workflows/*.json`; runs, steps, waits and triggers live in SQLite
+- One service loop drives event triggers, due cron and one-shot rows, and the engine's own timers
 
 ### Web Access
 

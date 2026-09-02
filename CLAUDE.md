@@ -6,7 +6,7 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 Single Node.js process that connects to chat platforms (WhatsApp, Telegram, iMessage), the Gmail integration, and a local web UI, routing messages to the Claude Agent SDK running directly on the host. Each agent has its own working directory and memory.
 
-The web UI is a Next.js 15 PWA in `web/` (separate package). It talks to a local HTTP/SSE server (`src/server/http.ts`, default `127.0.0.1:7878`) inside the main process. The web app has two module groups: **user** (chat, events) and **admin** (skills, handlers, agents, health, heartbeat).
+The web UI is a Next.js 15 PWA in `web/` (separate package). It talks to a local HTTP/SSE server (`src/server/http.ts`, default `127.0.0.1:7878`) inside the main process. The web app has two module groups: **user** (chat, events) and **admin** (skills, handlers, agents, health, heartbeat). The Workflows module replaces the handler and heartbeat pages as it lands.
 
 Auth: signed-cookie session + double-submit CSRF (`src/server/auth.ts`). Single owner password from `BEARCLAW_PASSWORD` in `~/.bearclaw/.env`. If unset on first start, a random password is written to `~/.bearclaw/var/initial-password` and logged once — copy it to the env file then delete the bootstrap file. HMAC secret auto-generated at `~/.bearclaw/var/auth-secret`. Web app gates all routes via `web/middleware.ts`; API client (`web/lib/api.ts`) attaches `x-csrf-token` from the `nc_csrf` cookie on mutations.
 
@@ -19,7 +19,7 @@ src/
 ├── channels/      whatsapp, telegram, imessage, web, router
 ├── server/        http (REST + SSE), broker (web outbound fan-out)
 ├── admin/         data (skills/events/handlers/agents/health/heartbeat ops, used by HTTP layer)
-├── events/        bus, scheduler, heartbeat
+├── workflows/     schema, expr, store, engine, executors, triggers, service
 ├── integrations/  email
 ├── media/         format, source, transcribe, tts
 ├── utils/         json, time
@@ -53,10 +53,11 @@ jobs and the operator's CLI retain full write access.
 | `src/agent/ipc-mcp.ts`                         | MCP tools for agent ↔ host communication                             |
 | `src/agent/conversation-checkpoint.ts`         | Periodic transcript checkpoint + session-end conversation archive    |
 | `src/agent/image-gen.ts`                       | Image generation client (OpenAI gpt-image-2 + Google nano-banana)    |
-| `src/events/bus.ts`                            | Event dispatch + handler runner                                      |
-| `src/events/scheduler.ts`                      | Cron handler firing                                                  |
+| `src/workflows/engine.ts`                      | Workflow decider: steps, retries, waits, recovery                    |
+| `src/workflows/triggers.ts`                    | Cron, one-shot, event and webhook triggers                           |
+| `~/.bearclaw/workflows/`                       | Workflow definitions (one JSON file per workflow)                    |
 | `src/integrations/email.ts`                    | Gmail polling and reply primitive                                    |
-| `src/db.ts`                                    | SQLite operations (messages, chats, events, handlers)                |
+| `src/db.ts`                                    | SQLite operations (messages, chats, events, workflow state)          |
 | `~/.bearclaw/context/`                         | Shared context: AGENTS.md, CONTEXT.md, SOUL.md, USER.md              |
 | `~/.bearclaw/agents/{name}/IDENTITY.md`        | Per-agent identity                                                   |
 | `~/.bearclaw/var/agents/{name}/conversations/` | Daily conversation archives (`YYYY-MM-DD.md`, written by 1am flush)  |

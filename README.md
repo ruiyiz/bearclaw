@@ -41,7 +41,7 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 - **WhatsApp I/O** - Message Claude from your phone
 - **Isolated agent context** - Each agent has its own `IDENTITY.md`, working directory, memory, and conversation session
 - **Main channel** - Your private channel (self-chat) for admin control; every other agent is isolated
-- **Scheduled tasks & event handlers** - Recurring jobs and event-driven handlers that run Claude and can message you back
+- **Workflows** - Scheduled or event-driven flowcharts of typed nodes, with human approval steps, that run Claude and can message you back
 - **Web access** - Search and fetch content
 - **Optional channels & integrations** - Add Telegram (`/add-telegram`), iMessage (`/add-imessage`), Gmail (`/add-gmail`), and more via skills
 
@@ -154,9 +154,9 @@ Key files:
 
 - `src/index.ts` - Main app: channel connections, routing, IPC
 - `src/agent/runner.ts` - Runs the Claude Agent SDK in-process
-- `src/agent/ipc-mcp.ts` - MCP tools for agent ↔ host communication (send_message, schedule_task, memory, image_generate, …)
-- `src/events/scheduler.ts` - Runs scheduled handlers
-- `src/events/bus.ts` - Dispatches events to handlers
+- `src/agent/ipc-mcp.ts` - MCP tools for agent ↔ host communication (send*message, workflow*_, trigger\__, image_generate, …)
+- `src/workflows/engine.ts` - Runs workflows: the decider, retries, waits, recovery
+- `src/workflows/triggers.ts` - Cron, one-shot, event and webhook triggers
 - `src/db.ts` - SQLite operations
 - `~/.bearclaw/agents/{name}/IDENTITY.md` - Per-agent identity
 - `~/.bearclaw/context/{AGENTS,SOUL,USER,MEMORY}.md` - Shared context
