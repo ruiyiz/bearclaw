@@ -2,12 +2,6 @@ import Link from 'next/link';
 
 const TILES = [
   { href: '/admin/skills', label: 'Skills', desc: 'Install / sync / remove' },
-  { href: '/admin/events', label: 'Events', desc: 'Recent event log' },
-  {
-    href: '/admin/handlers',
-    label: 'Handlers',
-    desc: 'Pause / resume / delete',
-  },
   {
     href: '/admin/agents',
     label: 'Agents',
@@ -19,9 +13,14 @@ const TILES = [
     desc: 'Process / DB / channel status',
   },
   {
-    href: '/admin/heartbeat',
-    label: 'Heartbeat',
-    desc: 'Per-agent heartbeat log',
+    href: '/admin/context',
+    label: 'Context',
+    desc: 'Shared and per-agent context files',
+  },
+  {
+    href: '/admin/transcripts',
+    label: 'Transcripts',
+    desc: 'Agent session transcripts',
   },
 ];
 

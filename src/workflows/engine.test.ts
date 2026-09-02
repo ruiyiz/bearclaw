@@ -17,6 +17,7 @@ import {
   advance,
   applyInputs,
   cancelRun,
+  forkRun,
   recover,
   resolveWait,
   setEngineDeps,
@@ -499,4 +500,63 @@ test('the run timeline records every step transition', async () => {
     'step.succeeded',
     'run.succeeded',
   ]);
+});
+
+test('retry from a node forks: ancestors are copied, the rest re-runs', async () => {
+  let calls = 0;
+  fake.shellImpl = () => {
+    calls += 1;
+    return calls === 1
+      ? { code: 1, stdout: '', stderr: 'transient' }
+      : { code: 0, stdout: 'sent', stderr: '' };
+  };
+  const definition = def({
+    slug: 'forkable',
+    nodes: {
+      prepare: { type: 'transform', expr: '"prepared"' },
+      send: { type: 'shell', cmd: 'gws gmail +send' },
+      after: { type: 'transform', expr: '"after"' },
+    },
+    edges: [
+      { from: 'prepare', to: 'send' },
+      { from: 'send', to: 'after' },
+    ],
+  });
+
+  const { runId } = await startRun({ slug: 'forkable', definition });
+  assert.equal(requireRun(runId).status, 'failed');
+
+  const forkId = await forkRun(runId!, 'send');
+  const fork = requireRun(forkId);
+  assert.equal(fork.status, 'succeeded');
+  assert.equal(fork.parent_run_id, runId);
+  assert.equal(fork.forked_at_node, 'send');
+
+  const steps = stepsByNode(forkId);
+  // The ancestor is copied, not re-executed.
+  assert.equal(steps.get('prepare')?.output, 'prepared');
+  assert.equal(calls, 2);
+  assert.equal(steps.get('after')?.output, 'after');
+
+  // The parent keeps its own history.
+  assert.equal(requireRun(runId).status, 'failed');
+});
+
+test('a fork can override the input of the node it restarts from', async () => {
+  const definition = def({
+    slug: 'override',
+    nodes: {
+      fetch: { type: 'transform', expr: '"original"' },
+      use: { type: 'transform', expr: 'nodes.fetch.output + "!"' },
+    },
+    edges: [{ from: 'fetch', to: 'use' }],
+  });
+  const { runId } = await startRun({ slug: 'override', definition });
+  assert.equal(outputOf(runId!, 'use'), 'original!');
+
+  const forkId = await forkRun(runId!, 'use', {
+    node: 'fetch',
+    output: 'patched',
+  });
+  assert.equal(outputOf(forkId, 'use'), 'patched!');
 });

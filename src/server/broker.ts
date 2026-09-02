@@ -26,6 +26,44 @@ export type WebOutboundEvent =
       ts: number;
     };
 
+// Workflow module events. Same broker, separate topic, so the web UI holds one
+// SSE connection per module rather than one per run.
+export type WorkflowStreamEvent =
+  | {
+      type: 'run.status';
+      runId: string;
+      slug: string;
+      status: string;
+      ts: number;
+    }
+  | {
+      type: 'step.status';
+      runId: string;
+      slug: string;
+      nodeId: string;
+      status: string;
+      port?: string | null;
+      ts: number;
+    }
+  | {
+      type: 'wait.opened';
+      runId: string;
+      slug: string;
+      nodeId: string;
+      waitId: string;
+      ts: number;
+    }
+  | {
+      type: 'wait.resolved';
+      runId: string;
+      slug: string;
+      nodeId: string;
+      waitId: string;
+      via: string;
+      ts: number;
+    }
+  | { type: 'workflow.changed'; slug: string; ts: number };
+
 class Broker extends EventEmitter {
   constructor() {
     super();
@@ -35,6 +73,10 @@ class Broker extends EventEmitter {
   publish(jid: string, evt: WebOutboundEvent): void {
     this.emit(`out:${jid}`, evt);
     this.emit('out:*', evt);
+  }
+
+  publishWorkflow(evt: WorkflowStreamEvent): void {
+    this.emit('wf:*', evt);
   }
 }
 

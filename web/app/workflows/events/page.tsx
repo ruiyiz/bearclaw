@@ -1,4 +1,5 @@
-import { AdminEventsView } from './admin-events-view';
+import { AdminEventsView } from './events-view';
+
 export default function Page() {
   return <AdminEventsView />;
 }

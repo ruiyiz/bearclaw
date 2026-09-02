@@ -23,22 +23,158 @@ export interface EventRecord {
   processed: number;
 }
 
-export interface Handler {
+// ─── Workflows ──────────────────────────────────────────────────────────────
+
+export interface WorkflowTrigger {
   id: string;
-  group_folder: string;
-  prompt: string;
-  context_mode: string;
-  event_type: string;
-  filter: string | null;
-  cron: string | null;
-  next_run: string | null;
-  cooldown_ms: number;
-  last_triggered: string | null;
-  max_triggers: number | null;
-  trigger_count: number;
-  status: string;
-  created_at: string;
+  slug: string;
+  type: 'cron' | 'event' | 'manual' | 'webhook' | 'at';
+  source: 'file' | 'runtime';
+  config: Record<string, unknown>;
+  args: Record<string, unknown>;
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunId: string | null;
+  lastFiredAt: string | null;
+  createdBy: string | null;
 }
+
+export interface WorkflowSummary {
+  slug: string;
+  name: string;
+  owner: string;
+  enabled: boolean;
+  description: string | null;
+  nodeCount: number;
+  lastStatus: string | null;
+  lastRunId: string | null;
+  nextRunAt: string | null;
+  triggers: WorkflowTrigger[];
+  updatedAt: string;
+}
+
+export interface WorkflowNodeDef {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface WorkflowEdgeDef {
+  from: string;
+  to: string;
+  port: string;
+}
+
+export interface WorkflowDefinition {
+  name: string;
+  slug: string;
+  owner: string;
+  description?: string;
+  inputs?: {
+    type: string;
+    required?: string[];
+    properties?: Record<string, { type?: string; default?: unknown }>;
+  };
+  triggers: unknown[];
+  policies: Record<string, unknown>;
+  layout?: Record<string, { x: number; y: number }>;
+  nodes: Record<string, WorkflowNodeDef>;
+  edges: WorkflowEdgeDef[];
+}
+
+export interface WorkflowRun {
+  id: string;
+  slug: string;
+  status:
+    | 'queued'
+    | 'running'
+    | 'waiting'
+    | 'succeeded'
+    | 'failed'
+    | 'cancelled';
+  triggerId: string | null;
+  inputs: Record<string, unknown>;
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+  parentRunId: string | null;
+  forkedAtNode: string | null;
+}
+
+export interface WorkflowStep {
+  id: number;
+  nodeId: string;
+  attempt: number;
+  status: string;
+  port: string | null;
+  output: unknown;
+  error: string | null;
+  agentSessionId: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface WorkflowWait {
+  id: string;
+  runId: string;
+  slug: string | null;
+  workflowName: string | null;
+  nodeId: string;
+  kind: string;
+  prompt: string | null;
+  options: string[] | null;
+  fields: unknown;
+  targets: string[] | null;
+  expiresAt: string | null;
+  createdAt: string;
+  status?: string;
+  response?: unknown;
+  responder?: string | null;
+  respondedVia?: string | null;
+}
+
+export interface RunTimelineEntry {
+  id: number;
+  ts: string;
+  node_id: string | null;
+  kind: string;
+  payload: unknown;
+}
+
+export type WorkflowStreamEvent =
+  | {
+      type: 'run.status';
+      runId: string;
+      slug: string;
+      status: string;
+      ts: number;
+    }
+  | {
+      type: 'step.status';
+      runId: string;
+      slug: string;
+      nodeId: string;
+      status: string;
+      port?: string | null;
+      ts: number;
+    }
+  | {
+      type: 'wait.opened';
+      runId: string;
+      slug: string;
+      nodeId: string;
+      waitId: string;
+      ts: number;
+    }
+  | {
+      type: 'wait.resolved';
+      runId: string;
+      slug: string;
+      nodeId: string;
+      waitId: string;
+      via: string;
+      ts: number;
+    }
+  | { type: 'workflow.changed'; slug: string; ts: number };
 
 export interface HealthCheck {
   name: string;
@@ -301,22 +437,6 @@ export const api = {
     send<{ ok: boolean }>('/api/admin/skills/sources', 'POST', { dir }),
   events: (limit = 200) =>
     get<{ events: EventRecord[] }>(`/api/admin/events?limit=${limit}`),
-  handlers: () => get<{ handlers: Handler[] }>('/api/admin/handlers'),
-  pauseHandler: (id: string) =>
-    send<{ ok: boolean }>(
-      `/api/admin/handlers/${encodeURIComponent(id)}/pause`,
-      'POST',
-    ),
-  resumeHandler: (id: string) =>
-    send<{ ok: boolean }>(
-      `/api/admin/handlers/${encodeURIComponent(id)}/resume`,
-      'POST',
-    ),
-  deleteHandler: (id: string) =>
-    send<{ ok: boolean }>(
-      `/api/admin/handlers/${encodeURIComponent(id)}`,
-      'DELETE',
-    ),
   agents: () => get<{ agents: RegisteredAgent[] }>('/api/admin/agents'),
   agentChannels: () =>
     get<{ channels: AvailableChannel[] }>('/api/admin/agents/channels'),
@@ -437,9 +557,106 @@ export const api = {
     );
   },
   health: () => get<{ checks: HealthCheck[] }>('/api/admin/health'),
-  heartbeat: (folder: string, lines = 40) =>
-    get<{ folder: string; log: string }>(
-      `/api/admin/heartbeat?folder=${encodeURIComponent(folder)}&lines=${lines}`,
+
+  // workflows
+  workflows: () => get<{ workflows: WorkflowSummary[] }>('/api/workflows'),
+  workflow: (slug: string) =>
+    get<{
+      workflow: WorkflowSummary;
+      definition: WorkflowDefinition;
+      filePath: string | null;
+      runs: WorkflowRun[];
+    }>(`/api/workflows/${encodeURIComponent(slug)}`),
+  saveWorkflow: (slug: string, definition: unknown) =>
+    send<{ ok: boolean; definition: WorkflowDefinition }>(
+      `/api/workflows/${encodeURIComponent(slug)}`,
+      'PUT',
+      { definition },
+    ),
+  deleteWorkflow: (slug: string) =>
+    send<{ ok: boolean }>(
+      `/api/workflows/${encodeURIComponent(slug)}`,
+      'DELETE',
+    ),
+  runWorkflow: (slug: string, inputs: Record<string, unknown> = {}) =>
+    send<{
+      ok: boolean;
+      status: string;
+      runId: string | null;
+      run: WorkflowRun | null;
+    }>(`/api/workflows/${encodeURIComponent(slug)}/run`, 'POST', { inputs }),
+  setWorkflowEnabled: (slug: string, enabled: boolean) =>
+    send<{ ok: boolean }>(
+      `/api/workflows/${encodeURIComponent(slug)}/enabled`,
+      'POST',
+      { enabled },
+    ),
+  workflowRuns: (slug: string, limit = 50) =>
+    get<{ runs: WorkflowRun[] }>(
+      `/api/workflows/${encodeURIComponent(slug)}/runs?limit=${limit}`,
+    ),
+  triggers: (slug?: string) =>
+    get<{ triggers: WorkflowTrigger[] }>(
+      slug ? `/api/triggers?slug=${encodeURIComponent(slug)}` : '/api/triggers',
+    ),
+  createTrigger: (body: {
+    slug: string;
+    type: string;
+    config?: Record<string, unknown>;
+    args?: Record<string, unknown>;
+  }) =>
+    send<{ ok: boolean; trigger: WorkflowTrigger; token: string | null }>(
+      '/api/triggers',
+      'POST',
+      body,
+    ),
+  updateTrigger: (
+    id: string,
+    body: {
+      enabled?: boolean;
+      config?: Record<string, unknown>;
+      args?: Record<string, unknown>;
+    },
+  ) =>
+    send<{ ok: boolean; trigger: WorkflowTrigger }>(
+      `/api/triggers/${encodeURIComponent(id)}`,
+      'PATCH',
+      body,
+    ),
+  deleteTrigger: (id: string) =>
+    send<{ ok: boolean }>(`/api/triggers/${encodeURIComponent(id)}`, 'DELETE'),
+  run: (id: string) =>
+    get<{
+      run: WorkflowRun;
+      definition: WorkflowDefinition;
+      steps: WorkflowStep[];
+      waits: WorkflowWait[];
+      timeline: RunTimelineEntry[];
+    }>(`/api/runs/${encodeURIComponent(id)}`),
+  cancelRun: (id: string, reason?: string) =>
+    send<{ ok: boolean }>(
+      `/api/runs/${encodeURIComponent(id)}/cancel`,
+      'POST',
+      {
+        reason,
+      },
+    ),
+  retryRun: (
+    id: string,
+    from: string,
+    override?: { node: string; output: unknown },
+  ) =>
+    send<{ ok: boolean; runId: string }>(
+      `/api/runs/${encodeURIComponent(id)}/retry`,
+      'POST',
+      { from, ...(override ?? {}) },
+    ),
+  waits: () => get<{ waits: WorkflowWait[] }>('/api/waits'),
+  respondToWait: (id: string, response: unknown) =>
+    send<{ ok: boolean }>(
+      `/api/waits/${encodeURIComponent(id)}/respond`,
+      'POST',
+      { response },
     ),
 };
 

@@ -9,15 +9,12 @@ export default function AdminLayout({
     <>
       <Nav
         base="Admin"
-        homeHref="/chat"
+        homeHref="/workflows"
         items={[
           { href: '/admin/skills', label: 'Skills' },
-          { href: '/admin/events', label: 'Events' },
-          { href: '/admin/handlers', label: 'Handlers' },
           { href: '/admin/agents', label: 'Agents' },
           { href: '/admin/context', label: 'Context' },
           { href: '/admin/health', label: 'Health' },
-          { href: '/admin/heartbeat', label: 'Heartbeat' },
           { href: '/admin/transcripts', label: 'Transcripts' },
         ]}
       />

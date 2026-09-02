@@ -1609,6 +1609,47 @@ function SidebarPane(p: SidebarProps) {
           <span>Settings</span>
         </button>
         <Link
+          href="/workflows"
+          className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="7" height="5" rx="1" />
+            <rect x="14" y="16" width="7" height="5" rx="1" />
+            <path d="M6.5 8v6a2 2 0 0 0 2 2H14" />
+          </svg>
+          <span>Workflows</span>
+        </Link>
+        <Link
+          href="/inbox"
+          className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+            <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+          </svg>
+          <span>Inbox</span>
+        </Link>
+        <Link
           href="/admin"
           className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
         >

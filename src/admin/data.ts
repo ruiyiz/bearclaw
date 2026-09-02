@@ -12,17 +12,10 @@ import {
   MAIN_AGENT_FOLDER,
   SKILLS_DIR as BEARCLAW_SKILLS_DIR,
   agentDir,
-  agentVarDir,
 } from '../config.js';
 import { isNestedRegistry, resolveRegistry } from '../agent-registry.js';
-import { decodeBlobs, loadJson } from '../utils/json.js';
-import type {
-  AgentRegistry,
-  EventRecord,
-  Handler,
-  HandlerRunLog,
-  RegisteredAgent,
-} from '../types.js';
+import { loadJson } from '../utils/json.js';
+import type { AgentRegistry, EventRecord, RegisteredAgent } from '../types.js';
 
 const DB_PATH = path.join(DATA_DIR, 'messages.db');
 
@@ -51,61 +44,6 @@ export function getEventsByType(type: string, limit = 200): EventRecord[] {
         'SELECT * FROM events WHERE type LIKE ? ORDER BY id DESC LIMIT ?',
       )
       .all(`%${type}%`, limit) as EventRecord[];
-  } finally {
-    db.close();
-  }
-}
-
-// ─── Handlers ───────────────────────────────────────────────────────────────
-
-export function getAllHandlers(): Handler[] {
-  const db = openDb();
-  try {
-    return db
-      .prepare('SELECT * FROM handlers ORDER BY created_at DESC')
-      .all()
-      .map((r) => decodeBlobs(r)) as Handler[];
-  } finally {
-    db.close();
-  }
-}
-
-export function pauseHandler(id: string): void {
-  const db = openDb(false);
-  try {
-    db.prepare("UPDATE handlers SET status = 'paused' WHERE id = ?").run(id);
-  } finally {
-    db.close();
-  }
-}
-
-export function resumeHandler(id: string): void {
-  const db = openDb(false);
-  try {
-    db.prepare("UPDATE handlers SET status = 'active' WHERE id = ?").run(id);
-  } finally {
-    db.close();
-  }
-}
-
-export function deleteHandler(id: string): void {
-  const db = openDb(false);
-  try {
-    db.prepare('DELETE FROM handler_logs WHERE handler_id = ?').run(id);
-    db.prepare('DELETE FROM handlers WHERE id = ?').run(id);
-  } finally {
-    db.close();
-  }
-}
-
-// ─── Handler Logs ───────────────────────────────────────────────────────────
-
-export function getRecentHandlerLogs(limit = 100): HandlerRunLog[] {
-  const db = openDb();
-  try {
-    return db
-      .prepare('SELECT * FROM handler_logs ORDER BY run_at DESC LIMIT ?')
-      .all(limit) as HandlerRunLog[];
   } finally {
     db.close();
   }
@@ -337,47 +275,65 @@ export function runHealthChecks(): HealthCheck[] {
   }
 
   try {
-    const count = db.prepare('SELECT count(*) as c FROM handlers').get() as {
+    const count = db.prepare('SELECT count(*) as c FROM workflows').get() as {
       c: number;
     };
     checks.push({
       name: 'Database',
       status: 'ok',
-      detail: `Accessible (${count.c} handlers)`,
+      detail: `Accessible (${count.c} workflows)`,
     });
 
-    // 3. Stale handlers
-    const handlers = db
+    // 3. Overdue triggers: a cron row whose slot passed by more than three
+    // intervals means the service loop is not firing.
+    const overdue = db
       .prepare(
-        "SELECT id, cron, last_triggered FROM handlers WHERE status = 'active' AND cron IS NOT NULL AND last_triggered IS NOT NULL",
+        `SELECT id, next_run_at, config FROM workflow_triggers
+         WHERE enabled = 1 AND type = 'cron' AND next_run_at IS NOT NULL AND next_run_at < ?`,
       )
-      .all() as Array<{ id: string; cron: string; last_triggered: string }>;
+      .all(new Date().toISOString()) as Array<{
+      id: string;
+      next_run_at: string;
+      config: string;
+    }>;
 
-    let staleCount = 0;
-    const staleNames: string[] = [];
+    const stale: string[] = [];
     const now = Date.now();
-    for (const h of handlers) {
-      const intervalMs = cronToMs(h.cron);
-      const lastMs = new Date(h.last_triggered).getTime();
-      if (now - lastMs > intervalMs * 3) {
-        staleCount++;
-        staleNames.push(h.id);
+    for (const t of overdue) {
+      let cron = '';
+      try {
+        cron = (JSON.parse(t.config) as { cron?: string }).cron ?? '';
+      } catch {
+        cron = '';
       }
+      const intervalMs = cronToMs(cron);
+      if (now - new Date(t.next_run_at).getTime() > intervalMs * 3)
+        stale.push(t.id);
     }
 
-    if (staleCount > 0) {
+    if (stale.length > 0) {
       checks.push({
-        name: 'Stale Handlers',
+        name: 'Overdue Triggers',
         status: 'warn',
-        detail: `${staleCount} stale: ${staleNames.join(', ')}`,
+        detail: `${stale.length} overdue: ${stale.join(', ')}`,
       });
     } else {
       checks.push({
-        name: 'Stale Handlers',
+        name: 'Overdue Triggers',
         status: 'ok',
-        detail: `All ${handlers.length} cron handlers on schedule`,
+        detail: 'Every cron trigger is on schedule',
       });
     }
+
+    // 3b. Runs left waiting on a person.
+    const waiting = db
+      .prepare("SELECT count(*) as c FROM workflow_waits WHERE status = 'open'")
+      .get() as { c: number };
+    checks.push({
+      name: 'Open Waits',
+      status: waiting.c > 20 ? 'warn' : 'ok',
+      detail: `${waiting.c} waiting on a human`,
+    });
 
     // 4. Event queue
     const unprocessed = db
@@ -835,14 +791,3 @@ export function deleteContextFile(
 }
 
 // ─── Heartbeat ──────────────────────────────────────────────────────────────
-
-export function getHeartbeatLogTail(agentFolder: string, lines = 20): string {
-  const logPath = path.join(agentVarDir(agentFolder), 'heartbeat-log.md');
-  try {
-    const content = fs.readFileSync(logPath, 'utf-8');
-    const allLines = content.split('\n');
-    return allLines.slice(-lines).join('\n');
-  } catch {
-    return '(no heartbeat log found)';
-  }
-}

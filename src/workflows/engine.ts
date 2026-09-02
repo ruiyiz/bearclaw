@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { VAR_DIR } from '../config.js';
 import { logger } from '../logger.js';
+import { webBroker } from '../server/broker.js';
 import {
   activeRuns,
   appendRunEvent,
@@ -42,6 +43,33 @@ import {
 } from './schema.js';
 
 const SPILL_THRESHOLD_BYTES = 32_768;
+
+function publishRun(runId: string, slug: string, status: string): void {
+  webBroker.publishWorkflow({
+    type: 'run.status',
+    runId,
+    slug,
+    status,
+    ts: Date.now(),
+  });
+}
+
+function publishStep(
+  run: RunRow,
+  nodeId: string,
+  status: string,
+  port?: string | null,
+): void {
+  webBroker.publishWorkflow({
+    type: 'step.status',
+    runId: run.id,
+    slug: run.slug,
+    nodeId,
+    status,
+    port,
+    ts: Date.now(),
+  });
+}
 
 let deps: EngineDeps = defaultDeps;
 
@@ -318,6 +346,7 @@ export async function startRun(opts: StartRunOptions): Promise<StartRunResult> {
     },
   });
   appendRunEvent(id, 'run.started', null, { inputs });
+  publishRun(id, def.slug, 'running');
 
   if (active.length && concurrency === 'queue')
     return { runId: id, status: 'queued' };
@@ -338,6 +367,7 @@ export async function cancelRun(
     finished_at: new Date().toISOString(),
   });
   appendRunEvent(runId, 'run.cancelled', null, { reason });
+  publishRun(runId, getRun(runId)?.slug ?? '', 'cancelled');
   await startNextQueued(getRun(runId)?.slug);
 }
 
@@ -388,7 +418,10 @@ async function advanceInner(runId: string): Promise<void> {
         return;
       }
       if ([...states.values()].some((s) => s.k === 'waiting')) {
-        if (run.status !== 'waiting') updateRun(runId, { status: 'waiting' });
+        if (run.status !== 'waiting') {
+          updateRun(runId, { status: 'waiting' });
+          publishRun(runId, run.slug, 'waiting');
+        }
         return;
       }
       if (busy) return;
@@ -426,6 +459,7 @@ async function finalize(
     finished_at: new Date().toISOString(),
   });
   appendRunEvent(run.id, `run.${status}`, null, error ? { error } : undefined);
+  publishRun(run.id, run.slug, status);
   logger.info({ run: run.id, slug: run.slug, status }, 'workflow run finished');
   await startNextQueued(run.slug);
 }
@@ -469,6 +503,7 @@ async function executeNode(
       input: { step_key: stepKey },
     });
     appendRunEvent(run.id, 'step.started', nodeId, { attempt });
+    publishStep(run, nodeId, 'running');
 
     let result: ExecResult;
     try {
@@ -503,6 +538,7 @@ async function executeNode(
       appendRunEvent(run.id, 'step.succeeded', nodeId, {
         port: result.port ?? DEFAULT_PORT,
       });
+      publishStep(run, nodeId, 'succeeded', result.port ?? DEFAULT_PORT);
       return;
     }
 
@@ -512,6 +548,15 @@ async function executeNode(
       appendRunEvent(run.id, 'wait.opened', nodeId, {
         wait_id: waitId,
         kind: result.wait.kind,
+      });
+      publishStep(run, nodeId, 'waiting');
+      webBroker.publishWorkflow({
+        type: 'wait.opened',
+        runId: run.id,
+        slug: run.slug,
+        nodeId,
+        waitId,
+        ts: Date.now(),
       });
       return;
     }
@@ -546,6 +591,7 @@ async function executeNode(
       error: result.message,
       routed: hasErrorEdge,
     });
+    publishStep(run, nodeId, 'failed', hasErrorEdge ? ERROR_PORT : null);
     return;
   }
 }
@@ -676,6 +722,15 @@ export async function resolveWait(
     via,
     port,
   });
+  webBroker.publishWorkflow({
+    type: 'wait.resolved',
+    runId: run.id,
+    slug: run.slug,
+    nodeId: wait.node_id,
+    waitId,
+    via,
+    ts: Date.now(),
+  });
   await advance(run.id);
 }
 
@@ -731,6 +786,83 @@ async function expireWait(wait: WaitRow): Promise<void> {
     });
   }
   await advance(run.id);
+}
+
+// ─── forking ────────────────────────────────────────────────────────────────
+
+function ancestorsOf(def: WorkflowDefinition, target: string): Set<string> {
+  const parents = new Map<string, string[]>();
+  for (const e of def.edges) {
+    const list = parents.get(e.to) ?? [];
+    list.push(e.from);
+    parents.set(e.to, list);
+  }
+  const seen = new Set<string>();
+  const queue = [...(parents.get(target) ?? [])];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const p of parents.get(id) ?? []) queue.push(p);
+  }
+  return seen;
+}
+
+// Retry-from-a-node is a fork, never a rewind: a new run copies the completed
+// steps of the target's ancestors and starts the decider there. The parent run
+// keeps its history.
+export async function forkRun(
+  runId: string,
+  fromNode: string,
+  overrideOutput?: { node: string; output: unknown },
+): Promise<string> {
+  const parent = getRun(runId);
+  if (!parent) throw new Error(`unknown run: ${runId}`);
+  const def = parent.definition;
+  if (!def.nodes[fromNode]) throw new Error(`unknown node: ${fromNode}`);
+
+  const id = newId('run');
+  insertRun({
+    id,
+    slug: parent.slug,
+    trigger_id: parent.trigger_id,
+    definition: def,
+    definition_hash: parent.definition_hash,
+    inputs: parent.inputs,
+    trigger_payload: parent.trigger_payload,
+    status: 'running',
+    parent_run_id: parent.id,
+    forked_at_node: fromNode,
+  });
+  updateRun(id, { context: { ...parent.context } });
+
+  const ancestors = ancestorsOf(def, fromNode);
+  for (const step of latestSteps(listSteps(parent.id)).values()) {
+    if (!ancestors.has(step.node_id) || step.status !== 'succeeded') continue;
+    const copied = insertStep({
+      run_id: id,
+      node_id: step.node_id,
+      attempt: 1,
+      status: 'running',
+      input: { forked_from: parent.id },
+    });
+    const output =
+      overrideOutput && overrideOutput.node === step.node_id
+        ? storeOutput(id, step.node_id, 1, overrideOutput.output)
+        : step.output;
+    updateStep(copied, {
+      status: 'succeeded',
+      port: step.port,
+      output,
+      agent_session_id: step.agent_session_id,
+      finished_at: step.finished_at,
+    });
+  }
+
+  appendRunEvent(id, 'run.forked', fromNode, { parent: parent.id });
+  publishRun(id, parent.slug, 'running');
+  await advance(id);
+  return id;
 }
 
 // ─── ticks and recovery ─────────────────────────────────────────────────────

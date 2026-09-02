@@ -14,7 +14,37 @@ import {
   agentVarDir,
 } from '../config.js';
 import { logger } from '../logger.js';
-import { webBroker, type WebOutboundEvent } from './broker.js';
+import {
+  webBroker,
+  type WebOutboundEvent,
+  type WorkflowStreamEvent,
+} from './broker.js';
+import {
+  getRun,
+  getTriggerRow,
+  getWait,
+  getWorkflowRow,
+  listOpenWaits,
+  listRunEvents,
+  listRuns,
+  listSteps,
+  listWaitsForRun,
+  listWorkflowRows,
+  setWorkflowEnabled,
+  updateTriggerRow,
+} from '../workflows/db.js';
+import { cancelRun, forkRun, resolveWait } from '../workflows/engine.js';
+import { WorkflowValidationError } from '../workflows/schema.js';
+import { deleteWorkflow, writeWorkflowFile } from '../workflows/store.js';
+import {
+  createTrigger,
+  deleteTrigger,
+  findWebhookTrigger,
+  fireTrigger,
+  listTriggers,
+  runManually,
+  setTriggerEnabled,
+} from '../workflows/triggers.js';
 import { authenticate, handleLogin, handleLogout, initAuth } from './auth.js';
 import { loadParsedTranscript } from '../agent/runner.js';
 import { commands as slashCommands } from '../commands/registry.js';
@@ -38,28 +68,22 @@ import {
   agentFolderExists,
   createAgentFolder,
   deleteAgentFolderDir,
-  getAllHandlers as adminListHandlers,
   getAllSkillSources,
   getAvailableChannels,
   getAvailableSkillsForSource,
-  getHeartbeatLogTail,
   getInstalledSkills,
   getRecentEvents,
-  getRecentHandlerLogs,
   createContextFile,
   deleteContextFile,
   installSkill,
   listAgentFolders,
   listContextFiles,
   normalizeChannelJid,
-  pauseHandler,
   readContextFile,
-  resumeHandler,
   runHealthChecks,
   syncInstalledSkills,
   uninstallSkill,
   writeContextFile,
-  deleteHandler as adminDeleteHandler,
   type AgentEntryPatch,
   type ContextScope,
 } from '../admin/data.js';
@@ -212,41 +236,6 @@ add('POST', /^\/api\/admin\/skills\/sources$/, async (req, res) => {
 add('GET', /^\/api\/admin\/events$/, (_req, res, url) => {
   const limit = parseInt(url.searchParams.get('limit') || '200', 10);
   json(res, 200, { events: getRecentEvents(limit) });
-});
-
-add('GET', /^\/api\/admin\/handlers$/, (_req, res) => {
-  json(res, 200, { handlers: adminListHandlers() });
-});
-
-add('GET', /^\/api\/admin\/handler-logs$/, (_req, res, url) => {
-  const limit = parseInt(url.searchParams.get('limit') || '100', 10);
-  json(res, 200, { logs: getRecentHandlerLogs(limit) });
-});
-
-add(
-  'POST',
-  /^\/api\/admin\/handlers\/([^/]+)\/pause$/,
-  async (_req, res, url) => {
-    const id = decodeURIComponent(url.pathname.split('/')[4]);
-    pauseHandler(id);
-    json(res, 200, { ok: true });
-  },
-);
-
-add(
-  'POST',
-  /^\/api\/admin\/handlers\/([^/]+)\/resume$/,
-  async (_req, res, url) => {
-    const id = decodeURIComponent(url.pathname.split('/')[4]);
-    resumeHandler(id);
-    json(res, 200, { ok: true });
-  },
-);
-
-add('DELETE', /^\/api\/admin\/handlers\/([^/]+)$/, async (_req, res, url) => {
-  const id = decodeURIComponent(url.pathname.split('/')[4]);
-  adminDeleteHandler(id);
-  json(res, 200, { ok: true });
 });
 
 add('GET', /^\/api\/admin\/agents$/, (_req, res, _url, opts) => {
@@ -429,12 +418,6 @@ add(
 
 add('GET', /^\/api\/admin\/health$/, (_req, res) => {
   json(res, 200, { checks: runHealthChecks() });
-});
-
-add('GET', /^\/api\/admin\/heartbeat$/, (_req, res, url) => {
-  const folder = url.searchParams.get('folder') || MAIN_AGENT_FOLDER;
-  const lines = parseInt(url.searchParams.get('lines') || '40', 10);
-  json(res, 200, { folder, log: getHeartbeatLogTail(folder, lines) });
 });
 
 add('GET', /^\/api\/admin\/context$/, (_req, res) => {
@@ -1010,6 +993,347 @@ function guessContentType(file: string): string {
   }
 }
 
+// ─── Workflow routes ────────────────────────────────────────────────────────
+
+function workflowSummary(row: ReturnType<typeof listWorkflowRows>[number]) {
+  const triggers = listTriggers(row.slug);
+  const next = triggers
+    .filter((t) => t.enabled && t.next_run_at)
+    .map((t) => t.next_run_at!)
+    .sort()[0];
+  return {
+    slug: row.slug,
+    name: row.name,
+    owner: row.owner,
+    enabled: row.enabled,
+    description: row.definition.description ?? null,
+    nodeCount: Object.keys(row.definition.nodes ?? {}).length,
+    lastStatus: row.last_status,
+    lastRunId: row.last_run_id,
+    nextRunAt: next ?? null,
+    triggers: triggers.map(triggerSummary),
+    updatedAt: row.updated_at,
+  };
+}
+
+function triggerSummary(t: ReturnType<typeof listTriggers>[number]) {
+  const { token_hash: _hash, ...config } = t.config as Record<string, unknown>;
+  return {
+    id: t.id,
+    slug: t.slug,
+    type: t.type,
+    source: t.source,
+    config,
+    args: t.args,
+    enabled: t.enabled,
+    nextRunAt: t.next_run_at,
+    lastRunId: t.last_run_id,
+    lastFiredAt: t.last_fired_at,
+    createdBy: t.created_by,
+  };
+}
+
+function runSummary(r: ReturnType<typeof listRuns>[number]) {
+  return {
+    id: r.id,
+    slug: r.slug,
+    status: r.status,
+    triggerId: r.trigger_id,
+    inputs: r.inputs,
+    startedAt: r.started_at,
+    finishedAt: r.finished_at,
+    error: r.error,
+    parentRunId: r.parent_run_id,
+    forkedAtNode: r.forked_at_node,
+  };
+}
+
+function waitSummary(w: ReturnType<typeof listOpenWaits>[number]) {
+  const run = getRun(w.run_id);
+  return {
+    id: w.id,
+    runId: w.run_id,
+    slug: run?.slug ?? null,
+    workflowName: run ? (getWorkflowRow(run.slug)?.name ?? run.slug) : null,
+    nodeId: w.node_id,
+    kind: w.kind,
+    prompt: w.prompt,
+    options: w.options,
+    fields: w.fields,
+    targets: w.targets,
+    expiresAt: w.resume_at,
+    createdAt: w.created_at,
+  };
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof WorkflowValidationError)
+    return `${err.message}: ${err.issues.join('; ')}`;
+  return err instanceof Error ? err.message : String(err);
+}
+
+add('GET', /^\/api\/workflows\/stream$/, (_req, res) => {
+  const socket = res.socket;
+  if (socket && 'setNoDelay' in socket) socket.setNoDelay(true);
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  res.write(': connected\n\n');
+  const handler = (evt: WorkflowStreamEvent) => {
+    res.write(`data: ${JSON.stringify(evt)}\n\n`);
+  };
+  webBroker.on('wf:*', handler);
+  const ka = setInterval(() => res.write(': ka\n\n'), 25000);
+  const cleanup = () => {
+    clearInterval(ka);
+    webBroker.off('wf:*', handler);
+  };
+  res.on('close', cleanup);
+  res.on('error', cleanup);
+});
+
+add('GET', /^\/api\/workflows$/, (_req, res) => {
+  json(res, 200, { workflows: listWorkflowRows().map(workflowSummary) });
+});
+
+add('GET', /^\/api\/workflows\/[^/]+$/, (_req, res, url) => {
+  const slug = decodeURIComponent(url.pathname.split('/').pop()!);
+  const row = getWorkflowRow(slug);
+  if (!row) return json(res, 404, { error: 'unknown workflow' });
+  json(res, 200, {
+    workflow: workflowSummary(row),
+    definition: row.definition,
+    filePath: row.file_path,
+    runs: listRuns(slug, 20).map(runSummary),
+  });
+});
+
+add('PUT', /^\/api\/workflows\/[^/]+$/, async (req, res, url) => {
+  const slug = decodeURIComponent(url.pathname.split('/').pop()!);
+  const body = (await readBody(req)) as { definition?: unknown };
+  if (!body.definition) return json(res, 400, { error: 'missing definition' });
+  try {
+    const def = writeWorkflowFile(body.definition as never);
+    if (def.slug !== slug)
+      return json(res, 400, { error: 'slug does not match the path' });
+    webBroker.publishWorkflow({
+      type: 'workflow.changed',
+      slug: def.slug,
+      ts: Date.now(),
+    });
+    json(res, 200, { ok: true, definition: def });
+  } catch (err) {
+    json(res, 400, { error: describeError(err) });
+  }
+});
+
+add('DELETE', /^\/api\/workflows\/[^/]+$/, (_req, res, url) => {
+  const slug = decodeURIComponent(url.pathname.split('/').pop()!);
+  if (!deleteWorkflow(slug))
+    return json(res, 404, { error: 'unknown workflow' });
+  webBroker.publishWorkflow({ type: 'workflow.changed', slug, ts: Date.now() });
+  json(res, 200, { ok: true });
+});
+
+add('POST', /^\/api\/workflows\/[^/]+\/run$/, async (req, res, url) => {
+  const slug = decodeURIComponent(url.pathname.split('/')[3]);
+  const body = (await readBody(req)) as { inputs?: Record<string, unknown> };
+  try {
+    const result = await runManually(slug, body.inputs ?? {}, 'web');
+    json(res, 200, {
+      ok: true,
+      status: result.status,
+      runId: result.runId,
+      run: result.runId ? runSummary(getRun(result.runId)!) : null,
+    });
+  } catch (err) {
+    json(res, 400, { error: describeError(err) });
+  }
+});
+
+add('POST', /^\/api\/workflows\/[^/]+\/enabled$/, async (req, res, url) => {
+  const slug = decodeURIComponent(url.pathname.split('/')[3]);
+  if (!getWorkflowRow(slug))
+    return json(res, 404, { error: 'unknown workflow' });
+  const body = (await readBody(req)) as { enabled?: boolean };
+  setWorkflowEnabled(slug, body.enabled !== false);
+  json(res, 200, { ok: true });
+});
+
+add('GET', /^\/api\/workflows\/[^/]+\/runs$/, (_req, res, url) => {
+  const slug = decodeURIComponent(url.pathname.split('/')[3]);
+  const limit = Math.min(
+    Math.max(parseInt(url.searchParams.get('limit') || '50', 10), 1),
+    200,
+  );
+  json(res, 200, { runs: listRuns(slug, limit).map(runSummary) });
+});
+
+add('GET', /^\/api\/triggers$/, (_req, res, url) => {
+  const slug = url.searchParams.get('slug') || undefined;
+  json(res, 200, { triggers: listTriggers(slug).map(triggerSummary) });
+});
+
+add('POST', /^\/api\/triggers$/, async (req, res) => {
+  const body = (await readBody(req)) as {
+    slug?: string;
+    type?: string;
+    config?: Record<string, unknown>;
+    args?: Record<string, unknown>;
+  };
+  if (!body.slug || !body.type)
+    return json(res, 400, { error: 'slug and type are required' });
+  try {
+    const trigger = createTrigger({
+      slug: body.slug,
+      type: body.type as Parameters<typeof createTrigger>[0]['type'],
+      config: body.config ?? {},
+      args: body.args ?? {},
+      createdBy: 'web',
+    });
+    // The webhook token is returned once, here, and never stored in the clear.
+    json(res, 200, {
+      ok: true,
+      trigger: triggerSummary(trigger),
+      token: (trigger.config.token as string) ?? null,
+    });
+  } catch (err) {
+    json(res, 400, { error: describeError(err) });
+  }
+});
+
+add('PATCH', /^\/api\/triggers\/[^/]+$/, async (req, res, url) => {
+  const id = decodeURIComponent(url.pathname.split('/').pop()!);
+  const trigger = getTriggerRow(id);
+  if (!trigger) return json(res, 404, { error: 'unknown trigger' });
+  const body = (await readBody(req)) as {
+    enabled?: boolean;
+    config?: Record<string, unknown>;
+    args?: Record<string, unknown>;
+  };
+  try {
+    if (body.enabled !== undefined) setTriggerEnabled(id, body.enabled);
+    if (body.config || body.args) {
+      if (trigger.source === 'file')
+        return json(res, 400, {
+          error: 'this trigger is declared in the workflow file; edit the file',
+        });
+      updateTriggerRow(id, {
+        ...(body.config ? { config: body.config } : {}),
+        ...(body.args ? { args: body.args } : {}),
+      });
+    }
+    json(res, 200, { ok: true, trigger: triggerSummary(getTriggerRow(id)!) });
+  } catch (err) {
+    json(res, 400, { error: describeError(err) });
+  }
+});
+
+add('DELETE', /^\/api\/triggers\/[^/]+$/, (_req, res, url) => {
+  const id = decodeURIComponent(url.pathname.split('/').pop()!);
+  try {
+    deleteTrigger(id);
+    json(res, 200, { ok: true });
+  } catch (err) {
+    json(res, 400, { error: describeError(err) });
+  }
+});
+
+add('GET', /^\/api\/runs\/[^/]+$/, (_req, res, url) => {
+  const id = decodeURIComponent(url.pathname.split('/').pop()!);
+  const run = getRun(id);
+  if (!run) return json(res, 404, { error: 'unknown run' });
+  json(res, 200, {
+    run: runSummary(run),
+    definition: run.definition,
+    steps: listSteps(id).map((s) => ({
+      id: s.id,
+      nodeId: s.node_id,
+      attempt: s.attempt,
+      status: s.status,
+      port: s.port,
+      output: s.output,
+      error: s.error,
+      agentSessionId: s.agent_session_id,
+      startedAt: s.started_at,
+      finishedAt: s.finished_at,
+    })),
+    waits: listWaitsForRun(id).map((w) => ({
+      ...waitSummary(w),
+      status: w.status,
+      response: w.response,
+      responder: w.responder,
+      respondedVia: w.responded_via,
+    })),
+    timeline: listRunEvents(id),
+  });
+});
+
+add('POST', /^\/api\/runs\/[^/]+\/cancel$/, async (req, res, url) => {
+  const id = decodeURIComponent(url.pathname.split('/')[3]);
+  if (!getRun(id)) return json(res, 404, { error: 'unknown run' });
+  const body = (await readBody(req)) as { reason?: string };
+  await cancelRun(id, body.reason ?? 'cancelled from the dashboard');
+  json(res, 200, { ok: true });
+});
+
+add('POST', /^\/api\/runs\/[^/]+\/retry$/, async (req, res, url) => {
+  const id = decodeURIComponent(url.pathname.split('/')[3]);
+  const body = (await readBody(req)) as {
+    from?: string;
+    output?: unknown;
+    node?: string;
+  };
+  if (!body.from) return json(res, 400, { error: 'missing from' });
+  try {
+    const forkId = await forkRun(
+      id,
+      body.from,
+      body.node !== undefined
+        ? { node: body.node, output: body.output }
+        : undefined,
+    );
+    json(res, 200, { ok: true, runId: forkId });
+  } catch (err) {
+    json(res, 400, { error: describeError(err) });
+  }
+});
+
+add('GET', /^\/api\/waits$/, (_req, res) => {
+  json(res, 200, { waits: listOpenWaits('human').map(waitSummary) });
+});
+
+add('POST', /^\/api\/waits\/[^/]+\/respond$/, async (req, res, url) => {
+  const id = decodeURIComponent(url.pathname.split('/')[3]);
+  const wait = getWait(id);
+  if (!wait || wait.status !== 'open')
+    return json(res, 404, { error: 'no open wait with that id' });
+  const body = (await readBody(req)) as { response?: unknown };
+  await resolveWait(id, body.response, 'web', 'web');
+  json(res, 200, { ok: true });
+});
+
+// Public: authenticated by the token in the path, deduped by run key so a
+// retrying sender cannot start the same run twice.
+add('POST', /^\/api\/hooks\/[^/]+$/, async (req, res, url) => {
+  const token = decodeURIComponent(url.pathname.split('/').pop()!);
+  const trigger = findWebhookTrigger(token);
+  if (!trigger) return json(res, 404, { error: 'unknown hook' });
+  const payload = await readBody(req);
+  const key =
+    (req.headers['x-idempotency-key'] as string | undefined) ??
+    `${trigger.id}@${Date.now()}`;
+  try {
+    const result = await fireTrigger(trigger, payload, `hook:${key}`);
+    json(res, 200, { ok: true, status: result.status, runId: result.runId });
+  } catch (err) {
+    json(res, 400, { error: describeError(err) });
+  }
+});
+
 // ─── Server bootstrap ───────────────────────────────────────────────────────
 
 // Routes that bypass the cookie-auth gate. Everything else under /api/* must
@@ -1018,6 +1342,8 @@ const PUBLIC_API: Array<RegExp> = [
   /^\/api\/auth\/login$/,
   /^\/api\/auth\/me$/,
   /^\/api\/auth\/logout$/,
+  // Webhook triggers carry their own capability token in the path.
+  /^\/api\/hooks\/[^/]+$/,
   // Media URLs are issued to authed clients; keep gated. If we ever need an
   // unauthenticated thumb/share endpoint, add a separate path here.
 ];

@@ -6,7 +6,7 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 Single Node.js process that connects to chat platforms (WhatsApp, Telegram, iMessage), the Gmail integration, and a local web UI, routing messages to the Claude Agent SDK running directly on the host. Each agent has its own working directory and memory.
 
-The web UI is a Next.js 15 PWA in `web/` (separate package). It talks to a local HTTP/SSE server (`src/server/http.ts`, default `127.0.0.1:7878`) inside the main process. The web app has two module groups: **user** (chat, events) and **admin** (skills, handlers, agents, health, heartbeat). The Workflows module replaces the handler and heartbeat pages as it lands.
+The web UI is a Next.js 15 PWA in `web/` (separate package). It talks to a local HTTP/SSE server (`src/server/http.ts`, default `127.0.0.1:7878`) inside the main process. The web app has top-level modules: **Chat**, **Workflows** (list, detail, run view, schedules, event log), **Inbox** (open human steps) and **Admin** (skills, agents, context, health, transcripts).
 
 Auth: signed-cookie session + double-submit CSRF (`src/server/auth.ts`). Single owner password from `BEARCLAW_PASSWORD` in `~/.bearclaw/.env`. If unset on first start, a random password is written to `~/.bearclaw/var/initial-password` and logged once — copy it to the env file then delete the bootstrap file. HMAC secret auto-generated at `~/.bearclaw/var/auth-secret`. Web app gates all routes via `web/middleware.ts`; API client (`web/lib/api.ts`) attaches `x-csrf-token` from the `nc_csrf` cookie on mutations.
 
@@ -28,8 +28,9 @@ src/
 web/               # Next.js 15 + PWA. Talks to HTTP server via /api/* rewrite.
 ├── app/
 │   ├── chat/                user chat UI (SSE-streamed)
-│   ├── events/              user event feed
-│   └── admin/               admin pages: skills, events, handlers, agents, health, heartbeat
+│   ├── workflows/           workflows list, detail, run view, schedules, events
+│   ├── inbox/               open human steps across workflows
+│   └── admin/               admin pages: skills, agents, context, health, transcripts
 ├── components/
 ├── lib/api.ts               REST + SSE client
 └── public/sw.js             service worker

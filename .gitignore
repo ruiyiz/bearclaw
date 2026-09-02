@@ -30,3 +30,6 @@ agents-sdk-docs
 
 # Playwright MCP scratch dir
 .playwright-mcp/
+
+# TypeScript incremental build info
+*.tsbuildinfo
