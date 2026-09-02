@@ -383,11 +383,13 @@
 
       <p>
         <strong>Workflow</strong>: a definition file. Name, owner agent (default
-        agent for LLM nodes), triggers, nodes, edges, policies. Lives at
+        agent for LLM nodes), an <code>inputs</code> schema, nodes, edges,
+        policies, and optionally declared triggers. Lives at
         <code>~/.bearclaw/workflows/&lt;slug&gt;.json</code>. Files are the
         source of truth so the owner and the agent can edit them with ordinary
         file tools, they diff in git, and they match how skills and context
-        files already work.
+        files already work. A workflow is a function of its inputs; nothing in
+        it depends on how it was fired.
       </p>
 
       <p>
@@ -543,14 +545,45 @@
       </p>
 
       <p>
-        <strong>Trigger</strong>: one or more per workflow.
-        <code>cron</code> (expression, timezone, quiet window, catch-up policy),
-        <code>event</code> (type + filter, replaces
+        <strong>Trigger</strong>: a separate entity that binds a firing
+        condition to a workflow and supplies its inputs. Stored as rows in
+        <code>workflow_triggers</code>, never as state in the definition file.
+        Types: <code>cron</code> (expression, timezone, quiet window, catch-up
+        policy), <code>event</code> (type + filter, replaces
         <code>register_handler</code>), <code>manual</code> (dashboard button,
         <code>/run &lt;slug&gt;</code> in chat, MCP tool),
         <code>webhook</code> (<code>POST /api/hooks/&lt;token&gt;</code>,
         authenticated by token only), <code>at</code> (one-shot, replaces
-        <code>schedule_task run_at</code>).
+        <code>schedule_task run_at</code>). Each trigger carries
+        <code>args</code>, an object validated against the workflow's
+        <code>inputs</code> schema; event and webhook triggers may map fields
+        from their payload into args, and the raw payload stays available to
+        nodes as <code>trigger.payload</code>. Triggers have their own
+        <code>enabled</code>, <code>next_run_at</code> and
+        <code>last_run_id</code>, so one cron can be paused without touching the
+        workflow, and a run records which trigger fired it.
+      </p>
+
+      <p>
+        Two sources. A definition file may declare <code>triggers[]</code>; the
+        loader upserts them with <code>source: file</code> and overwrites them
+        on every reload, so the nightly cron lives next to the graph it drives
+        and is versioned with it. Triggers created at runtime by the agent or
+        the UI (a reminder for tomorrow, an extra webhook, a second schedule
+        with different args) are rows with <code>source: runtime</code> and
+        never touch the file. The split keeps mutable state (next fire time,
+        one-shot reminders) out of git-tracked files while keeping the common
+        case a single file.
+      </p>
+
+      <p>
+        The payoff is reuse. One <code>reminder</code> workflow with
+        <code>inputs: { text, to }</code> and a single <code>send</code> node
+        serves every "remind me tomorrow at 9"; the agent adds an
+        <code>at</code> trigger with args instead of writing a workflow per
+        reminder. The same feed-triage graph runs nightly from cron with
+        <code>{ "limit": 15 }</code> and on demand from chat with
+        <code>{ "limit": 40 }</code>.
       </p>
 
       <p>
@@ -674,17 +707,21 @@
   "name": "Feed triage",
   "slug": "feed-triage",
   "owner": "main",
+  "inputs": {
+    "type": "object",
+    "properties": { "limit": { "type": "integer", "default": 15 } }
+  },
   "triggers": [
-    { "type": "cron", "cron": "0 20 * * *" },
-    { "type": "manual" }
+    { "id": "nightly", "type": "cron", "cron": "0 20 * * *" },
+    { "id": "manual", "type": "manual" }
   ],
   "policies": {
     "concurrency": "skip",
-    "alerts": { "on_failure": "owner", "on_missed": { "expected_within": "2h" } }
+    "alerts": { "on_failure": "owner", "on_missed": { "trigger": "nightly", "expected_within": "2h" } }
   },
   "nodes": {
     "count":   { "type": "shell", "cmd": "feeds count --exclude-category aggregators", "parse": "json" },
-    "unread":  { "type": "shell", "cmd": "feeds unread --json --newest --per-feed 3 --limit 15 --exclude-category aggregators", "parse": "json" },
+    "unread":  { "type": "shell", "cmd": "feeds unread --json --newest --per-feed 3 --limit {{inputs.limit}} --exclude-category aggregators", "parse": "json" },
     "any":     { "type": "condition", "expr": "nodes.unread.output.length > 0" },
     "summarize": {
       "type": "agent",
@@ -749,24 +786,40 @@
       <p>New module <code>src/workflows/</code>:</p>
       <pre><code>src/workflows/
 ├── schema.ts        zod schema for definitions; validation (acyclic, edge refs, unique ids)
-├── store.ts         load/watch ~/.bearclaw/workflows/*.json; index rows in SQLite
+├── store.ts         load/watch ~/.bearclaw/workflows/*.json; index rows; upsert file-declared triggers
 ├── engine.ts        run loop: ready-set computation, step execution, persistence, recovery
-├── triggers.ts      cron ticker, event subscription, webhook, one-shot `at`
+├── triggers.ts      trigger table: cron ticker, event subscription, webhook, one-shot `at`; args → inputs
 ├── waits.ts         human / event / delay waits; resolution; notification delivery
 ├── expr.ts          vm-sandboxed expressions + template rendering
 ├── executors/       one file per node type, each `execute(node, ctx, run, signal) → Result`
 └── migrate.ts       handlers rows + heartbeat config → workflow files (one time)</code></pre>
 
       <p>Tables (in <code>db.ts</code>):</p>
-      <pre><code>workflows       (slug PK, name, owner, enabled, file_hash, next_run_at, last_run_id, last_status)
-workflow_runs   (id PK, slug, definition, definition_hash, run_key UNIQUE NULL, trigger_type,
-                 trigger_payload, status, context, started_at, finished_at, error,
-                 parent_run_id, forked_at_node)
-workflow_steps  (id PK, run_id, node_id, attempt, status, input, output, error, log_path,
-                 agent_session_id, started_at, finished_at)
-workflow_waits  (id PK, run_id, node_id, kind, prompt, options, targets, notify_refs,
-                 resume_at, on_timeout, token_hash, response, responder, responded_via, resolved_at)
-workflow_events (id PK, run_id, ts, node_id, kind, payload)      -- append-only timeline for the UI</code></pre>
+      <pre><code>workflows         (slug PK, name, owner, enabled, file_hash, last_run_id, last_status)
+workflow_triggers (id PK, slug, type, source 'file'|'runtime', config, args, enabled,
+                   next_run_at, last_run_id, created_by, created_at)
+workflow_runs     (id PK, slug, trigger_id, definition, definition_hash, run_key UNIQUE NULL,
+                   inputs, trigger_payload, status, context, started_at, finished_at, error,
+                   parent_run_id, forked_at_node)
+workflow_steps    (id PK, run_id, node_id, attempt, status, input, output, error, log_path,
+                   agent_session_id, started_at, finished_at)
+workflow_waits    (id PK, run_id, node_id, kind, prompt, options, targets, notify_refs,
+                   resume_at, on_timeout, token_hash, response, responder, responded_via, resolved_at)
+workflow_events   (id PK, run_id, ts, node_id, kind, payload)      -- append-only timeline for the UI</code></pre>
+
+      <p>
+        <strong>Firing.</strong> <code>triggers.ts</code> owns one scan over
+        <code>workflow_triggers</code>: cron and <code>at</code> rows by
+        <code>next_run_at</code>, event rows by subscription on the
+        <code>events</code> table, webhook rows by token lookup, manual rows by
+        API call. Firing means: validate <code>args</code> (merged with any
+        mapped payload fields) against the workflow's <code>inputs</code>
+        schema, apply the workflow's concurrency policy, insert a run with
+        <code>trigger_id</code> and <code>inputs</code>, and hand it to the
+        decider. An <code>at</code> trigger disables itself after firing. A
+        file-declared trigger whose id disappears from the file is deleted on
+        reload; a runtime trigger is never touched by the loader.
+      </p>
 
       <p>
         <strong>Decider loop.</strong> A run advances by computing the set of
@@ -939,6 +992,31 @@ workflow_events (id PK, run_id, ts, node_id, kind, payload)      -- append-only 
             <td>Cancel a run.</td>
           </tr>
           <tr>
+            <td><code>trigger_create</code></td>
+            <td>
+              Add a runtime trigger to a workflow: type, config, args. Args are
+              validated against the workflow's inputs schema before the row is
+              written. Non-main agents may only target workflows they own.
+            </td>
+          </tr>
+          <tr>
+            <td><code>trigger_list</code></td>
+            <td>
+              Triggers across workflows with source, next fire time and last
+              run. Replaces <code>list_handlers</code> and the
+              <code>/jobs</code> command.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>trigger_set_enabled</code> / <code>trigger_delete</code>
+            </td>
+            <td>
+              Pause, resume or remove a single trigger. File-declared triggers
+              can be paused but not deleted here; the file is their source.
+            </td>
+          </tr>
+          <tr>
             <td><code>emit_event</code></td>
             <td>
               Unchanged, but now authorized: non-main agents may only emit types
@@ -949,12 +1027,31 @@ workflow_events (id PK, run_id, ts, node_id, kind, payload)      -- append-only 
       </table>
       <p>
         One-shot reminders ("remind me tomorrow at 9") become
-        <code>workflow_upsert</code> with an <code>at</code> trigger and a
-        single <code>send</code> node. The agent no longer needs an LLM run to
-        deliver a fixed string. A periodic check-in (what heartbeat used to be)
-        is <code>workflow_upsert</code> with a cron trigger and one
-        <code>agent</code> node.
+        <code>trigger_create</code> on the shared
+        <code>reminder</code> workflow:
+        <code>{ type: "at", at: "...", args: { text, to } }</code>. No new file,
+        no LLM run to deliver a fixed string, and the reminder shows up in the
+        schedules view like everything else. A periodic check-in (what heartbeat
+        used to be) is one <code>workflow_upsert</code> with a cron trigger
+        declared in the file and one <code>agent</code>
+        node.
       </p>
+
+      <pre><code>{
+  "$schema": "bearclaw://workflow/v1",
+  "name": "Reminder",
+  "slug": "reminder",
+  "owner": "main",
+  "inputs": {
+    "type": "object",
+    "required": ["text"],
+    "properties": { "text": { "type": "string" }, "to": { "type": "string" } }
+  },
+  "nodes": {
+    "deliver": { "type": "send", "text": "{{inputs.text}}", "to": "{{default inputs.to 'primary'}}" }
+  },
+  "edges": []
+}</code></pre>
 
       <h2 id="web">Web UI restructure</h2>
 
@@ -989,6 +1086,15 @@ workflow_events (id PK, run_id, ts, node_id, kind, payload)      -- append-only 
             <td>
               <code>/inbox</code> open human waits across all workflows, badge
               in nav
+            </td>
+          </tr>
+          <tr>
+            <td>Schedules</td>
+            <td>
+              <code>/workflows/schedules</code> every trigger across workflows,
+              sorted by next fire time, with file/runtime badge, pause, run now,
+              and last-run status. This is the "all workflows, scheduled or
+              otherwise" view; it lives under Workflows in the nav.
             </td>
           </tr>
           <tr>
@@ -1032,9 +1138,13 @@ workflow_events (id PK, run_id, ts, node_id, kind, payload)      -- append-only 
 GET    /api/workflows/:slug              definition + index row
 PUT    /api/workflows/:slug              validate + write file
 DELETE /api/workflows/:slug
-POST   /api/workflows/:slug/run
+POST   /api/workflows/:slug/run          { inputs }  (manual trigger)
 POST   /api/workflows/:slug/enabled      { enabled }
 GET    /api/workflows/:slug/runs
+GET    /api/triggers                     all triggers, next fire time, last run
+POST   /api/triggers                     { slug, type, config, args }
+PATCH  /api/triggers/:id                 { enabled, config, args }  (runtime only for config/args)
+DELETE /api/triggers/:id                 runtime only
 GET    /api/runs/:id                     run + steps
 POST   /api/runs/:id/cancel
 POST   /api/runs/:id/retry               { from: nodeId }
@@ -1048,12 +1158,16 @@ GET    /r/:token                         signed one-shot approval link (public)<
       <p><code>migrate.ts</code> runs once on first boot after the upgrade:</p>
       <ul>
         <li>
-          Every <code>handlers</code> row becomes
+          Every recurring or event <code>handlers</code> row becomes
           <code>~/.bearclaw/workflows/&lt;id&gt;.json</code> with a single
           <code>agent</code> node carrying the old prompt,
-          <code>session: chat</code> for <code>context_mode: agent</code>, the
-          cron or event trigger, and <code>enabled</code> from
-          <code>status</code>. Completed one-shots are skipped.
+          <code>session: chat</code> for <code>context_mode: agent</code>, and
+          the cron or event trigger declared in the file with
+          <code>enabled</code> from <code>status</code>. Pending one-shot
+          reminders (the <code>run_at</code> handlers) become
+          <code>at</code> triggers on the built-in
+          <code>reminder</code> workflow with the old prompt as
+          <code>args.text</code>; completed one-shots are skipped.
         </li>
         <li>
           Each agent with a <code>heartbeat</code> block becomes
@@ -1553,6 +1667,18 @@ GET    /r/:token                         signed one-shot approval link (public)<
           dedupe).
         </li>
         <li>
+          <strong
+            >Triggers as separate entities binding args to a workflow's typed
+            inputs</strong
+          >
+          (Windmill schedules and webhooks pointing at a flow path with their
+          own args; Temporal Schedules; Conductor's external schedulers), with
+          Kestra's convenience of declaring the common ones in the file. n8n,
+          Sim, Activepieces and Dify make the trigger the root node, which ties
+          the graph to one firing shape and makes "same workflow, different
+          schedule and args" a copy.
+        </li>
+        <li>
           <strong>Three synced views</strong> (Kestra: YAML, form, topology). v1
           ships JSON + graph; the form editor comes second, drag-and-drop last.
         </li>
@@ -1742,11 +1868,13 @@ GET    /r/:token                         signed one-shot approval link (public)<
           <code>initDatabase</code> accept a path) and a fake agent runner.
         </li>
         <li>
-          <strong>Triggers and cut-over.</strong> <code>cron</code>,
-          <code>event</code>, <code>manual</code>, <code>at</code>,
-          <code>webhook</code>. Migration script. Agent tools swapped. Old
-          bus/scheduler/heartbeat deleted. <code>/workflows</code> slash
-          command. Existing handlers keep running as one-node workflows.
+          <strong>Triggers and cut-over.</strong> Trigger table with file and
+          runtime sources; <code>cron</code>, <code>event</code>,
+          <code>manual</code>, <code>at</code>, <code>webhook</code>; args
+          validated against inputs. Built-in <code>reminder</code> workflow.
+          Migration script. Agent tools swapped. Old bus/scheduler/heartbeat
+          deleted. <code>/workflows</code> slash command. Existing handlers keep
+          running as one-node workflows.
         </li>
         <li>
           <strong>Web module.</strong> Nav restructure, workflows list, run view
@@ -1791,6 +1919,13 @@ GET    /r/:token                         signed one-shot approval link (public)<
         <li>
           Every wait expires. Default 3 days for <code>human</code>;
           <code>wait_event</code> requires an explicit timeout.
+        </li>
+        <li>
+          Triggers are rows, not definition state. Files may declare them as a
+          convenience and the loader owns those rows; everything created at
+          runtime lives only in the table. Workflows declare an
+          <code>inputs</code> schema and read <code>inputs.*</code>, never the
+          trigger's shape.
         </li>
         <li>
           <code>@xyflow/react</code> + <code>@dagrejs/dagre</code> are the only
