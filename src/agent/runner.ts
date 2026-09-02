@@ -59,6 +59,13 @@ export function maxEffort(a: EffortLevel, b?: EffortLevel): EffortLevel {
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
+  // Workflow agent nodes: typed handoff, per-node tool and turn limits, and a
+  // caller-owned abort signal.
+  outputSchema?: Record<string, unknown>;
+  allowedTools?: string[];
+  maxTurns?: number;
+  timeoutMs?: number;
+  abortSignal?: AbortSignal;
   agentFolder: string;
   chatJid: string;
   isMain: boolean;
@@ -139,6 +146,7 @@ export function describeBlock(b: {
 interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
+  structuredOutput?: unknown;
   newSessionId?: string;
   error?: string;
   timedOut?: boolean;
@@ -415,13 +423,26 @@ export async function runContainerAgent(
   const userMcpServers = loadUserMcpServers();
 
   let result: string | null = null;
+  let structuredOutput: unknown;
   let newSessionId: string | undefined;
 
   const prompt = input.prompt;
 
   // Timeout via AbortController
   const abortController = new AbortController();
-  const timeout = group.containerConfig?.timeout || AGENT_TIMEOUT;
+  if (input.abortSignal) {
+    if (input.abortSignal.aborted) abortController.abort();
+    else
+      input.abortSignal.addEventListener(
+        'abort',
+        () => abortController.abort(),
+        {
+          once: true,
+        },
+      );
+  }
+  const timeout =
+    input.timeoutMs || group.containerConfig?.timeout || AGENT_TIMEOUT;
   let timedOut = false;
   const timeoutHandle = setTimeout(() => {
     timedOut = true;
@@ -457,7 +478,16 @@ export async function runContainerAgent(
           preset: 'claude_code',
           append: fullSystemPrompt,
         },
-        allowedTools: [
+        ...(input.outputSchema
+          ? {
+              outputFormat: {
+                type: 'json_schema' as const,
+                schema: input.outputSchema,
+              },
+            }
+          : {}),
+        ...(input.maxTurns ? { maxTurns: input.maxTurns } : {}),
+        allowedTools: input.allowedTools ?? [
           'Bash',
           'Read',
           'Write',
@@ -556,6 +586,9 @@ export async function runContainerAgent(
       if ('result' in message && message.result) {
         result = message.result as string;
       }
+      if (message.type === 'result' && 'structured_output' in message) {
+        structuredOutput = message.structured_output;
+      }
     }
 
     clearTimeout(timeoutHandle);
@@ -611,6 +644,7 @@ export async function runContainerAgent(
     return {
       status: 'success',
       result,
+      structuredOutput,
       newSessionId,
       sentMediaViaIpc,
     };

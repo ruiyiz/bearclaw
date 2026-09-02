@@ -7,6 +7,7 @@ import { DATA_DIR } from './config.js';
 import { logger } from './logger.js';
 import { EventRecord, Handler, HandlerRunLog, NewMessage } from './types.js';
 import { decodeBlobs } from './utils/json.js';
+import { initWorkflowTables } from './workflows/tables.js';
 
 let db: Database.Database;
 
@@ -14,9 +15,13 @@ export function getDb(): Database.Database {
   return db;
 }
 
-export function initDatabase(): void {
-  const dbPath = path.join(DATA_DIR, 'messages.db');
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+// `dbPath` is injectable so tests can run the real schema against
+// ':memory:' instead of the operator's database.
+export function initDatabase(
+  dbPath = path.join(DATA_DIR, 'messages.db'),
+): void {
+  if (dbPath !== ':memory:')
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   db = new Database(dbPath);
 
@@ -175,6 +180,8 @@ export function initDatabase(): void {
   db.exec(
     `UPDATE handlers SET context_mode = 'agent' WHERE context_mode = 'group'`,
   );
+
+  initWorkflowTables(db);
 }
 
 // One-shot web-channel migration: pre-session web rows live under chat_jid =

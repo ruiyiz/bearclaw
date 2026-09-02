@@ -1,6 +1,6 @@
 {
   "name": "bearclaw",
-  "version": "2026.9.1",
+  "version": "2026.9.2",
   "description": "Personal Claude assistant. Lightweight, secure, customizable.",
   "type": "module",
   "main": "dist/index.js",
@@ -13,7 +13,7 @@
     "web:build": "cd web && bun run build",
     "web:start": "cd web && bun run start",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test": "NODE_ENV=test tsx --test \"src/**/*.test.ts\"",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\""
   },

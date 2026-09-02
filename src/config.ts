@@ -28,6 +28,9 @@ export const CONFIG_DIR = path.resolve(BEARCLAW_HOME, 'config');
 export const CONTEXT_DIR = path.resolve(BEARCLAW_HOME, 'context');
 export const AGENTS_DIR = path.resolve(BEARCLAW_HOME, 'agents');
 export const SKILLS_DIR = path.resolve(BEARCLAW_HOME, 'skills');
+export const WORKFLOWS_DIR = path.resolve(
+  process.env.BEARCLAW_WORKFLOWS_DIR || path.join(BEARCLAW_HOME, 'workflows'),
+);
 
 // Runtime (gitignored)
 export const VAR_DIR = path.resolve(BEARCLAW_HOME, 'var');
@@ -88,12 +91,14 @@ export const WARM_START_BUDGET_BYTES = parseInt(
 
 // Default model — used when no per-agent override is set in models.json.
 // Required: must be set in ~/.bearclaw/.env (e.g. DEFAULT_MODEL=claude-sonnet-4-6).
-if (!process.env.DEFAULT_MODEL) {
+// Tests run against the real modules, so they get a placeholder rather than
+// the operator's model.
+if (!process.env.DEFAULT_MODEL && process.env.NODE_ENV !== 'test') {
   throw new Error(
     'DEFAULT_MODEL is required. Set it in ~/.bearclaw/.env (e.g. DEFAULT_MODEL=claude-sonnet-4-6).',
   );
 }
-export const DEFAULT_MODEL = process.env.DEFAULT_MODEL;
+export const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'test-model';
 
 // OpenAI key — used by image_generate (gpt-image-2). Long-term memory lives
 // in gbrain (separate process); bearclaw doesn't embed anything itself.
