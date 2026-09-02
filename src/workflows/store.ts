@@ -135,7 +135,10 @@ export function watchWorkflowFiles(
     clearTimeout(timer);
     timer = setTimeout(() => {
       try {
-        onChange?.(syncWorkflowFiles());
+        // Not `onChange?.(syncWorkflowFiles())`: optional call short-circuits
+        // its own arguments, so the reload would never run without a callback.
+        const report = syncWorkflowFiles();
+        onChange?.(report);
       } catch (err) {
         logger.error({ err }, 'workflow: reload failed');
       }

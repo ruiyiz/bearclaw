@@ -13,8 +13,12 @@ process.env.NODE_ENV = 'test';
 const { initDatabase } = await import('../db.js');
 initDatabase(':memory:');
 const { getWorkflowRow, listWorkflowRows } = await import('./db.js');
-const { deleteWorkflow, syncWorkflowFiles, writeWorkflowFile } =
-  await import('./store.js');
+const {
+  deleteWorkflow,
+  syncWorkflowFiles,
+  watchWorkflowFiles,
+  writeWorkflowFile,
+} = await import('./store.js');
 
 after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -93,4 +97,13 @@ test('deleteWorkflow removes both the file and the row', () => {
   assert.equal(deleteWorkflow('checkin'), true);
   assert.equal(fs.existsSync(path.join(tmpDir, 'checkin.json')), false);
   assert.equal(deleteWorkflow('checkin'), false);
+});
+
+test('the watcher reloads on its own, with or without a callback', async () => {
+  const stop = watchWorkflowFiles();
+  writeRaw('watched.json', { ...DEF, slug: 'watched', name: 'Watched' });
+  // Debounced at 200ms inside the watcher; wait well clear of it.
+  await new Promise((r) => setTimeout(r, 1200));
+  stop();
+  assert.equal(getWorkflowRow('watched')?.name, 'Watched');
 });
