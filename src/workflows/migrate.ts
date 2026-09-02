@@ -222,7 +222,16 @@ export function migrateHandlersToWorkflows(force = false): MigrationReport {
       logger.warn({ err, folder }, 'workflow migration: heartbeat skipped');
     }
   }
-  if (registryChanged) saveJson(registryPath, registry);
+  if (registryChanged) {
+    // The registry is hand-edited config; keep a copy before dropping the
+    // heartbeat blocks out of it.
+    try {
+      fs.copyFileSync(registryPath, `${registryPath}.pre-workflows.bak`);
+    } catch (err) {
+      logger.warn({ err }, 'workflow migration: registry backup failed');
+    }
+    saveJson(registryPath, registry);
+  }
 
   saveJson(MARKER(), { migrated_at: new Date().toISOString(), ...report });
   logger.info(report, 'workflow migration complete');

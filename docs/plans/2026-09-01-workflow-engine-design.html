@@ -5,6 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Workflow Engine Design</title>
     <style>
+      .done,
+      .todo {
+        display: inline-block;
+        font-size: 0.72rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        padding: 0.1em 0.45em;
+        border-radius: 4px;
+        margin-right: 0.4em;
+        vertical-align: 0.08em;
+      }
+      .done {
+        background: rgba(63, 160, 107, 0.16);
+        color: #2f7d53;
+      }
+      .todo {
+        background: rgba(128, 128, 128, 0.16);
+        color: #6b6b6b;
+      }
+
       :root {
         color-scheme: light dark;
         --bg: #fbfbfa;
@@ -258,7 +278,7 @@
       </p>
       <p class="meta">
         BearClaw · 2026-09-01 · branch <code>feat/workflows</code> · status:
-        proposal
+        <strong>phases 1–4 implemented 2026-09-02</strong>
       </p>
 
       <nav class="toc">
@@ -1859,6 +1879,7 @@ GET    /r/:token                         signed one-shot approval link (public)<
       <h2 id="phases">Phases</h2>
       <ol>
         <li>
+          <span class="done">shipped</span>
           <strong>Engine core.</strong> Schema, store, engine, executors for
           <code>shell</code>, <code>agent</code>, <code>condition</code>,
           <code>switch</code>, <code>template</code>, <code>transform</code>,
@@ -1868,6 +1889,7 @@ GET    /r/:token                         signed one-shot approval link (public)<
           <code>initDatabase</code> accept a path) and a fake agent runner.
         </li>
         <li>
+          <span class="done">shipped</span>
           <strong>Triggers and cut-over.</strong> Trigger table with file and
           runtime sources; <code>cron</code>, <code>event</code>,
           <code>manual</code>, <code>at</code>, <code>webhook</code>; args
@@ -1877,11 +1899,13 @@ GET    /r/:token                         signed one-shot approval link (public)<
           running as one-node workflows.
         </li>
         <li>
+          <span class="done">shipped</span>
           <strong>Web module.</strong> Nav restructure, workflows list, run view
           with live graph and timeline, fork-from-node, inbox, JSON editor with
           synced graph preview. Admin handlers/heartbeat pages removed.
         </li>
         <li>
+          <span class="done">shipped, except <code>approve_tools</code></span>
           <strong>Channel-side human loop.</strong> Telegram buttons, signed
           approval links, router wait matching, agent-mediated
           <code>workflow_respond</code>, <code>approve_tools</code> via
@@ -1889,11 +1913,40 @@ GET    /r/:token                         signed one-shot approval link (public)<
           <code>on_missed</code>), <code>map</code>, sub-workflows.
         </li>
         <li>
+          <span class="todo">not started</span>
           <strong>Editor.</strong> Per-node form editor in the side sheet, then
           drag-and-drop on the canvas. Optional.
         </li>
       </ol>
       <p>Each phase ships on its own; the system is usable after phase 2.</p>
+
+      <h3>What landed</h3>
+      <p>
+        Phases 1 through 4 are implemented on <code>feat/workflows</code>, with
+        75 tests covering the decider, expressions, the schema, the file store,
+        triggers, channel replies, and an end-to-end pass over the real shell
+        executor and file loader. Two things differ from the text above.
+      </p>
+      <ul>
+        <li>
+          <code>approve_tools</code> is not built. Pinning down the SDK's
+          <code>PreToolUse</code> defer and resume protocol needs a live
+          session; node-level approval covers the human-in-the-loop case in the
+          meantime.
+        </li>
+        <li>
+          <code>concurrency</code> gained an <code>allow</code> value, which is
+          the default. <code>skip</code>, <code>queue</code> and
+          <code>replace</code> behave as described; without a fourth value there
+          was no way to say "parallel runs are fine".
+        </li>
+      </ul>
+      <p>
+        The run context holds engine bookkeeping only (the event floor, the
+        agent session per folder, the trigger type). Node outputs live in
+        <code>workflow_steps</code> and the expression scope is derived from
+        them, so there is one source of truth for what a node produced.
+      </p>
 
       <h2 id="decisions">Decisions to confirm</h2>
       <ul>
