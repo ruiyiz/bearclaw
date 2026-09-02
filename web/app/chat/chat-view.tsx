@@ -58,16 +58,23 @@ interface ModelOption {
   id: string;
   label: string;
 }
+// Ids are family aliases, so each option always resolves to the newest
+// version of that model class. Mirrors the catalog in src/models.ts.
 const MODEL_OPTIONS: ModelOption[] = [
-  { id: 'claude-opus-4-8', label: 'Opus 4.8' },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-  { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+  { id: 'fable', label: 'Fable' },
+  { id: 'opus', label: 'Opus' },
+  { id: 'sonnet', label: 'Sonnet' },
+  { id: 'haiku', label: 'Haiku' },
 ];
 const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 type EffortLevel = (typeof EFFORT_OPTIONS)[number];
 
 function modelLabel(id: string): string {
-  return MODEL_OPTIONS.find((m) => m.id === id)?.label || id;
+  const exact = MODEL_OPTIONS.find((m) => m.id === id);
+  if (exact) return exact.label;
+  // Agent pinned to a full model id (legacy or preview) — show its family.
+  const family = MODEL_OPTIONS.find((m) => id.includes(m.id));
+  return family ? family.label : id;
 }
 function effortLabel(id: string): string {
   return id.charAt(0).toUpperCase() + id.slice(1);

@@ -11,7 +11,8 @@ import { CONFIG_DIR } from './config.js';
 export interface ModelSpec {
   alias: string; // canonical alias, e.g. 'opus'
   short?: string; // short alias, e.g. 'o'
-  id: string; // full model id
+  id: string; // model id sent to the SDK — a family alias ('opus') resolves
+  // to the newest version of that class; a full id pins one version
   label: string; // human-readable name
   contextWindow: number; // max input tokens
 }
@@ -30,37 +31,38 @@ const DEFAULT_CATALOG: ModelCatalog = {
     {
       alias: 'fable',
       short: 'f',
-      id: 'claude-fable-5',
-      label: 'Claude Fable 5',
+      id: 'fable',
+      label: 'Claude Fable',
       contextWindow: 1_000_000,
     },
     {
       alias: 'opus',
       short: 'o',
-      id: 'claude-opus-4-8',
-      label: 'Claude Opus 4.8',
+      id: 'opus',
+      label: 'Claude Opus',
       contextWindow: 1_000_000,
     },
     {
       alias: 'sonnet',
       short: 's',
-      id: 'claude-sonnet-5',
-      label: 'Claude Sonnet 5',
+      id: 'sonnet',
+      label: 'Claude Sonnet',
       contextWindow: 1_000_000,
     },
     {
       alias: 'haiku',
       short: 'h',
-      id: 'claude-haiku-4-5',
-      label: 'Claude Haiku 4.5',
+      id: 'haiku',
+      label: 'Claude Haiku',
       contextWindow: 200_000,
     },
   ],
   largeContextPrefixes: [
-    'claude-fable-5',
+    'claude-fable',
     'claude-opus-4-8',
     'claude-opus-4-7',
     'claude-opus-4-6',
+    'claude-opus-5',
     'claude-sonnet-5',
     'claude-sonnet-4-6',
     'claude-mythos',
@@ -109,7 +111,8 @@ export function aliasForId(id: string): string {
   return family ? family.alias : id;
 }
 
-// Context window (max input tokens) for a model id.
+// Context window (max input tokens) for a model id. Family aliases match
+// their catalog entry; pinned full ids fall back to the prefix list.
 export function contextWindowForModel(id: string): number {
   const spec = MODELS.find((m) => id.startsWith(m.id));
   if (spec) return spec.contextWindow;
