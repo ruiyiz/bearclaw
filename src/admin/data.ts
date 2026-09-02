@@ -15,7 +15,7 @@ import {
   agentVarDir,
 } from '../config.js';
 import { isNestedRegistry, resolveRegistry } from '../agent-registry.js';
-import { loadJson } from '../utils/json.js';
+import { decodeBlobs, loadJson } from '../utils/json.js';
 import type {
   AgentRegistry,
   EventRecord,
@@ -63,7 +63,8 @@ export function getAllHandlers(): Handler[] {
   try {
     return db
       .prepare('SELECT * FROM handlers ORDER BY created_at DESC')
-      .all() as Handler[];
+      .all()
+      .map((r) => decodeBlobs(r)) as Handler[];
   } finally {
     db.close();
   }

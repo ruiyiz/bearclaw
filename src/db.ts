@@ -6,6 +6,7 @@ import path from 'path';
 import { DATA_DIR } from './config.js';
 import { logger } from './logger.js';
 import { EventRecord, Handler, HandlerRunLog, NewMessage } from './types.js';
+import { decodeBlobs } from './utils/json.js';
 
 let db: Database.Database;
 
@@ -798,7 +799,8 @@ export function getMatchingHandlers(event: EventRecord): Handler[] {
     .prepare(
       `SELECT * FROM handlers WHERE event_type = ? AND status = 'active'`,
     )
-    .all(event.type) as Handler[];
+    .all(event.type)
+    .map((r) => decodeBlobs(r)) as Handler[];
 
   const now = Date.now();
   let payload: Record<string, unknown>;
@@ -875,7 +877,8 @@ export function getCronDueHandlers(): Handler[] {
        WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ?
        ORDER BY next_run`,
     )
-    .all(now) as Handler[];
+    .all(now)
+    .map((r) => decodeBlobs(r)) as Handler[];
 }
 
 export function updateHandlerNextRun(id: string, nextRun: string | null): void {
@@ -907,15 +910,16 @@ export function createHandler(
 }
 
 export function getHandlerById(id: string): Handler | undefined {
-  return db.prepare('SELECT * FROM handlers WHERE id = ?').get(id) as
-    | Handler
-    | undefined;
+  return decodeBlobs(
+    db.prepare('SELECT * FROM handlers WHERE id = ?').get(id),
+  ) as Handler | undefined;
 }
 
 export function getAllHandlers(): Handler[] {
   return db
     .prepare('SELECT * FROM handlers ORDER BY created_at DESC')
-    .all() as Handler[];
+    .all()
+    .map((r) => decodeBlobs(r)) as Handler[];
 }
 
 export function updateHandler(
