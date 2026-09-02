@@ -8,12 +8,14 @@ import {
   CONFIG_DIR,
   DATA_DIR,
   MAIN_AGENT_FOLDER,
+  PUBLIC_URL,
   RUN_DIR,
   WORKFLOWS_DIR,
   agentDir,
 } from '../config.js';
 import { emitEvent, getDb } from '../db.js';
 import { logger } from '../logger.js';
+import { signActionToken } from '../server/auth.js';
 import type { AgentRegistry, RegisteredAgent } from '../types.js';
 import { loadJson, saveJson } from '../utils/json.js';
 import type { EngineDeps, MatchedEvent, ShellRunResult } from './runtime.js';
@@ -133,7 +135,11 @@ export const defaultDeps: EngineDeps = {
           filePath,
         });
     } else {
-      write({ ...base, text: spec.text });
+      write({
+        ...base,
+        text: spec.text,
+        ...(spec.choices?.length ? { choices: spec.choices } : {}),
+      });
     }
     return { targets: spec.to ? [spec.to] : ['primary'] };
   },
@@ -205,6 +211,15 @@ export const defaultDeps: EngineDeps = {
     for (const candidate of candidates)
       if (fs.existsSync(candidate)) return fs.readFileSync(candidate, 'utf-8');
     throw new Error(`template file not found: ${file}`);
+  },
+
+  approvalLink(waitId, action, ttlMs) {
+    try {
+      const token = signActionToken(waitId, action, Math.round(ttlMs / 1000));
+      return `${PUBLIC_URL}/r/${token}`;
+    } catch {
+      return null;
+    }
   },
 
   getChatSessionId(folder) {

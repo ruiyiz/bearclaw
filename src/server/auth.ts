@@ -97,6 +97,60 @@ function nowS(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+// ─── Capability links ───────────────────────────────────────────────────────
+
+interface ActionPayload {
+  w: string; // wait id
+  a: string; // action
+  n: string; // nonce
+  exp: number;
+}
+
+// A one-shot link for a single action on a single wait. Single use comes for
+// free: resolving the wait closes it, so a replay finds nothing to act on.
+export function signActionToken(
+  waitId: string,
+  action: string,
+  ttlSeconds: number,
+): string {
+  const payload: ActionPayload = {
+    w: waitId,
+    a: action,
+    n: crypto.randomBytes(8).toString('base64url'),
+    exp: nowS() + ttlSeconds,
+  };
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', SECRET)
+    .update(body)
+    .digest('base64url');
+  return `${body}.${sig}`;
+}
+
+export function verifyActionToken(
+  token: string,
+): { waitId: string; action: string } | null {
+  const dot = token.indexOf('.');
+  if (dot < 0) return null;
+  const body = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = crypto
+    .createHmac('sha256', SECRET)
+    .update(body)
+    .digest('base64url');
+  if (sig.length !== expected.length) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)))
+    return null;
+  let data: ActionPayload;
+  try {
+    data = JSON.parse(Buffer.from(body, 'base64url').toString('utf-8'));
+  } catch {
+    return null;
+  }
+  if (!data.w || !data.a || !data.exp || data.exp < nowS()) return null;
+  return { waitId: data.w, action: data.a };
+}
+
 // ─── Cookies ────────────────────────────────────────────────────────────────
 
 export function parseCookies(

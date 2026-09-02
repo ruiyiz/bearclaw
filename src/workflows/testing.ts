@@ -69,6 +69,8 @@ export function makeFakeDeps(): FakeDeps {
     readTemplateFile() {
       return 'template file body';
     },
+    approvalLink: (waitId, action) =>
+      `https://example.test/r/${waitId}.${action}`,
     getChatSessionId: () => undefined,
     setChatSessionId: () => {},
     now: () => fake.clock,

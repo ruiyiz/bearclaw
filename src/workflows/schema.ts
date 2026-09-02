@@ -131,6 +131,21 @@ const delayNode = z.object({
   ...common,
 });
 
+const subWorkflowNode = z.object({
+  type: z.literal('workflow'),
+  slug: z.string(),
+  inputs: z.record(z.string(), jsonValue).optional(),
+  ...common,
+});
+
+const mapNode = z.object({
+  type: z.literal('map'),
+  over: z.string(),
+  node: z.record(z.string(), jsonValue),
+  concurrency: z.number().int().min(1).max(20).default(4),
+  ...common,
+});
+
 export const nodeSchema = z.discriminatedUnion('type', [
   agentNode,
   shellNode,
@@ -144,6 +159,8 @@ export const nodeSchema = z.discriminatedUnion('type', [
   waitEventNode,
   emitNode,
   delayNode,
+  subWorkflowNode,
+  mapNode,
 ]);
 
 export const edgeSchema = z.object({

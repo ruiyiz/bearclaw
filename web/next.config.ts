@@ -11,7 +11,11 @@ const config: NextConfig = {
   reactStrictMode: true,
   outputFileTracingRoot: path.join(__dirname, '..'),
   async rewrites() {
-    return [{ source: '/api/:path*', destination: `${backend}/api/:path*` }];
+    return [
+      { source: '/api/:path*', destination: `${backend}/api/:path*` },
+      // Signed one-shot approval links are served by the backend.
+      { source: '/r/:token', destination: `${backend}/r/:token` },
+    ];
   },
   // PWA support — service worker is served as a static asset out of /public.
   headers: async () => [

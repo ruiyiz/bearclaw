@@ -48,6 +48,8 @@ export interface SendSpec {
   to?: string;
   text: string;
   media?: string[];
+  // One-tap answers for channels that render them (Telegram inline keyboard).
+  choices?: { label: string; data: string }[];
   stepKey: string;
 }
 
@@ -76,6 +78,9 @@ export interface EngineDeps {
     opts: { afterId?: number; sinceIso?: string },
   ): MatchedEvent | null;
   readTemplateFile(file: string, folder: string): string;
+  // A signed, single-use link for one action on one wait. Null when links are
+  // unavailable (no auth secret yet).
+  approvalLink(waitId: string, action: string, ttlMs: number): string | null;
   getChatSessionId(folder: string): string | undefined;
   setChatSessionId(folder: string, sessionId: string): void;
   now(): Date;

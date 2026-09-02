@@ -29,6 +29,8 @@ interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredAgents: () => Record<string, RegisteredAgent>;
+  // Inline-keyboard taps, e.g. a workflow human step answered with a button.
+  onChoice?: (jid: string, data: string) => Promise<string | null>;
 }
 
 // PNGs sent via sendPhoto get recompressed to JPEG and capped at ~1280px,
@@ -387,6 +389,24 @@ export class TelegramChannel implements Channel {
     this.bot.on('message:location', (ctx) => storeNonText(ctx, '[Location]'));
     this.bot.on('message:contact', (ctx) => storeNonText(ctx, '[Contact]'));
 
+    this.bot.on('callback_query:data', async (ctx) => {
+      const jid = `tg:${ctx.chat?.id ?? ctx.from.id}`;
+      let note: string | null = null;
+      try {
+        note =
+          (await this.opts.onChoice?.(jid, ctx.callbackQuery.data)) ?? null;
+      } catch (err) {
+        logger.error({ err, jid }, 'Telegram choice handler failed');
+      }
+      await ctx.answerCallbackQuery({ text: note ?? 'Done' });
+      try {
+        // Drop the keyboard so the same answer cannot be tapped twice.
+        await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+      } catch {
+        /* message may be too old to edit */
+      }
+    });
+
     this.bot.catch((err) => {
       logger.error({ err: err.message }, 'Telegram bot error');
     });
@@ -448,6 +468,27 @@ export class TelegramChannel implements Channel {
       );
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
+    }
+  }
+
+  async sendChoices(
+    jid: string,
+    text: string,
+    choices: { label: string; data: string }[],
+  ): Promise<void> {
+    if (!this.bot) return;
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      await this.bot.api.sendMessage(numericId, text, {
+        reply_markup: {
+          inline_keyboard: [
+            choices.map((c) => ({ text: c.label, callback_data: c.data })),
+          ],
+        },
+      });
+    } catch (err) {
+      logger.error({ jid, err }, 'Failed to send Telegram choices');
+      await this.sendMessage(jid, text);
     }
   }
 

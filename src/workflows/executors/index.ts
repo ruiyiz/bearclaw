@@ -1,6 +1,7 @@
 import type { Executor } from '../runtime.js';
 import type { NodeType } from '../schema.js';
 import { agentExecutor } from './agent.js';
+import { mapExecutor, subWorkflowExecutor } from './compose.js';
 import { httpExecutor } from './http.js';
 import {
   conditionExecutor,
@@ -27,4 +28,6 @@ export const executors: Record<NodeType, Executor> = {
   wait_event: waitEventExecutor,
   emit: emitExecutor,
   delay: delayExecutor,
+  workflow: subWorkflowExecutor,
+  map: mapExecutor,
 };

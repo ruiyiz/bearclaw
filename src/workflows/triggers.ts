@@ -6,6 +6,8 @@ import { getUnprocessedEvents, markEventProcessed } from '../db.js';
 import { logger } from '../logger.js';
 import type { EventRecord } from '../types.js';
 import {
+  getRun,
+  listWorkflowRows,
   deleteFileTriggersExcept,
   deleteTriggerRow,
   getTriggerRow,
@@ -19,8 +21,14 @@ import {
   type TriggerRow,
   type TriggerType,
 } from './db.js';
-import { applyInputs, startRun, type StartRunResult } from './engine.js';
+import {
+  applyInputs,
+  sendAlert,
+  startRun,
+  type StartRunResult,
+} from './engine.js';
 import { getEngineDeps } from './engine.js';
+import { parseDuration } from './expr.js';
 import type { TriggerDecl, WorkflowDefinition } from './schema.js';
 
 const MAX_CATCHUP_SLOTS = 24;
@@ -331,6 +339,40 @@ export async function dispatchEvents(): Promise<void> {
       }
     }
     markEventProcessed(event.id);
+  }
+}
+
+const alertedRuns = new Set<string>();
+
+// on_missed: a cron slot fired but the run it started has not succeeded within
+// expected_within. Replaces the separate watchdog handler.
+export async function checkMissedRuns(): Promise<void> {
+  const now = nowDate().getTime();
+  for (const workflow of listWorkflowRows()) {
+    const policy = workflow.definition.policies?.alerts?.on_missed;
+    if (!policy) continue;
+    const triggerId = `${workflow.slug}:${policy.trigger}`;
+    const trigger = getTriggerRow(triggerId) ?? getTriggerRow(policy.trigger);
+    if (!trigger?.enabled || !trigger.last_run_id) continue;
+    if (alertedRuns.has(trigger.last_run_id)) continue;
+
+    const run = getRun(trigger.last_run_id);
+    if (!run || run.status === 'succeeded') continue;
+
+    let windowMs: number;
+    try {
+      windowMs = parseDuration(policy.expected_within);
+    } catch {
+      continue;
+    }
+    if (now - new Date(run.started_at).getTime() < windowMs) continue;
+
+    alertedRuns.add(run.id);
+    await sendAlert(
+      run,
+      workflow.definition.policies.alerts?.on_failure ?? 'owner',
+      `[${workflow.name}] the ${policy.trigger} run from ${run.started_at} is still ${run.status} after ${policy.expected_within}.`,
+    );
   }
 }
 

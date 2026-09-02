@@ -4,7 +4,11 @@ import { ensureBuiltinWorkflows } from './builtins.js';
 import { recover, tick } from './engine.js';
 import { migrateHandlersToWorkflows } from './migrate.js';
 import { syncWorkflowFiles, watchWorkflowFiles } from './store.js';
-import { dispatchEvents, scanDueTriggers } from './triggers.js';
+import {
+  checkMissedRuns,
+  dispatchEvents,
+  scanDueTriggers,
+} from './triggers.js';
 
 let running = false;
 
@@ -14,6 +18,7 @@ async function pass(): Promise<void> {
   await dispatchEvents();
   await scanDueTriggers();
   await tick();
+  await checkMissedRuns();
 }
 
 export async function startWorkflowService(): Promise<void> {

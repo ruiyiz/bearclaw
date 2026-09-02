@@ -23,6 +23,13 @@ export interface Channel {
   name: string;
   connect(): Promise<void>;
   sendMessage(jid: string, text: string): Promise<void>;
+  // Optional: a message carrying one-tap choices. Used by workflow human
+  // steps; channels without buttons fall back to plain text plus a link.
+  sendChoices?(
+    jid: string,
+    text: string,
+    choices: { label: string; data: string }[],
+  ): Promise<void>;
   sendMessageWithId?(jid: string, text: string): Promise<number>;
   editMessage?(jid: string, messageId: number, text: string): Promise<void>;
   deleteMessage?(jid: string, messageId: number): Promise<void>;

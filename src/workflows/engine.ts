@@ -439,6 +439,26 @@ function failedMessage(steps: StepRow[], nodeId: string): string {
   return `node "${nodeId}" failed: ${step?.error ?? 'unknown error'}`;
 }
 
+// The watchdog handler pattern becomes a one-line policy: on_failure names a
+// folder (or 'owner') and the run's error goes there.
+export async function sendAlert(
+  run: RunRow,
+  target: string,
+  text: string,
+): Promise<void> {
+  const folder = target === 'owner' ? run.definition.owner : target;
+  try {
+    await deps.send({
+      folder: folder.includes(':') ? run.definition.owner : folder,
+      to: folder.includes(':') ? folder : undefined,
+      text,
+      stepKey: `${run.id}:alert`,
+    });
+  } catch (err) {
+    logger.warn({ err, run: run.id }, 'workflow: alert delivery failed');
+  }
+}
+
 async function finalize(
   run: RunRow,
   status: 'succeeded' | 'failed',
@@ -460,6 +480,31 @@ async function finalize(
   });
   appendRunEvent(run.id, `run.${status}`, null, error ? { error } : undefined);
   publishRun(run.id, run.slug, status);
+  // A parent run waits on this event; anything else on the bus can too.
+  const leaves = Object.keys(run.definition.nodes).filter(
+    (id) => !run.definition.edges.some((e) => e.from === id),
+  );
+  const finished = latestSteps(listSteps(run.id));
+  const outputs: Record<string, unknown> = {};
+  for (const id of leaves) {
+    const step = finished.get(id);
+    if (step?.status === 'succeeded') outputs[id] = loadOutput(step.output);
+  }
+  deps.emitEvent('workflow.run.finished', {
+    run_id: run.id,
+    slug: run.slug,
+    status,
+    error,
+    outputs,
+  });
+
+  const onFailure = run.definition.policies.alerts?.on_failure;
+  if (status === 'failed' && onFailure)
+    await sendAlert(
+      run,
+      onFailure,
+      `[${run.definition.name}] run failed: ${error ?? 'unknown error'}`,
+    );
   logger.info({ run: run.id, slug: run.slug, status }, 'workflow run finished');
   await startNextQueued(run.slug);
 }
@@ -545,6 +590,7 @@ async function executeNode(
     if (result.kind === 'wait') {
       const waitId = openWait(run, nodeId, attempt, result.wait);
       updateStep(stepId, { status: 'waiting' });
+      await notifyWait(run, nodeId, waitId, result.wait);
       appendRunEvent(run.id, 'wait.opened', nodeId, {
         wait_id: waitId,
         kind: result.wait.kind,
@@ -621,6 +667,81 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ─── waits ──────────────────────────────────────────────────────────────────
+
+// A human step is only useful if someone hears about it. Targets default to
+// the owning agent's primary channel; the web inbox always has it too.
+async function notifyWait(
+  run: RunRow,
+  nodeId: string,
+  waitId: string,
+  spec: WaitSpec,
+): Promise<void> {
+  if (spec.kind !== 'human') return;
+  const node = run.definition.nodes[nodeId];
+  const folder =
+    (node && 'agent' in node ? node.agent : undefined) ?? run.definition.owner;
+  const hint =
+    spec.options && spec.options.length
+      ? `Reply with one of: ${spec.options.join(', ')}`
+      : node && node.type === 'human' && node.kind === 'approve'
+        ? 'Reply approve or reject.'
+        : 'Reply here, or answer in the inbox.';
+  const ttlMs = spec.resume_at
+    ? Math.max(
+        new Date(spec.resume_at).getTime() - deps.now().getTime(),
+        60_000,
+      )
+    : 3 * 86_400_000;
+  const actions =
+    node && node.type === 'human'
+      ? node.kind === 'approve'
+        ? ['approved', 'rejected']
+        : node.kind === 'choice'
+          ? (node.options ?? [])
+          : []
+      : [];
+  const links = actions
+    .map((action) => {
+      const url = deps.approvalLink(waitId, action, ttlMs);
+      return url ? `${action}: ${url}` : null;
+    })
+    .filter(Boolean);
+
+  const text = [
+    `[${run.definition.name}] ${spec.prompt ?? 'Input needed'}`,
+    hint,
+    ...links,
+    `(${waitId})`,
+  ].join('\n');
+
+  const choices =
+    node && node.type === 'human'
+      ? node.kind === 'approve'
+        ? [
+            { label: 'Approve', data: `wf:${waitId}:a` },
+            { label: 'Reject', data: `wf:${waitId}:r` },
+          ]
+        : (node.options ?? []).map((option, i) => ({
+            label: option,
+            data: `wf:${waitId}:${i}`,
+          }))
+      : [];
+
+  const targets = spec.targets?.length ? spec.targets : [undefined];
+  for (const to of targets) {
+    try {
+      await deps.send({
+        folder,
+        to,
+        text,
+        choices: choices.length ? choices : undefined,
+        stepKey: `${run.id}:${nodeId}:wait`,
+      });
+    } catch (err) {
+      logger.warn({ err, waitId, to }, 'workflow: wait notification failed');
+    }
+  }
+}
 
 function openWait(
   run: RunRow,
@@ -699,16 +820,44 @@ export async function resolveWait(
   });
 
   const step = stepForWait(wait);
+  const output =
+    wait.kind === 'human'
+      ? { response, responder, responded_via: via }
+      : response;
+
+  // A sub-run that failed comes back through the node's error port, not as a
+  // success carrying a failure payload.
+  if (node.type === 'workflow') {
+    const status = (response as { status?: string } | null)?.status;
+    const ok = status === 'succeeded' || status === 'skipped';
+    const hasErrorEdge = run.definition.edges.some(
+      (e) => e.from === wait.node_id && e.port === ERROR_PORT,
+    );
+    if (step)
+      updateStep(step.id, {
+        status: ok ? 'succeeded' : 'failed',
+        port: ok ? DEFAULT_PORT : hasErrorEdge ? ERROR_PORT : null,
+        output: storeOutput(run.id, wait.node_id, wait.attempt, output),
+        error: ok
+          ? null
+          : `sub-run ${(response as { run_id?: string } | null)?.run_id ?? ''} ${status ?? 'failed'}`,
+        finished_at: new Date().toISOString(),
+      });
+    appendRunEvent(run.id, 'wait.resolved', wait.node_id, {
+      wait_id: waitId,
+      via,
+      port: ok ? DEFAULT_PORT : ERROR_PORT,
+    });
+    await advance(run.id);
+    return;
+  }
+
   const port =
     wait.kind === 'event'
       ? 'received'
       : wait.kind === 'delay'
         ? DEFAULT_PORT
         : portForResponse(node, response);
-  const output =
-    wait.kind === 'human'
-      ? { response, responder, responded_via: via }
-      : response;
 
   if (step)
     updateStep(step.id, {

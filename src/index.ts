@@ -89,6 +89,11 @@ import { logger } from './logger.js';
 import { initSubprocessManager } from './agent/subprocess-manager.js';
 import { startMaintenance } from './maintenance.js';
 import { startWorkflowService } from './workflows/service.js';
+import {
+  describeOpenWaits,
+  resolveFromCallback,
+  tryResolveFromMessage,
+} from './workflows/replies.js';
 
 let lastTimestamp = '';
 let sessions: Session = {};
@@ -383,6 +388,22 @@ async function processMessage(msg: NewMessage): Promise<void> {
     content = content.replace(stripTriggerRe, '');
   }
 
+  // An exact answer to a pending workflow question resolves it here; anything
+  // looser falls through to the agent with the open waits in its context.
+  const resolved = await tryResolveFromMessage(
+    msg.chat_jid,
+    agent.folder,
+    content,
+  );
+  if (resolved) {
+    const ch = findChannel(channels, msg.chat_jid);
+    if (ch)
+      await ch.sendMessage(msg.chat_jid, 'Got it, the workflow moved on.');
+    lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
+    saveState();
+    return;
+  }
+
   const cmdHead = content.split(/\s+/)[0];
   if (cmdHead.startsWith('/')) {
     const cmd = commandMap.get(cmdHead.slice(1).toLowerCase());
@@ -470,7 +491,10 @@ async function processMessage(msg: NewMessage): Promise<void> {
         .replace(/"/g, '&quot;');
     return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`;
   });
-  const prompt = `<messages>\n${lines.join('\n')}\n</messages>`;
+  const pendingWaits = describeOpenWaits(msg.chat_jid, agent.folder);
+  const prompt = [pendingWaits, `<messages>\n${lines.join('\n')}\n</messages>`]
+    .filter(Boolean)
+    .join('\n\n');
 
   if (!prompt) return;
 
@@ -1066,6 +1090,16 @@ function startIpcWatcher(): void {
                         'Channel does not support media',
                       );
                     }
+                  } else if (
+                    Array.isArray(data.choices) &&
+                    data.choices.length &&
+                    ipcChannel.sendChoices
+                  ) {
+                    await ipcChannel.sendChoices(
+                      targetJid,
+                      data.text,
+                      data.choices,
+                    );
                   } else if (data.sender && ipcChannel.sendAsAgent) {
                     await ipcChannel.sendAsAgent(
                       targetJid,
@@ -1307,6 +1341,7 @@ async function main(): Promise<void> {
       onChatMetadata: (chatJid, timestamp, name) =>
         storeChatMetadata(chatJid, timestamp, name),
       registeredAgents: () => registeredAgents,
+      onChoice: (jid, data) => resolveFromCallback(jid, data),
     });
     attachOutboundPersistence(telegram, () => registeredAgents);
     channels.push(telegram);

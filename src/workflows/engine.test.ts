@@ -5,6 +5,8 @@ import { initDatabase } from '../db.js';
 import {
   getRun,
   insertRun,
+  listRuns,
+  upsertWorkflowIndex,
   insertStep,
   listOpenWaits,
   listRunEvents,
@@ -227,6 +229,11 @@ test('a human node parks the run until someone answers', async () => {
   assert.equal(waits.length, 1);
   assert.equal(waits[0].prompt, 'Send it?');
   assert.deepEqual(waits[0].targets, ['imsg:17']);
+  // Opening a wait notifies its targets; the inbox is not the only path.
+  assert.equal(fake.sends.length, 1);
+  assert.equal(fake.sends[0].to, 'imsg:17');
+  assert.match(fake.sends[0].text, /Send it\?/);
+  assert.match(fake.sends[0].text, new RegExp(waits[0].id));
   // Every wait expires: three days by default.
   assert.equal(waits[0].resume_at, '2026-09-05T02:00:00.000Z');
 
@@ -235,7 +242,8 @@ test('a human node parks the run until someone answers', async () => {
   assert.equal(after.status, 'succeeded');
   assert.equal(stepsByNode(after.id).get('ask')?.port, 'approved');
   assert.equal(stepsByNode(after.id).has('drop'), false);
-  assert.equal(fake.sends.length, 1);
+  assert.equal(fake.sends.length, 2);
+  assert.equal(fake.sends[1].text, 'sent');
 });
 
 test('a human wait that expires follows on_timeout', async () => {
@@ -267,7 +275,9 @@ test('a human wait that expires follows on_timeout', async () => {
   const run = requireRun(runId);
   assert.equal(run.status, 'succeeded');
   assert.equal(outputOf(run.id, 'drop'), 'dropped');
-  assert.equal(fake.sends.length, 0);
+  // Only the question went out; the send node on the approved branch did not.
+  assert.equal(fake.sends.length, 1);
+  assert.match(fake.sends[0].text, /ok\?/);
 });
 
 test('a delay is a timer row that the tick wakes', async () => {
@@ -559,4 +569,100 @@ test('a fork can override the input of the node it restarts from', async () => {
     output: 'patched',
   });
   assert.equal(outputOf(forkId, 'use'), 'patched!');
+});
+
+test('map runs one node per item and keeps failures as entries', async () => {
+  fake.shellImpl = (spec) =>
+    spec.cmd.includes('bad')
+      ? { code: 1, stdout: '', stderr: 'nope' }
+      : { code: 0, stdout: spec.cmd.split(' ').pop() ?? '', stderr: '' };
+
+  const definition = def({
+    slug: 'mapper',
+    nodes: {
+      items: { type: 'transform', expr: '["one", "bad", "three"]' },
+      each: {
+        type: 'map',
+        over: 'nodes.items.output',
+        concurrency: 2,
+        node: { type: 'shell', cmd: 'echo {{item}}' },
+      },
+    },
+    edges: [{ from: 'items', to: 'each' }],
+  });
+
+  const { runId } = await startRun({ slug: 'mapper', definition });
+  assert.equal(requireRun(runId).status, 'succeeded');
+  const out = outputOf(runId!, 'each') as {
+    ok: boolean;
+    index: number;
+    output?: unknown;
+  }[];
+  assert.equal(out.length, 3);
+  assert.deepEqual(
+    out.map((r) => r.ok),
+    [true, false, true],
+  );
+  assert.equal(out[0].output, 'one');
+  assert.equal(out[2].output, 'three');
+});
+
+test('a sub-workflow parks the parent until the child finishes', async () => {
+  const child = def({
+    slug: 'child',
+    inputs: { type: 'object', properties: { note: { type: 'string' } } },
+    nodes: { echo: { type: 'transform', expr: 'inputs.note' } },
+  });
+  upsertWorkflowIndex({
+    slug: child.slug,
+    name: child.name,
+    owner: child.owner,
+    definition: child,
+  });
+
+  const parent = def({
+    slug: 'parent',
+    nodes: {
+      call: { type: 'workflow', slug: 'child', inputs: { note: 'hello' } },
+      after: { type: 'transform', expr: 'nodes.call.output.outputs.echo' },
+    },
+    edges: [{ from: 'call', to: 'after' }],
+  });
+
+  const { runId } = await startRun({ slug: 'parent', definition: parent });
+  const run = requireRun(runId);
+  assert.equal(run.status, 'succeeded');
+  assert.equal(outputOf(run.id, 'after'), 'hello');
+
+  const childRun = listRuns('child')[0];
+  assert.equal(childRun.parent_run_id, run.id);
+});
+
+test('a failing sub-workflow takes the parent error port', async () => {
+  const child = def({
+    slug: 'child-fails',
+    nodes: { boom: { type: 'transform', expr: 'missing.field' } },
+  });
+  upsertWorkflowIndex({
+    slug: child.slug,
+    name: child.name,
+    owner: child.owner,
+    definition: child,
+  });
+
+  const parent = def({
+    slug: 'parent-handles',
+    nodes: {
+      call: { type: 'workflow', slug: 'child-fails' },
+      recover: { type: 'transform', expr: '"recovered"' },
+    },
+    edges: [{ from: 'call', port: 'error', to: 'recover' }],
+  });
+
+  const { runId } = await startRun({
+    slug: 'parent-handles',
+    definition: parent,
+  });
+  assert.equal(requireRun(runId).status, 'succeeded');
+  assert.equal(outputOf(runId!, 'recover'), 'recovered');
 });

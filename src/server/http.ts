@@ -45,7 +45,13 @@ import {
   runManually,
   setTriggerEnabled,
 } from '../workflows/triggers.js';
-import { authenticate, handleLogin, handleLogout, initAuth } from './auth.js';
+import {
+  authenticate,
+  handleLogin,
+  handleLogout,
+  initAuth,
+  verifyActionToken,
+} from './auth.js';
 import { loadParsedTranscript } from '../agent/runner.js';
 import { commands as slashCommands } from '../commands/registry.js';
 import {
@@ -1316,6 +1322,37 @@ add('POST', /^\/api\/waits\/[^/]+\/respond$/, async (req, res, url) => {
   json(res, 200, { ok: true });
 });
 
+// Public: a signed, single-use link for one action on one wait. Sent to
+// channels that cannot render buttons.
+add('GET', /^\/r\/[^/]+$/, async (_req, res, url) => {
+  const token = decodeURIComponent(url.pathname.slice(3));
+  const claim = verifyActionToken(token);
+  const page = (title: string, body: string, status = 200) => {
+    const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font-family:system-ui;margin:0;display:grid;place-items:center;height:100dvh;background:#0b0d10;color:#e6e6e6"><div style="text-align:center;padding:24px"><h1 style="font-size:18px;font-weight:600">${title}</h1><p style="font-size:14px;opacity:.7">${body}</p></div></body>`;
+    res.writeHead(status, {
+      'content-type': 'text/html; charset=utf-8',
+      'content-length': Buffer.byteLength(html),
+    });
+    res.end(html);
+  };
+
+  if (!claim)
+    return page('Link expired', 'Answer from the inbox instead.', 400);
+  const wait = getWait(claim.waitId);
+  if (!wait) return page('Not found', 'That question no longer exists.', 404);
+  if (wait.status !== 'open')
+    return page('Already answered', 'Nothing left to do here.');
+
+  const response =
+    claim.action === 'approved'
+      ? { approved: true }
+      : claim.action === 'rejected'
+        ? { approved: false }
+        : { choice: claim.action };
+  await resolveWait(claim.waitId, response, 'link', 'link');
+  page('Thanks', `Recorded: ${claim.action}.`);
+});
+
 // Public: authenticated by the token in the path, deduped by run key so a
 // retrying sender cannot start the same run twice.
 add('POST', /^\/api\/hooks\/[^/]+$/, async (req, res, url) => {
@@ -1342,8 +1379,9 @@ const PUBLIC_API: Array<RegExp> = [
   /^\/api\/auth\/login$/,
   /^\/api\/auth\/me$/,
   /^\/api\/auth\/logout$/,
-  // Webhook triggers carry their own capability token in the path.
+  // Webhook triggers and approval links carry their own capability token.
   /^\/api\/hooks\/[^/]+$/,
+  /^\/r\/[^/]+$/,
   // Media URLs are issued to authed clients; keep gated. If we ever need an
   // unauthenticated thumb/share endpoint, add a separate path here.
 ];

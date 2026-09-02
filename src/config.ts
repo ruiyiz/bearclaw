@@ -44,6 +44,12 @@ export const AGENTS_VAR_DIR = path.resolve(VAR_DIR, 'agents');
 
 export const MAIN_AGENT_FOLDER = 'main';
 
+// Origin used to build links the owner clicks from a chat message. Point it at
+// the tunnel hostname when the UI is reachable from outside.
+export const PUBLIC_URL = (
+  process.env.BEARCLAW_PUBLIC_URL || 'http://127.0.0.1:3030'
+).replace(/\/$/, '');
+
 export const agentDir = (folder: string): string =>
   path.join(AGENTS_DIR, folder);
 export const agentVarDir = (folder: string): string =>

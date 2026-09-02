@@ -8,8 +8,9 @@ export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (pathname === '/login') return NextResponse.next();
   if (pathname.startsWith('/api/auth/')) return NextResponse.next();
-  // Webhook triggers carry their own capability token in the path.
+  // Webhook triggers and one-shot approval links carry their own token.
   if (pathname.startsWith('/api/hooks/')) return NextResponse.next();
+  if (pathname.startsWith('/r/')) return NextResponse.next();
   if (req.cookies.get('nc_session')) return NextResponse.next();
 
   const url = req.nextUrl.clone();
