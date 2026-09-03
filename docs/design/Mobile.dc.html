@@ -1,0 +1,822 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #0b0c0e;
+      color: #e8eaec;
+      font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: #5fb3c9; text-decoration: none; }
+    a:hover { color: #8ccadc; }
+    .mono { font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .scroll { overflow-y: auto; scrollbar-width: none; }
+    .scroll::-webkit-scrollbar { width: 0; }
+  </style>
+</helmet>
+
+<div style="position: relative; width: 390px; height: 844px; background: #0b0c0e; overflow: hidden;">
+
+  <!-- top inset left clear for the real status bar -->
+  <div style="height: 44px;"></div>
+
+  <header style="display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 8px 0 6px; border-bottom: 1px solid #23262b;">
+    <sc-if value="{{ showMenuBtn }}" hint-placeholder-val="{{ true }}">
+      <div onClick="{{ openDrawer }}" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="#e8eaec" stroke-width="1.9" stroke-linecap="round">
+          <path d="M4 7h16M4 12h16M4 17h16"></path>
+        </svg>
+      </div>
+    </sc-if>
+    <sc-if value="{{ showBackBtn }}" hint-placeholder-val="{{ true }}">
+      <div onClick="{{ goBack }}" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="#e8eaec" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m14 6-6 6 6 6"></path>
+        </svg>
+      </div>
+    </sc-if>
+    <div style="flex-grow: 1; min-width: 0;">
+      <div style="font-size: 15px; font-weight: 600; letter-spacing: -0.01em;">{{ title }}</div>
+      <div class="mono" style="font-size: 10.5px; color: #6a7178;">{{ subtitle }}</div>
+    </div>
+    <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#6a7178" stroke-width="1.9" stroke-linecap="round">
+        <circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path>
+      </svg>
+    </div>
+  </header>
+
+  <!-- ── WORKFLOWS ────────────────────────────────────────────── -->
+  <sc-if value="{{ view.workflows }}" hint-placeholder-val="{{ true }}">
+    <div class="scroll" style="height: 700px; padding: 12px 12px 28px 12px;">
+      <div style="display: flex; gap: 9px; margin-bottom: 14px;">
+        <div style="flex-grow: 1; border: 1px solid #23262b; border-radius: 10px; background: #101215; padding: 11px 12px;">
+          <div style="font-size: 10.5px; color: #6a7178; letter-spacing: 0.04em; text-transform: uppercase;">Next</div>
+          <div style="font-size: 17px; font-weight: 600; margin-top: 3px; letter-spacing: -0.02em;">18:00</div>
+        </div>
+        <div style="flex-grow: 1; border: 1px solid #23262b; border-radius: 10px; background: #101215; padding: 11px 12px;">
+          <div style="font-size: 10.5px; color: #6a7178; letter-spacing: 0.04em; text-transform: uppercase;">Waiting</div>
+          <div style="font-size: 17px; font-weight: 600; margin-top: 3px; letter-spacing: -0.02em; color: {{accent}};">2</div>
+        </div>
+      </div>
+
+      <sc-if value="{{ waiting.any }}" hint-placeholder-val="{{ true }}">
+        <div style="margin-bottom: 14px; border: 1px solid #3a3120; border-radius: 12px; background: #14120e; overflow: hidden;">
+          <div style="display: flex; align-items: center; gap: 8px; padding: 10px 13px; border-bottom: 1px solid #2a2519;">
+            <div style="width: 6px; height: 6px; border-radius: 50%; background: #c2984f;"></div>
+            <span style="font-size: 10.5px; color: #c2984f; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600;">Waiting on you</span>
+            <div style="flex-grow: 1;"></div>
+            <span class="mono" style="font-size: 11px; color: #7c6a45;">{{ waiting.count }}</span>
+          </div>
+          <sc-for list="{{ waits }}" as="w" hint-placeholder-count="2">
+            <div style="padding: 13px; border-bottom: 1px solid #221e15;">
+              <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 7px;">
+                <span class="mono" style="font-size: 11px; color: {{accent}}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ w.origin }}</span>
+                <div style="flex-grow: 1;"></div>
+                <span class="mono" style="font-size: 10.5px; color: #6a7178;">{{ w.age }}</span>
+              </div>
+              <div style="font-size: 14px; line-height: 1.5;">{{ w.prompt }}</div>
+              <div style="display: flex; gap: 8px; margin-top: 12px;">
+                <sc-for list="{{ w.actions }}" as="a" hint-placeholder-count="2">
+                  <div onClick="{{ a.click }}" style="flex-grow: 1; height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 9px; font-size: 14px; font-weight: 500; cursor: pointer; background: {{ a.bg }}; color: {{ a.fg }}; border: 1px solid {{ a.border }};">{{ a.label }}</div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <sc-for list="{{ workflows }}" as="w" hint-placeholder-count="6">
+          <div onClick="{{ w.open }}" style="min-height: 62px; display: flex; align-items: center; gap: 11px; border: 1px solid #23262b; border-radius: 10px; background: #101215; padding: 12px 13px; cursor: pointer;">
+            <div style="width: 7px; height: 7px; border-radius: 50%; background: {{ w.dot }}; flex-shrink: 0;"></div>
+            <div style="flex-grow: 1; min-width: 0;">
+              <div style="font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ w.name }}</div>
+              <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0;">
+                <div class="mono" style="font-size: 11px; color: #6a7178; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ w.meta }}</div>
+                <sc-for list="{{ w.tags }}" as="t" hint-placeholder-count="2">
+                  <div class="mono" style="display: flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px solid #2e323a; border-radius: 999px; color: #9ba1a8; font-size: 10px;">
+                    <div style="width: 4px; height: 4px; border-radius: 50%; background: {{ t.hue }};"></div>
+                    {{ t.name }}
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div class="mono" style="font-size: 11.5px; color: #9ba1a8; flex-shrink: 0;">{{ w.next }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ── WORKFLOW DETAIL ──────────────────────────────────────── -->
+  <sc-if value="{{ view.wf }}" hint-placeholder-val="{{ true }}">
+    <div style="height: 700px; display: flex; flex-direction: column;">
+      <div class="scroll" style="flex-shrink: 0; display: flex; gap: 4px; padding: 0 10px; border-bottom: 1px solid #23262b; overflow-x: auto;">
+        <sc-for list="{{ wftabs }}" as="t" hint-placeholder-count="4">
+          <div onClick="{{ t.pick }}" style="flex-shrink: 0; padding: 12px 10px; font-size: 13px; color: {{ t.fg }}; box-shadow: {{ t.mark }}; cursor: pointer;">{{ t.label }}</div>
+        </sc-for>
+      </div>
+
+      <div class="scroll" style="flex-grow: 1; min-height: 0; padding: 12px 12px 28px 12px;">
+
+        <sc-if value="{{ wftab.isGraph }}" hint-placeholder-val="{{ true }}">
+          <div>
+            <div style="display: flex; flex-direction: column; gap: 0;">
+              <sc-for list="{{ nodeRows }}" as="n" hint-placeholder-count="15">
+                <div onClick="{{ n.open }}" style="display: flex; gap: 11px; align-items: stretch; cursor: pointer; background: {{ n.bg }}; border-radius: 8px;">
+                  <div style="width: 16px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center;">
+                    <div style="width: 7px; height: 7px; border-radius: {{ n.shape }}; background: {{ n.dot }}; margin-top: 15px; flex-shrink: 0;"></div>
+                    <div style="width: 1px; flex-grow: 1; background: {{ n.wire }};"></div>
+                  </div>
+                  <div style="flex-grow: 1; min-width: 0; padding: 10px 0; border-bottom: 1px solid #191c21;">
+                    <div style="display: flex; align-items: baseline; gap: 8px;">
+                      <span class="mono" style="font-size: 13px;">{{ n.id }}</span>
+                      <span style="font-size: 10px; color: #6a7178; letter-spacing: 0.04em; text-transform: uppercase;">{{ n.type }}</span>
+                      <div style="flex-grow: 1;"></div>
+                      <span class="mono" style="font-size: 10.5px; color: #565d64;">{{ n.port }}</span>
+                    </div>
+                    <div class="mono" style="font-size: 11.5px; color: #6a7178; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ n.sub }}</div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ stepSel.show }}" hint-placeholder-val="{{ true }}">
+              <div style="margin-top: 14px; border: 1px solid #23262b; border-radius: 12px; background: #101215; overflow: hidden;">
+                <div style="display: flex; align-items: center; gap: 9px; padding: 12px 13px; border-bottom: 1px solid #1c1f24; background: #0e1013;">
+                  <div style="width: 6px; height: 6px; border-radius: 50%; background: {{ stepSel.dot }};"></div>
+                  <span class="mono" style="font-size: 13.5px; flex-grow: 1;">{{ stepSel.id }}</span>
+                  <span class="mono" style="font-size: 10.5px; color: #9ba1a8; border: 1px solid #2e323a; border-radius: 5px; padding: 1px 6px;">{{ stepSel.type }}</span>
+                </div>
+                <div style="padding: 4px 13px 10px 13px;">
+                  <sc-for list="{{ stepSel.fields }}" as="f" hint-placeholder-count="4">
+                    <div style="padding: 9px 0; border-bottom: 1px solid #17191d;">
+                      <div class="mono" style="font-size: 10.5px; color: #6a7178; margin-bottom: 3px;">{{ f.k }}</div>
+                      <div class="mono" style="font-size: 12px; color: #c3c8cd; line-height: 1.5; word-break: break-word;">{{ f.v }}</div>
+                    </div>
+                  </sc-for>
+                  <div style="font-size: 11.5px; line-height: 1.45; color: #6a7178; margin-top: 10px;">Read-only here. Moving nodes and editing fields happens in the graph editor, which needs a wider screen.</div>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ wftab.isTriggers }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <sc-for list="{{ mobileTriggers }}" as="t" hint-placeholder-count="2">
+              <div style="border: 1px solid #23262b; border-radius: 10px; background: #101215; padding: 12px 13px;">
+                <div style="display: flex; align-items: center; gap: 9px;">
+                  <span class="mono" style="font-size: 11px; border: 1px solid #2e323a; border-radius: 4px; padding: 1px 6px; color: #9ba1a8;">{{ t.type }}</span>
+                  <div style="flex-grow: 1;"></div>
+                  <span class="mono" style="font-size: 11.5px; color: {{ t.nextFg }};">{{ t.next }}</span>
+                </div>
+                <div class="mono" style="font-size: 12.5px; color: {{ t.fg }}; margin-top: 8px;">{{ t.config }}</div>
+                <div style="font-size: 11px; color: #6a7178; margin-top: 3px;">{{ t.source }}</div>
+                <div onClick="{{ t.toggle }}" style="height: 36px; margin-top: 11px; display: flex; align-items: center; justify-content: center; border: 1px solid #2e323a; border-radius: 8px; font-size: 12.5px; color: #9ba1a8; cursor: pointer;">{{ t.pauseLabel }}</div>
+              </div>
+            </sc-for>
+            <div style="font-size: 11.5px; line-height: 1.5; color: #6a7178; padding: 4px 2px;">Pausing works here. Adding a trigger or editing its schedule happens on a wider screen, next to the graph it fires.</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ wftab.isRuns }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <sc-for list="{{ runRows }}" as="r" hint-placeholder-count="5">
+              <div onClick="{{ r.open }}" style="display: flex; align-items: center; gap: 11px; border: 1px solid #23262b; border-radius: 10px; background: #101215; padding: 12px 13px; cursor: pointer;">
+                <div style="width: 7px; height: 7px; border-radius: 50%; background: {{ r.color }}; flex-shrink: 0;"></div>
+                <div style="flex-grow: 1; min-width: 0;">
+                  <div class="mono" style="font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ r.id }}</div>
+                  <div style="font-size: 11.5px; color: {{ r.color }}; margin-top: 2px;">{{ r.status }}</div>
+                </div>
+                <div style="text-align: right; flex-shrink: 0;">
+                  <div class="mono" style="font-size: 11.5px; color: #9ba1a8;">{{ r.started }}</div>
+                  <div class="mono" style="font-size: 11px; color: #565d64;">{{ r.duration }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ wftab.isDefinition }}" hint-placeholder-val="{{ false }}">
+          <div style="border: 1px solid #23262b; border-radius: 10px; background: #0d0f12; overflow: hidden;">
+            <div style="display: flex; align-items: center; gap: 9px; padding: 10px 13px; border-bottom: 1px solid #23262b; background: #0e1013;">
+              <span class="mono" style="font-size: 11px; color: #9ba1a8; flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;">~/.bearclaw/workflows/feed-triage.json</span>
+              <span style="font-size: 11px; color: #57a06f;">valid</span>
+            </div>
+            <pre class="mono scroll" style="margin: 0; padding: 13px; font-size: 11px; line-height: 1.7; color: #b8bec5; white-space: pre; overflow-x: auto;">{{ definition }}</pre>
+          </div>
+        </sc-if>
+
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ── RUN ──────────────────────────────────────────────────── -->
+  <sc-if value="{{ view.run }}" hint-placeholder-val="{{ true }}">
+    <div class="scroll" style="height: 700px; padding: 12px 12px 28px 12px;">
+      <div style="display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px; background: {{ runHead.bg }}; border: 1px solid {{ runHead.border }}; align-self: flex-start; width: fit-content; margin-bottom: 6px;">
+        <div style="width: 6px; height: 6px; border-radius: 50%; background: {{ runHead.color }};"></div>
+        <span style="font-size: 12.5px; color: {{ runHead.color }}; font-weight: 500;">{{ runHead.label }}</span>
+      </div>
+      <div class="mono" style="font-size: 11px; color: #6a7178; margin-bottom: 12px;">{{ runHead.meta }}</div>
+
+      <div style="display: flex; flex-direction: column; gap: 0;">
+        <sc-for list="{{ steps }}" as="s" hint-placeholder-count="10">
+          <div onClick="{{ s.open }}" style="display: flex; gap: 12px; align-items: stretch; cursor: pointer; background: {{ s.bg }}; border-radius: 8px;">
+            <div style="width: 18px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center;">
+              <div style="width: 9px; height: 9px; border-radius: 50%; background: {{ s.dot }}; margin-top: 15px; flex-shrink: 0;"></div>
+              <div style="width: 1px; flex-grow: 1; background: {{ s.wire }};"></div>
+            </div>
+            <div style="flex-grow: 1; min-width: 0; padding: 10px 0 10px 0; border-bottom: 1px solid #191c21;">
+              <div style="display: flex; align-items: baseline; gap: 8px;">
+                <span class="mono" style="font-size: 13px; color: {{ s.fg }};">{{ s.id }}</span>
+                <span style="font-size: 10px; color: #6a7178; letter-spacing: 0.04em; text-transform: uppercase;">{{ s.type }}</span>
+                <div style="flex-grow: 1;"></div>
+                <span class="mono" style="font-size: 11px; color: #565d64;">{{ s.ms }}</span>
+              </div>
+              <sc-if value="{{ s.hasNote }}" hint-placeholder-val="{{ true }}">
+                <div class="mono" style="font-size: 11.5px; color: #6a7178; margin-top: 4px;">{{ s.note }}</div>
+              </sc-if>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{ stepSel.show }}" hint-placeholder-val="{{ true }}">
+        <div style="margin-top: 14px; border: 1px solid #23262b; border-radius: 12px; background: #101215; overflow: hidden;">
+          <div style="display: flex; align-items: center; gap: 9px; padding: 12px 13px; border-bottom: 1px solid #1c1f24; background: #0e1013;">
+            <div style="width: 6px; height: 6px; border-radius: 50%; background: {{ stepSel.dot }};"></div>
+            <span class="mono" style="font-size: 13.5px; flex-grow: 1;">{{ stepSel.id }}</span>
+            <span class="mono" style="font-size: 10.5px; color: #9ba1a8; border: 1px solid #2e323a; border-radius: 5px; padding: 1px 6px;">{{ stepSel.type }}</span>
+          </div>
+          <div style="padding: 4px 13px 10px 13px;">
+            <sc-for list="{{ stepSel.fields }}" as="f" hint-placeholder-count="4">
+              <div style="padding: 9px 0; border-bottom: 1px solid #17191d;">
+                <div class="mono" style="font-size: 10.5px; color: #6a7178; margin-bottom: 3px;">{{ f.k }}</div>
+                <div class="mono" style="font-size: 12px; color: #c3c8cd; line-height: 1.5; word-break: break-word;">{{ f.v }}</div>
+              </div>
+            </sc-for>
+            <div style="display: flex; align-items: flex-start; gap: 7px; margin-top: 10px; color: #6a7178;">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><path d="M12 8h.01"></path></svg>
+              <span style="font-size: 11.5px; line-height: 1.45;">Read-only here. Moving nodes and editing fields happens in the graph editor, which needs a wider screen.</span>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ runHead.waiting }}" hint-placeholder-val="{{ true }}">
+      <div style="margin-top: 16px; border: 1px solid #3a3120; border-radius: 12px; background: #14120e; padding: 14px 13px;">
+        <div style="font-size: 10.5px; color: #c2984f; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600; margin-bottom: 9px;">Waiting on you</div>
+        <div style="font-size: 14px; line-height: 1.5;">Reply to the digest email with: save 1 4 / summarize 7 / dismiss 2 / next</div>
+        <div style="height: 44px; display: flex; align-items: center; padding: 0 13px; margin-top: 12px; border: 1px solid #2e323a; border-radius: 9px; background: #0e1013; color: #565d64; font-size: 14px;">save 1 4, summarize 7</div>
+        <div style="height: 44px; display: flex; align-items: center; justify-content: center; margin-top: 9px; border-radius: 9px; background: {{accent}}; color: #08191e; font-size: 14px; font-weight: 500; cursor: pointer;">Answer</div>
+        <div style="display: flex; align-items: flex-start; gap: 7px; margin-top: 11px; color: #6a7178;">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><path d="M12 8h.01"></path></svg>
+          <span style="font-size: 11.5px; line-height: 1.45;">Answering here does the same work an email reply would. Whichever lands first closes the step.</span>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <!-- ── CHAT ─────────────────────────────────────────────────── -->
+  <sc-if value="{{ view.chat }}" hint-placeholder-val="{{ true }}">
+    <div style="height: 700px; display: flex; flex-direction: column;">
+      <div class="scroll" style="flex-grow: 1; padding: 16px 13px; display: flex; flex-direction: column; gap: 16px;">
+        <sc-for list="{{ messages }}" as="m" hint-placeholder-count="4">
+          <div style="display: flex; gap: 10px; align-self: {{ m.align }}; max-width: 310px;">
+            <div style="width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0; background: {{ m.tint }}; color: #0b0c0e; font-size: 9.5px; font-weight: 600; display: flex; align-items: center; justify-content: center;">{{ m.who }}</div>
+            <div style="min-width: 0;">
+              <div style="font-size: 14px; line-height: 1.55; color: {{ m.fg }}; white-space: pre-line;">{{ m.text }}</div>
+              <div class="mono" style="font-size: 10px; color: #565d64; margin-top: 4px;">{{ m.at }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="flex-shrink: 0; border-top: 1px solid #23262b; background: #0e1013; padding: 10px 12px; display: flex; align-items: center; gap: 10px;">
+        <div style="flex-grow: 1; height: 44px; display: flex; align-items: center; padding: 0 13px; border: 1px solid #23262b; border-radius: 22px; background: #101215; color: #565d64; font-size: 14px;">Message Luce</div>
+        <div style="width: 44px; height: 44px; border-radius: 50%; background: {{accent}}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer;">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#08191e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ── SCHEDULES ────────────────────────────────────────────── -->
+  <sc-if value="{{ view.schedules }}" hint-placeholder-val="{{ true }}">
+    <div class="scroll" style="height: 700px; padding: 12px 12px 28px 12px; display: flex; flex-direction: column; gap: 8px;">
+      <sc-for list="{{ schedules }}" as="s" hint-placeholder-count="8">
+        <div style="min-height: 60px; display: flex; align-items: center; gap: 12px; border: 1px solid #23262b; border-radius: 10px; background: #101215; padding: 11px 13px;">
+          <div style="width: 74px; flex-shrink: 0;">
+            <div class="mono" style="font-size: 12.5px; color: {{ s.color }};">{{ s.at }}</div>
+            <div class="mono" style="font-size: 10.5px; color: #565d64;">{{ s.day }}</div>
+          </div>
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ s.slug }}</div>
+            <div class="mono" style="font-size: 10.5px; color: #6a7178;">{{ s.config }}</div>
+          </div>
+          <span class="mono" style="font-size: 10.5px; color: #9ba1a8; border: 1px solid #2e323a; border-radius: 4px; padding: 1px 5px; flex-shrink: 0;">{{ s.type }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <!-- ── EVENTS ───────────────────────────────────────────────── -->
+  <sc-if value="{{ view.events }}" hint-placeholder-val="{{ true }}">
+    <div class="scroll" style="height: 700px; padding: 4px 12px 28px 12px;">
+      <sc-for list="{{ events }}" as="e" hint-placeholder-count="8">
+        <div style="display: flex; gap: 11px; align-items: baseline; padding: 12px 2px; border-bottom: 1px solid #191c21;">
+          <span class="mono" style="font-size: 11px; color: #565d64; flex-shrink: 0; width: 56px;">{{ e.at }}</span>
+          <div style="flex-grow: 1; min-width: 0;">
+            <div class="mono" style="font-size: 12.5px; color: {{ e.color }};">{{ e.type }}</div>
+            <div class="mono" style="font-size: 11px; color: #6a7178; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ e.payload }}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <!-- ── ADMIN ────────────────────────────────────────────────── -->
+  <sc-if value="{{ view.admin }}" hint-placeholder-val="{{ true }}">
+    <div class="scroll" style="height: 700px; padding: 12px 12px 28px 12px;">
+      <div style="font-size: 10.5px; color: #6a7178; letter-spacing: 0.05em; text-transform: uppercase; padding: 0 2px 8px 2px;">Health</div>
+      <div style="border: 1px solid #23262b; border-radius: 10px; background: #101215; overflow: hidden; margin-bottom: 18px;">
+        <sc-for list="{{ health }}" as="h" hint-placeholder-count="5">
+          <div style="display: flex; align-items: center; gap: 11px; padding: 13px; border-bottom: 1px solid #191c21;">
+            <div style="width: 7px; height: 7px; border-radius: 50%; background: {{ h.color }}; flex-shrink: 0;"></div>
+            <div style="flex-grow: 1; min-width: 0;">
+              <div style="font-size: 13.5px;">{{ h.name }}</div>
+              <div class="mono" style="font-size: 11px; color: #6a7178; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ h.detail }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="font-size: 10.5px; color: #6a7178; letter-spacing: 0.05em; text-transform: uppercase; padding: 0 2px 8px 2px;">Agents</div>
+      <div style="border: 1px solid #23262b; border-radius: 10px; background: #101215; overflow: hidden;">
+        <sc-for list="{{ agents }}" as="a" hint-placeholder-count="3">
+          <div style="display: flex; align-items: center; gap: 12px; padding: 13px; border-bottom: 1px solid #191c21;">
+            <div style="width: 30px; height: 30px; border-radius: 50%; background: {{ a.tint }}; color: #0b0c0e; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">{{ a.initials }}</div>
+            <div style="flex-grow: 1; min-width: 0;">
+              <div style="font-size: 13.5px;">{{ a.name }}</div>
+              <div class="mono" style="font-size: 11px; color: #6a7178; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ a.channels }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ── Drawer ───────────────────────────────────────────────── -->
+  <sc-if value="{{ drawer.open }}" hint-placeholder-val="{{ true }}">
+    <div style="position: absolute; inset: 0; background: rgba(6, 7, 9, 0.62);">
+      <div onClick="{{ closeDrawer }}" style="position: absolute; inset: 0;"></div>
+      <div style="position: absolute; top: 0; bottom: 0; left: 0; width: 286px; background: #0e1013; border-right: 1px solid #23262b; display: flex; flex-direction: column;">
+        <div style="height: 44px;"></div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 16px 16px 16px;">
+          <div style="width: 26px; height: 26px; border-radius: 6px; background: {{accent}}; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#0b0c0e" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 4v6a3 3 0 0 0 3 3h8"></path><path d="M19 20v-6a3 3 0 0 0-3-3H8"></path>
+            </svg>
+          </div>
+          <div style="font-size: 16px; font-weight: 600; letter-spacing: -0.01em;">bearclaw</div>
+        </div>
+
+        <nav style="display: flex; flex-direction: column; gap: 2px; padding: 0 10px;">
+
+          <div onClick="{{ go.chat }}" style="display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 11px; border-radius: 9px; cursor: pointer; background: {{ tab.chat.bg }}; color: {{ tab.chat.fg }}; box-shadow: {{ tab.chat.mark }};">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a8 8 0 0 1-8 8H7l-4 3v-6.5A8 8 0 0 1 11 4h2a8 8 0 0 1 8 8z"></path>
+            </svg>
+            <span style="flex-grow: 1; font-size: 14.5px;">Chat</span>
+          </div>
+
+          <div onClick="{{ toggleAuto }}" style="display: flex; align-items: center; gap: 8px; height: 40px; margin-top: 10px; padding: 0 11px; border-radius: 9px; cursor: pointer; color: {{ auto.fg }};">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate({{ auto.rot }}); transition: transform 120ms ease;">
+              <path d="m6 9 6 6 6-6"></path>
+            </svg>
+            <span style="flex-grow: 1; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;">Automation</span>
+            <sc-if value="{{ auto.showBadge }}" hint-placeholder-val="{{ true }}">
+              <span class="mono" style="font-size: 10.5px; font-weight: 500; color: #0b0c0e; background: {{accent}}; border-radius: 9px; padding: 1px 7px;">2</span>
+            </sc-if>
+          </div>
+
+          <sc-if value="{{ auto.open }}" hint-placeholder-val="{{ true }}">
+            <div style="display: flex; flex-direction: column; gap: 2px; margin-left: 16px; padding-left: 10px; border-left: 1px solid #1e2126;">
+              <sc-for list="{{ autoItems }}" as="it" hint-placeholder-count="4">
+                <div onClick="{{ it.go }}" style="display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 11px; border-radius: 9px; cursor: pointer; background: {{ it.bg }}; color: {{ it.fg }}; box-shadow: {{ it.mark }};">
+                  <div style="width: 5px; height: 5px; border-radius: 50%; background: {{ it.mkr }}; flex-shrink: 0;"></div>
+                  <span style="flex-grow: 1; font-size: 14.5px;">{{ it.label }}</span>
+                  <sc-if value="{{ it.hasCount }}" hint-placeholder-val="{{ true }}">
+                    <span class="mono" style="font-size: 11px; color: {{ it.countFg }};">{{ it.count }}</span>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <div onClick="{{ go.admin }}" style="display: flex; align-items: center; gap: 12px; height: 46px; margin-top: 10px; padding: 0 11px; border-radius: 9px; cursor: pointer; background: {{ tab.admin.bg }}; color: {{ tab.admin.fg }}; box-shadow: {{ tab.admin.mark }};">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 6h16M4 12h16M4 18h9"></path><circle cx="17.5" cy="18" r="2.2"></circle>
+            </svg>
+            <span style="flex-grow: 1; font-size: 14.5px;">Admin</span>
+          </div>
+        </nav>
+
+        <div style="flex-grow: 1;"></div>
+        <div style="border-top: 1px solid #23262b; padding: 14px 16px 30px 16px; display: flex; align-items: center; gap: 9px;">
+          <div style="width: 24px; height: 24px; border-radius: 50%; background: {{accent}}; color: #0b0c0e; font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center;">LU</div>
+          <div style="flex-grow: 1;">
+            <div style="font-size: 13px;">Luce</div>
+            <div class="mono" style="font-size: 10.5px; color: #6a7178;">main</div>
+          </div>
+          <div style="width: 6px; height: 6px; border-radius: 50%; background: #57a06f;"></div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- home-indicator space left clear -->
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"accent":{"editor":"color","default":"#5fb3c9","options":["#5fb3c9","#8f7ad6","#69a95e","#c98a4f"]},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { module: 'workflows', drawer: false, autoOpen: true, openStep: 'batch', wftab: 'graph', runId: 'run_4c1e08b7a29d4f16' };
+  }
+
+  renderVals() {
+    const accent = this.props.accent ?? '#5fb3c9';
+    const S = { ok: '#57a06f', fail: '#c95f57', wait: '#c2984f', idle: '#5b6169' };
+    const set = (patch) => () => this.setState(patch);
+
+    const modules = ['chat', 'workflows', 'schedules', 'events', 'admin'];
+    const tab = {};
+    for (const m of modules) {
+      const on = this.state.module === m;
+      tab[m] = {
+        bg: on ? '#191c21' : 'transparent',
+        fg: on ? '#e8eaec' : '#9ba1a8',
+        mark: on ? 'inset 2px 0 0 ' + accent : 'none',
+      };
+    }
+    const go = {};
+    for (const m of modules) go[m] = set({ module: m, drawer: false });
+
+    const autoModules = ['workflows', 'schedules', 'events'];
+    const autoActive = autoModules.indexOf(this.state.module) >= 0;
+    const auto = {
+      open: this.state.autoOpen,
+      rot: this.state.autoOpen ? '0deg' : '-90deg',
+      fg: autoActive && !this.state.autoOpen ? '#e8eaec' : '#6a7178',
+      showBadge: !this.state.autoOpen,
+    };
+
+    const counts = { workflows: '2', schedules: '8', events: '' };
+    const autoItems = autoModules.map((m) => ({
+      label: m.charAt(0).toUpperCase() + m.slice(1),
+      bg: tab[m].bg, fg: tab[m].fg, mark: tab[m].mark,
+      mkr: this.state.module === m ? accent : '#2e323a',
+      hasCount: !!counts[m],
+      count: counts[m],
+      countFg: m === 'workflows' ? accent : '#6a7178',
+      go: set({ module: m, drawer: false }),
+    }));
+
+    const titles = {
+      chat: 'Chat', workflows: 'Workflows', schedules: 'Schedules',
+      events: 'Events', admin: 'Admin', run: this.state.runId, wf: 'Feed triage',
+    };
+    const subtitles = {
+      chat: 'Luce · main', workflows: '11 definitions · 2 waiting',
+      schedules: '8 triggers', events: 'last 24h', admin: 'all channels up',
+      run: 'feed-triage', wf: 'feed-triage · main',
+    };
+
+    // One entry per nav target plus 'run'; a module with no view is a blank page.
+    const view = {};
+    for (const m of modules.concat(['run', 'wf'])) view[m] = this.state.module === m;
+
+    const rows = [
+      ['Feed triage', 'main · 15 nodes', 'Today 20:00', 'ok', ['daily', 'digest']],
+      ['Word of the Day', 'main · 8 nodes', 'Today 18:00', 'ok', ['daily', 'kids']],
+      ['Gmail daily check', 'main · 5 nodes', 'Today 20:00', 'ok', ['daily', 'email']],
+      ['Family bulletin', 'coco · 9 nodes', 'Tomorrow 07:00', 'ok', ['daily', 'family']],
+      ['Newsletter send', 'coco · 8 nodes', 'Sat 07:00', 'ok', ['kids', 'newsletter']],
+      ['News Drop', 'coco · 5 nodes', 'Wed 17:03', 'ok', ['weekly', 'kids']],
+      ['Lesson of the Week', 'coco · 5 nodes', 'Mon 16:07', 'ok', ['weekly', 'kids']],
+      ['Newsletter empty alert', 'main · 2 nodes', '—', 'ok', ['newsletter']],
+      ['Reminder', 'main · 1 node', '—', 'idle', ['utility']],
+    ];
+    // Same tag colours as the desktop list: hue derived from the tag's name.
+    const tagHue = (tag) => {
+      const hues = [188, 262, 96, 32, 340, 210, 140, 12];
+      let h = 0;
+      for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) | 0;
+      return 'hsl(' + hues[Math.abs(h) % hues.length] + ' 55% 55%)';
+    };
+    const workflows = rows.map((r) => ({
+      name: r[0], meta: r[1], next: r[2], dot: S[r[3]],
+      tags: r[4].map((t) => ({ name: t, hue: tagHue(t) })),
+      open: set({ module: 'wf', wftab: 'graph', drawer: false }),
+    }));
+
+    const act = (label, kind) => ({
+      label,
+      bg: kind === 'primary' ? accent : 'transparent',
+      fg: kind === 'primary' ? '#08191e' : '#9ba1a8',
+      border: kind === 'primary' ? accent : '#2e323a',
+      click: () => this.setState({}),
+    });
+    const waits = [
+      {
+        origin: 'feed-triage / ask',
+        age: '14h',
+        prompt: 'Reply to the digest email with: save 1 4 / summarize 7 / dismiss 2 / next',
+        actions: [act('Answer', 'primary')],
+      },
+      {
+        origin: 'newsletter-send / approve_draft',
+        age: '2h',
+        prompt: 'Send Friday’s newsletter to 143 subscribers?',
+        actions: [act('Approve', 'primary'), act('Reject', 'ghost')],
+      },
+    ];
+
+    const RUN_INDEX = {
+      run_4c1e08b7a29d4f16: { status: 'waiting', started: 'Yesterday 20:00', took: '' },
+      run_2f77a1d0e4b3c891: { status: 'succeeded', started: 'Aug 31, 20:00', took: '41.6s' },
+      run_9b0c53e28af14d70: { status: 'succeeded', started: 'Aug 30, 20:00', took: '39.2s' },
+      run_1d84f6a7c05b2e39: { status: 'failed', started: 'Aug 29, 20:00', took: '2m 04s' },
+      run_6e2a94c1b7d80f45: { status: 'succeeded', started: 'Aug 28, 20:00', took: '44.1s' },
+    };
+    const runId = this.state.runId;
+    const runInfo = RUN_INDEX[runId];
+    const RUN_HEAD = {
+      waiting: { label: 'waiting on a person', color: '#c2984f', bg: '#211d14', border: '#3a3120', waiting: true,
+        meta: 'started ' + runInfo.started + ' · 11 of 12 steps' },
+      succeeded: { label: 'succeeded', color: S.ok, bg: '#0f1512', border: '#1e2c22', waiting: false,
+        meta: 'started ' + runInfo.started + ' · 12 of 12 steps · ' + runInfo.took },
+      failed: { label: 'failed on send', color: S.fail, bg: '#17100f', border: '#3a2422', waiting: false,
+        meta: 'started ' + runInfo.started + ' · 6 of 12 steps · ' + runInfo.took },
+    };
+    const runHead = RUN_HEAD[runInfo.status];
+
+    const ORDER = ['count', 'unread', 'any', 'prep', 'summarize', 'compose', 'send', 'batch', 'persist', 'mark_read', 'ask', 'act'];
+    const stateOf = (id) => {
+      const at = ORDER.indexOf(id);
+      if (runInfo.status === 'failed') {
+        const failAt = ORDER.indexOf('send');
+        return at < failAt ? 'ok' : (at === failAt ? 'fail' : 'idle');
+      }
+      if (runInfo.status === 'waiting') return id === 'ask' ? 'wait' : (id === 'act' ? 'idle' : 'ok');
+      return 'ok';
+    };
+    const NOTES = {
+      waiting: { unread: '15 items · 512 unread', any: 'took the true port', summarize: 'sonnet · 15 summaries',
+        send: 'digest emailed', batch: 'thread 1a06dry0001', mark_read: '15 marked read',
+        ask: 'waiting for your reply', act: 'runs when the reply lands' },
+      succeeded: { unread: '15 items · 512 unread', summarize: 'sonnet · 15 summaries', send: 'digest emailed',
+        batch: 'thread 1a06dry0001', ask: 'answered by email after 14h', act: 'saved 1 and 4 · summarized 7' },
+      failed: { unread: '15 items · 512 unread', summarize: 'sonnet · 15 summaries',
+        send: 'gws: token refresh failed (401) · 3 attempts', batch: 'not started', ask: 'not started' },
+    };
+    const MS = { count: '48ms', unread: '310ms', any: '2ms', prep: '3ms', summarize: '38.2s', compose: '4ms',
+      send: runInfo.status === 'failed' ? '1m 58s' : '1.9s', batch: '2ms', persist: '12ms', mark_read: '204ms',
+      ask: runInfo.status === 'succeeded' ? '14h' : '', act: runInfo.status === 'succeeded' ? '9.4s' : '' };
+    const TYPE_OF = { count: 'shell', unread: 'shell', any: 'condition', prep: 'transform', summarize: 'agent',
+      compose: 'transform', send: 'shell', batch: 'transform', persist: 'shell', mark_read: 'shell',
+      ask: 'human', act: 'agent' };
+    const stepRows = ORDER.map((id) => {
+      const st = stateOf(id);
+      return [id, TYPE_OF[id], st === 'ok' || st === 'fail' ? MS[id] : '', st, (NOTES[runInfo.status] || {})[id] || ''];
+    });
+    // Tapping a step opens its properties. The phone reads the definition;
+    // it does not rearrange it.
+    const NODE_FIELDS = {
+      count: [['cmd', 'feeds count'], ['parse', 'json']],
+      unread: [['cmd', 'feeds unread --limit {{ inputs.limit }}'], ['parse', 'json']],
+      any: [['expr', 'nodes.unread.output.length > 0'], ['ports', 'true · false']],
+      prep: [['expr', 'nodes.unread.output.map(i => ({ …, content: content.slice(0, 3000) }))']],
+      summarize: [['model', 'sonnet'], ['prompt', 'Summarize each item in two sentences…'], ['output_schema', '{ "type": "object", … }']],
+      compose: [['expr', "({ subject: 'Feeds — 15 shown (512 unread)', html: …, batch: … })"]],
+      send: [['cmd', 'gws gmail +send --to … --html-stdin'], ['parse', 'json'], ['retry', 'max 2 · backoff 30s'], ['on_error', 'port']],
+      batch: [['expr', '({ run_id: run.id, thread_id: nodes.send.output.threadId, items: … })'], ['why', 'the batch travels with the run, so a late reply can never touch a newer digest']],
+      persist: [['cmd', 'printf … > ~/.bearclaw/var/feed-batch.json']],
+      mark_read: [['cmd', 'feeds mark-read {{ join nodes.prep.output.*.id }}']],
+      ask: [['kind', 'input'], ['to', 'email:main'], ['expires', '7d'], ['notify', 'false'], ['ports', 'submitted · expired']],
+      act: [['model', 'sonnet'], ['prompt', 'Apply the reply against nodes.batch.output, then confirm in-thread']],
+      caught_up: [['cmd', 'echo caught up'], ['when', 'the false port of any']],
+      empty_batch: [['expr', '({ created_at: run.started_at, items: [], unread: nodes.count.output })']],
+      persist_empty: [['cmd', 'printf … > ~/.bearclaw/var/feed-batch.json']],
+    };
+    const openStep = this.state.openStep;
+    const STEP_DOT = { ok: S.ok, wait: S.wait, fail: S.fail, idle: '#3b4046' };
+    const STEP_WIRE = { ok: '#2c4436', wait: '#4a3d23', fail: '#4a2e2b', idle: '#212429' };
+    const steps = stepRows.map((r, i) => ({
+      id: r[0], type: r[1], ms: r[2],
+      dot: STEP_DOT[r[3]],
+      wire: i === stepRows.length - 1 ? 'transparent' : STEP_WIRE[r[3]],
+      fg: r[3] === 'idle' ? '#6a7178' : '#e8eaec',
+      bg: openStep === r[0] ? '#15181c' : 'transparent',
+      hasNote: !!r[4], note: r[4],
+      open: () => this.setState({ openStep: openStep === r[0] ? null : r[0] }),
+    }));
+    // ── the workflow's own screens ─────────────────────────────
+    const WF_TABS = [['graph', 'Graph'], ['triggers', 'Triggers'], ['runs', 'Runs'], ['definition', 'Definition']];
+    const wftabs = WF_TABS.map((t) => {
+      const on = this.state.wftab === t[0];
+      return {
+        label: t[1],
+        fg: on ? '#e8eaec' : '#6a7178',
+        mark: on ? 'inset 0 -2px 0 ' + accent : 'none',
+        pick: () => this.setState({ wftab: t[0] }),
+      };
+    });
+    const wftab = {
+      isGraph: this.state.wftab === 'graph',
+      isTriggers: this.state.wftab === 'triggers',
+      isRuns: this.state.wftab === 'runs',
+      isDefinition: this.state.wftab === 'definition',
+    };
+
+    const NODE_ROWS = [
+      ['count', 'shell', 'feeds count', ''],
+      ['unread', 'shell', 'feeds unread --limit 15', ''],
+      ['any', 'condition', 'nodes.unread.output.length > 0', 'true · false'],
+      ['prep', 'transform', 'cap each item at 3000 chars', ''],
+      ['summarize', 'agent', 'sonnet · two sentences each', ''],
+      ['compose', 'transform', 'subject, html, batch', ''],
+      ['send', 'shell', 'gws gmail +send', 'out · error'],
+      ['batch', 'transform', 'run_id, thread_id, items', ''],
+      ['persist', 'shell', 'write feed-batch.json', ''],
+      ['mark_read', 'shell', 'feeds mark-read', ''],
+      ['ask', 'human', 'reply by number', 'submitted · expired'],
+      ['act', 'agent', 'apply the reply, confirm in-thread', ''],
+      ['caught_up', 'shell', 'the false branch', ''],
+      ['empty_batch', 'transform', 'an empty batch', ''],
+      ['persist_empty', 'shell', 'write feed-batch.json', ''],
+    ];
+    const TYPE_DOT = {
+      shell: '#6f8fa8', transform: '#6f8fa8', condition: '#8f7ad6',
+      agent: accent, human: '#c2984f',
+    };
+    const nodeRows = NODE_ROWS.map((n, i) => ({
+      id: n[0], type: n[1], sub: n[2], port: n[3],
+      dot: TYPE_DOT[n[1]] || '#6f8fa8',
+      shape: n[1] === 'human' ? '2px' : '50%',
+      wire: i === NODE_ROWS.length - 1 ? 'transparent' : '#2a2e34',
+      bg: openStep === n[0] ? '#15181c' : 'transparent',
+      open: () => this.setState({ openStep: openStep === n[0] ? null : n[0] }),
+    }));
+
+    const mobileTriggers = [
+      ['cron', '0 20 * * *  ·  America/New_York', 'declared in feed-triage.json', 'Today 20:00', true],
+      ['manual', 'dashboard, /workflows run, workflow_run', 'declared in feed-triage.json', '—', true],
+    ].map((t) => ({
+      type: t[0], config: t[1], source: t[2],
+      next: this.state.paused === t[0] ? 'paused' : t[3],
+      nextFg: this.state.paused === t[0] ? '#6a7178' : (t[3] === '—' ? '#6a7178' : accent),
+      fg: this.state.paused === t[0] ? '#6a7178' : '#e8eaec',
+      pauseLabel: this.state.paused === t[0] ? 'Resume' : 'Pause',
+      toggle: () => this.setState({ paused: this.state.paused === t[0] ? null : t[0] }),
+    }));
+
+    const runRows = [
+      ['run_4c1e08b7a29d4f16', 'waiting on you', 'Yesterday 20:00', '—', S.wait],
+      ['run_2f77a1d0e4b3c891', 'succeeded', 'Aug 31, 20:00', '41.6s', S.ok],
+      ['run_9b0c53e28af14d70', 'succeeded', 'Aug 30, 20:00', '39.2s', S.ok],
+      ['run_1d84f6a7c05b2e39', 'failed', 'Aug 29, 20:00', '2m 04s', S.fail],
+      ['run_6e2a94c1b7d80f45', 'succeeded', 'Aug 28, 20:00', '44.1s', S.ok],
+    ].map((r) => ({
+      id: r[0], status: r[1], started: r[2], duration: r[3], color: r[4],
+      open: () => this.setState({ module: 'run', runId: r[0], openStep: 'batch' }),
+    }));
+
+    const definition = [
+      '{',
+      '  "name": "Feed triage",',
+      '  "slug": "feed-triage",',
+      '  "owner": "main",',
+      '  "policies": {',
+      '    "concurrency": "skip",',
+      '    "alerts": {',
+      '      "on_missed": { "expected_within": "2h" }',
+      '    }',
+      '  },',
+      '  "nodes": {',
+      '    "count": { "type": "shell", … },',
+      '    "any":   { "type": "condition", … },',
+      '    "send":  { "type": "shell", "parse": "json" },',
+      '    "batch": { "type": "transform", … },',
+      '    "ask":   { "type": "human", "kind": "input" },',
+      '    "act":   { "type": "agent", "model": "sonnet" }',
+      '  },',
+      '  "edges": [',
+      '    { "from": "send", "to": "batch" },',
+      '    { "from": "ask", "port": "submitted",',
+      '      "to": "act" }',
+      '  ]',
+      '}',
+    ].join('\n');
+
+    // The card serves both screens, so it has to know the branch nodes too,
+    // which never appear in a run that took the true port.
+    const ALL_TYPES = Object.assign({}, TYPE_OF, {
+      caught_up: 'shell', empty_batch: 'transform', persist_empty: 'shell',
+    });
+    const stepSel = {
+      show: !!(openStep && ALL_TYPES[openStep]),
+      id: openStep || '',
+      type: openStep ? ALL_TYPES[openStep] : '',
+      dot: openStep && ORDER.indexOf(openStep) >= 0 ? STEP_DOT[stateOf(openStep)] : '#3b4046',
+      fields: ((openStep && NODE_FIELDS[openStep]) || []).map((f) => ({ k: f[0], v: f[1] })),
+    };
+
+    const messages = [
+      { who: 'ME', tint: '#3b4046', fg: '#9ba1a8', align: 'flex-end', at: '08:41',
+        text: 'did feed-triage go out last night?' },
+      { who: 'LU', tint: accent, fg: '#e8eaec', align: 'flex-start', at: '08:41',
+        text: 'Yes — 15 items at 20:00, 512 unread behind them.\nThe run is still parked on the reply step, so it is waiting on you rather than finished.' },
+      { who: 'ME', tint: '#3b4046', fg: '#9ba1a8', align: 'flex-end', at: '08:42',
+        text: 'save 1 4, summarize 7' },
+      { who: 'LU', tint: accent, fg: '#e8eaec', align: 'flex-start', at: '08:42',
+        text: 'Saved 1 and 4 to the vault, summarized 7 below, and closed last night’s run.' },
+    ];
+
+    const schedules = [
+      ['17:03', 'Today', 'news-drop-angela', '3 17 * * 3', 'cron'],
+      ['18:00', 'Today', 'word-of-the-day', '0 18 * * *', 'cron'],
+      ['20:00', 'Today', 'feed-triage', '0 20 * * *', 'cron'],
+      ['20:00', 'Today', 'gmail-daily-check', '0 20 * * *', 'cron'],
+      ['07:00', 'Tomorrow', 'newsletter-send', '0 7 * * *', 'cron'],
+      ['07:00', 'Tomorrow', 'family-bulletin-coco', '0 7 * * *', 'cron'],
+      ['19:00', 'Saturday', 'newsletter-plan-ping', '0 19 * * 6', 'cron'],
+      ['16:07', 'Sep 7', 'lesson-of-the-week', '7 16 * * 1', 'cron'],
+    ].map((r, i) => ({
+      at: r[0], day: r[1], slug: r[2], config: r[3], type: r[4],
+      color: i < 2 ? accent : '#e8eaec',
+    }));
+
+    const events = [
+      ['08:58', 'workflow.run.finished', 'slug=feed-triage status=succeeded', S.ok],
+      ['08:58', 'agent_complete', 'folder=main trigger=event_handler 38.2s', '#9ba1a8'],
+      ['08:41', 'email_received', 'jid=email:main', accent],
+      ['08:00', 'workflow.run.finished', 'slug=word-of-the-day status=succeeded', S.ok],
+      ['07:00', 'workflow.run.finished', 'slug=newsletter-send status=succeeded', S.ok],
+      ['07:00', 'agent_complete', 'folder=coco trigger=event_handler 12.4s', '#9ba1a8'],
+      ['02:14', 'subprocess_exit', 'pid=41822 code=0', '#9ba1a8'],
+    ].map((e) => ({ at: e[0], type: e[1], payload: e[2], color: e[3] }));
+
+    const health = [
+      ['Database', 'accessible · 11 workflows', S.ok],
+      ['Overdue triggers', 'every cron trigger is on schedule', S.ok],
+      ['Open waits', '2 waiting on a human', S.ok],
+      ['Event queue', '0 unprocessed', S.ok],
+      ['Channels', 'telegram · imessage · email · web', S.ok],
+    ].map((h) => ({ name: h[0], detail: h[1], color: h[2] }));
+
+    const agents = [
+      { name: 'Luce', initials: 'LU', tint: accent, channels: 'telegram · imessage · email · web' },
+      { name: 'CoCo', initials: 'CO', tint: '#8f7ad6', channels: 'imessage · email · web' },
+      { name: 'CoCo the Tutor', initials: 'TU', tint: '#69a95e', channels: 'imessage · web' },
+    ];
+
+    return {
+      accent, tab, go, auto, autoItems, view,
+      title: titles[this.state.module],
+      subtitle: subtitles[this.state.module],
+      workflows, waits, steps, stepSel, messages,
+      wftabs, wftab, nodeRows, mobileTriggers, runRows, definition, runHead, schedules, events, health, agents,
+      waiting: { count: 2, any: true },
+      drawer: { open: this.state.drawer },
+      showMenuBtn: this.state.module !== 'run' && this.state.module !== 'wf',
+      showBackBtn: this.state.module === 'run' || this.state.module === 'wf',
+      goBack: this.state.module === 'run'
+        ? () => this.setState({ module: 'wf', wftab: 'runs' })
+        : () => this.setState({ module: 'workflows' }),
+      openDrawer: set({ drawer: true }),
+      closeDrawer: set({ drawer: false }),
+      toggleAuto: () => this.setState({ autoOpen: !this.state.autoOpen }),
+    };
+  }
+}
+</script>
+</body>
+</html>

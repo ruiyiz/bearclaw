@@ -1,0 +1,48 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "title": "Desktop — app shell + graph editor",
+      "is_interactive": true
+    },
+    {
+      "file": "Mobile.dc.html",
+      "x": 1560,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Phone — same nav as a drawer",
+      "is_interactive": true
+    }
+  ],
+  "annotations": [
+    {
+      "id": "nav-note",
+      "x": 0,
+      "y": -150,
+      "w": 520,
+      "text": "Sidebar carries every top-level module. Workflows, Schedules and Events sit under a collapsible AUTOMATION group; Chat and Admin stay top-level. Human steps have no module of their own — they surface as a band on the Workflows list and inside the run they belong to, and the Workflows badge carries the count. The list itself is filed by tag: chips above the table filter it, AND across chips, with an untagged bucket for the pile nobody has sorted yet."
+    },
+    {
+      "id": "editor-note",
+      "x": 560,
+      "y": -150,
+      "w": 560,
+      "text": "The Graph tab is an editor. Drag a type out of the palette to add a node, drag a node to move it, drag a port onto another node to wire it. The right panel is contextual: a node's own fields in the order its type declares them, then retry and on_error, then its wires; with nothing selected it shows the workflow's own policies and inputs. Every edit re-runs the loader's checks, so a node that reads a node not upstream of it says so before you save. Triggers are edited the same way, one row at a time: add, retype, pause, delete, with the next fires spelled out. A run is a snapshot, so the run view is read-only; the trail at the top and the All runs button lead back to the workflow the run belongs to. Tags live on the definition, so they are edited where the definition is: from the row's ⋯ menu without opening the workflow, or in the panel beside the graph. A tag takes its colour from its own name, so the same tag reads the same everywhere."
+    },
+    {
+      "id": "phone-note",
+      "x": 1560,
+      "y": -150,
+      "w": 390,
+      "text": "The phone reads a definition rather than rearranging it. A workflow opens on the same four tabs, Graph, Triggers, Runs and Definition; tapping a node or a step shows its fields, and a trigger can be paused. Both artboards are live."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}
