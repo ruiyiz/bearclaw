@@ -1,4 +1,6 @@
+import { AppShell } from '@/components/app-shell';
 import { Nav } from '@/components/Nav';
+import { RouteTitle } from '@/components/route-title';
 
 export default function AdminLayout({
   children,
@@ -6,10 +8,10 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   return (
-    <>
+    <AppShell bare>
+      <RouteTitle fallback="Admin" />
       <Nav
         base="Admin"
-        homeHref="/workflows"
         items={[
           { href: '/admin/skills', label: 'Skills' },
           { href: '/admin/agents', label: 'Agents' },
@@ -18,7 +20,9 @@ export default function AdminLayout({
           { href: '/admin/transcripts', label: 'Transcripts' },
         ]}
       />
-      <main className="flex-1 px-3 py-3 overflow-y-auto">{children}</main>
-    </>
+      <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        {children}
+      </main>
+    </AppShell>
   );
 }

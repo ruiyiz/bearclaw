@@ -51,47 +51,174 @@ body {
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0b0d10;
-    --bg-2: #14171d;
-    --fg: #e6e8eb;
-    --muted: #9aa0a6;
-    --card: #15181c;
-    --border: #232830;
-    --accent: #7aa2f7;
+    --bg: #0b0c0e;
+    --bg-2: #0e1013;
+    --fg: #e8eaec;
+    --muted: #8a9199;
+    --card: #101215;
+    --border: #23262b;
+    --accent: #5fb3c9;
+    --accent-soft: rgba(95, 179, 201, 0.16);
+    --on-accent: #08191e;
+    --wire: #2f353c;
+    --grid: #1b1e23;
+  --ok: #57a06f;
+  --ok-bg: #0f1512;
+  --ok-border: #1e2c22;
+  --warn: #c2984f;
+  --warn-bg: #14120e;
+  --warn-border: #3a3120;
+  --danger: #c95f57;
+  --danger-bg: #17100f;
+  --danger-border: #3a2422;
+    --ok: #57a06f;
+    --ok-bg: #0f1512;
+    --ok-border: #1e2c22;
+    --warn: #c2984f;
+    --warn-bg: #14120e;
+    --warn-border: #3a3120;
+    --danger: #c95f57;
+    --danger-bg: #17100f;
+    --danger-border: #3a2422;
   }
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #ffffff;
-    --bg-2: #f3f4f6;
+    --bg-2: #f5f6f7;
     --fg: #111418;
     --muted: #5f6368;
-    --card: #f6f8fa;
+    --card: #fafbfc;
     --border: #e3e6ea;
-    --accent: #3457dc;
+    --accent: #17788f;
+    --accent-soft: rgba(23, 120, 143, 0.14);
+    --on-accent: #ffffff;
+    --wire: #c9ced4;
+    --grid: #e6e9ec;
+  --ok: #2f7d4f;
+  --ok-bg: #eef7f1;
+  --ok-border: #cfe6d8;
+  --warn: #8a6a1f;
+  --warn-bg: #fdf6e6;
+  --warn-border: #e8d9ae;
+  --danger: #b03a33;
+  --danger-bg: #fdf0ef;
+  --danger-border: #f0cdca;
+    --ok: #2f7d4f;
+    --ok-bg: #eef7f1;
+    --ok-border: #cfe6d8;
+    --warn: #8a6a1f;
+    --warn-bg: #fdf6e6;
+    --warn-border: #e8d9ae;
+    --danger: #b03a33;
+    --danger-bg: #fdf0ef;
+    --danger-border: #f0cdca;
   }
 }
 
 /* Explicit theme overrides win over media query via attribute specificity. */
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #0b0d10;
-  --bg-2: #14171d;
-  --fg: #e6e8eb;
-  --muted: #9aa0a6;
-  --card: #15181c;
-  --border: #232830;
-  --accent: #7aa2f7;
+  --bg: #0b0c0e;
+  --bg-2: #0e1013;
+  --fg: #e8eaec;
+  --muted: #8a9199;
+  --card: #101215;
+  --border: #23262b;
+  --accent: #5fb3c9;
+  --accent-soft: rgba(95, 179, 201, 0.16);
+  --on-accent: #08191e;
+  --wire: #2f353c;
+  --grid: #1b1e23;
+  --ok: #57a06f;
+  --ok-bg: #0f1512;
+  --ok-border: #1e2c22;
+  --warn: #c2984f;
+  --warn-bg: #14120e;
+  --warn-border: #3a3120;
+  --danger: #c95f57;
+  --danger-bg: #17100f;
+  --danger-border: #3a2422;
 }
 
 :root[data-theme='light'] {
   color-scheme: light;
   --bg: #ffffff;
-  --bg-2: #f3f4f6;
+  --bg-2: #f5f6f7;
   --fg: #111418;
   --muted: #5f6368;
-  --card: #f6f8fa;
+  --card: #fafbfc;
   --border: #e3e6ea;
-  --accent: #3457dc;
+  --accent: #17788f;
+  --accent-soft: rgba(23, 120, 143, 0.14);
+  --on-accent: #ffffff;
+  --wire: #c9ced4;
+  --grid: #e6e9ec;
+  --ok: #2f7d4f;
+  --ok-bg: #eef7f1;
+  --ok-border: #cfe6d8;
+  --warn: #8a6a1f;
+  --warn-bg: #fdf6e6;
+  --warn-border: #e8d9ae;
+  --danger: #b03a33;
+  --danger-bg: #fdf0ef;
+  --danger-border: #f0cdca;
+}
+
+/* The workflow canvas: React Flow paints its own chrome, so the few pieces it
+   exposes are pulled onto the app's tokens. */
+.wf-canvas .react-flow__controls-button {
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  fill: currentColor;
+}
+.wf-canvas .react-flow__controls-button:hover {
+  background: var(--bg-2);
+}
+.wf-canvas .react-flow__handle {
+  border-radius: 50%;
+}
+.wf-canvas .react-flow__node:focus,
+.wf-canvas .react-flow__node:focus-visible {
+  outline: none;
+}
+.wf-canvas .react-flow__edge-textbg {
+  fill: var(--bg-2);
+}
+.wf-node {
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+/* CodeMirror keeps its own token colours — they are tuned for reading — but
+   the surfaces come from the app so the editor sits in the page. */
+.code-surface .cm-editor,
+.code-surface .cm-editor .cm-gutters {
+  background: var(--bg);
+}
+.code-surface .cm-editor .cm-gutters {
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+}
+.code-surface .cm-editor .cm-activeLine,
+.code-surface .cm-editor .cm-activeLineGutter {
+  background: var(--bg-2);
+}
+.code-surface .cm-editor .cm-activeLineGutter {
+  color: var(--fg);
+}
+.code-surface .cm-editor .cm-content {
+  caret-color: var(--accent);
+}
+.code-surface .cm-editor .cm-cursor,
+.code-surface .cm-editor .cm-dropCursor {
+  border-left-color: var(--accent);
+}
+.code-surface .cm-editor.cm-focused {
+  outline: none;
+}
+.code-surface .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.65;
 }

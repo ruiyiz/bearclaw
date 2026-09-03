@@ -11,39 +11,13 @@ import {
   type ContextScope,
 } from '@/lib/api';
 import { useConfirm } from '@/components/confirm-dialog';
+import { useResolvedTheme } from '@/lib/editor';
 
 type Selection = { scope: ContextScope; folder: string | null; name: string };
 
 function sameSel(a: Selection | null, b: Selection | null): boolean {
   if (!a || !b) return a === b;
   return a.scope === b.scope && a.folder === b.folder && a.name === b.name;
-}
-
-function useTheme(): 'dark' | 'light' {
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  useEffect(() => {
-    const compute = (): 'dark' | 'light' => {
-      const attr = document.documentElement.getAttribute('data-theme');
-      if (attr === 'dark' || attr === 'light') return attr;
-      return window.matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark'
-        : 'light';
-    };
-    setTheme(compute());
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const onMq = () => setTheme(compute());
-    mq.addEventListener('change', onMq);
-    const obs = new MutationObserver(() => setTheme(compute()));
-    obs.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-theme'],
-    });
-    return () => {
-      mq.removeEventListener('change', onMq);
-      obs.disconnect();
-    };
-  }, []);
-  return theme;
 }
 
 export function ContextView() {
@@ -57,7 +31,7 @@ export function ContextView() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const theme = useTheme();
+  const theme = useResolvedTheme();
 
   const reload = useCallback(async () => {
     const d = await api.contextList();
@@ -272,7 +246,7 @@ export function ContextView() {
           </div>
         </header>
 
-        <div className="flex-1 min-h-0 overflow-auto">
+        <div className="code-surface flex-1 min-h-0 overflow-auto">
           {loading ? (
             <div className="p-3 text-sm text-[color:var(--muted)]">
               Loading…

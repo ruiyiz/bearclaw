@@ -1336,8 +1336,6 @@ export function ChatView() {
                   <div className="flex-1 flex flex-col items-stretch pt-[28dvh]">
                     <div className="px-3 md:px-6 lg:px-10 pb-4">
                       <div className="max-w-3xl mx-auto flex items-center justify-center gap-3 flex-wrap">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src="/logo.png" alt="" width={48} height={48} />
                         <h1 className="text-3xl md:text-4xl font-serif text-[color:var(--fg)]">
                           {welcomeMessage}
                         </h1>
@@ -1457,10 +1455,7 @@ function SidebarPane(p: SidebarProps) {
       }
     >
       <header className="px-3 py-3 flex items-center gap-2">
-        <div className="flex-1 flex items-center">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="BearClaw" width={32} height={32} />
-        </div>
+        <div className="flex-1" />
         <button
           type="button"
           onClick={() => p.setDrawerOpen(false)}
@@ -1608,67 +1603,6 @@ function SidebarPane(p: SidebarProps) {
           </svg>
           <span>Settings</span>
         </button>
-        <Link
-          href="/workflows"
-          className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <rect x="3" y="3" width="7" height="5" rx="1" />
-            <rect x="14" y="16" width="7" height="5" rx="1" />
-            <path d="M6.5 8v6a2 2 0 0 0 2 2H14" />
-          </svg>
-          <span>Workflows</span>
-        </Link>
-        <Link
-          href="/inbox"
-          className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M22 12h-6l-2 3h-4l-2-3H2" />
-            <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-          </svg>
-          <span>Inbox</span>
-        </Link>
-        <Link
-          href="/admin"
-          className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-[color:var(--muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--card)] transition-colors"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M12 20h9" />
-            <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-          </svg>
-          <span>Admin</span>
-        </Link>
       </div>
     </aside>
   );

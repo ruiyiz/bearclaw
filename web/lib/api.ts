@@ -45,6 +45,7 @@ export interface WorkflowSummary {
   owner: string;
   enabled: boolean;
   description: string | null;
+  tags: string[];
   nodeCount: number;
   lastStatus: string | null;
   lastRunId: string | null;
@@ -69,6 +70,7 @@ export interface WorkflowDefinition {
   slug: string;
   owner: string;
   description?: string;
+  tags?: string[];
   inputs?: {
     type: string;
     required?: string[];

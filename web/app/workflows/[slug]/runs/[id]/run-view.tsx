@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { WorkflowGraph, type NodeStatus } from '@/components/workflow-graph';
+import { PageHeader } from '@/components/page-header';
+import { WorkflowCanvas, type NodeStatus } from '@/components/workflow-canvas';
 import {
   api,
   type RunTimelineEntry,
@@ -12,13 +13,66 @@ import {
   type WorkflowStep,
   type WorkflowWait,
 } from '@/lib/api';
-import { shortTime, statusColor } from '../../../workflows-view';
+import { WaitControls } from '@/components/wait-controls';
+import { shortTime } from '@/lib/format';
 
 function toStatuses(steps: WorkflowStep[]): Record<string, NodeStatus> {
   const out: Record<string, NodeStatus> = {};
   for (const s of steps) out[s.nodeId] = s.status as NodeStatus;
   return out;
 }
+
+function took(step: WorkflowStep): string {
+  if (!step.finishedAt) return '';
+  const ms =
+    new Date(step.finishedAt).getTime() - new Date(step.startedAt).getTime();
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60_000);
+  return `${m}m ${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+const PILL: Record<
+  string,
+  { label: string; color: string; bg: string; border: string }
+> = {
+  waiting: {
+    label: 'waiting on a person',
+    color: 'var(--warn)',
+    bg: 'var(--warn-bg)',
+    border: 'var(--warn-border)',
+  },
+  running: {
+    label: 'running',
+    color: 'var(--accent)',
+    bg: 'var(--accent-soft)',
+    border: 'var(--accent)',
+  },
+  queued: {
+    label: 'queued',
+    color: 'var(--muted)',
+    bg: 'var(--bg-2)',
+    border: 'var(--border)',
+  },
+  succeeded: {
+    label: 'succeeded',
+    color: 'var(--ok)',
+    bg: 'var(--ok-bg)',
+    border: 'var(--ok-border)',
+  },
+  failed: {
+    label: 'failed',
+    color: 'var(--danger)',
+    bg: 'var(--danger-bg)',
+    border: 'var(--danger-border)',
+  },
+  cancelled: {
+    label: 'cancelled',
+    color: 'var(--muted)',
+    bg: 'var(--bg-2)',
+    border: 'var(--border)',
+  },
+};
 
 export function RunView({ slug, runId }: { slug: string; runId: string }) {
   const [run, setRun] = useState<WorkflowRun | null>(null);
@@ -38,6 +92,11 @@ export function RunView({ slug, runId }: { slug: string; runId: string }) {
         setSteps(r.steps);
         setWaits(r.waits);
         setTimeline(r.timeline);
+        setSelected((prev) => {
+          if (prev) return prev;
+          const open = r.waits.find((w) => w.status === 'open');
+          return open?.nodeId ?? r.steps[r.steps.length - 1]?.nodeId ?? null;
+        });
       })
       .catch((e) => setError(String(e)));
   }, [runId]);
@@ -53,218 +112,218 @@ export function RunView({ slug, runId }: { slug: string; runId: string }) {
   }, [load, runId]);
 
   const statuses = useMemo(() => toStatuses(steps), [steps]);
+  const durations = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const s of steps) out[s.nodeId] = took(s);
+    return out;
+  }, [steps]);
+
   const selectedStep = steps.find((s) => s.nodeId === selected) ?? null;
   const selectedWait = waits.find(
     (w) => w.nodeId === selected && w.status === 'open',
   );
 
-  if (error && !run) return <p className="text-sm text-[#d05353]">{error}</p>;
+  if (error && !run)
+    return <p className="text-sm text-[color:var(--danger)]">{error}</p>;
   if (!run || !definition)
     return <p className="text-sm text-[color:var(--muted)]">Loading…</p>;
 
+  const pill = PILL[run.status] ?? PILL.queued;
+  const done = steps.filter((s) => s.status === 'succeeded').length;
+  const total = Object.keys(definition.nodes ?? {}).length;
+  const runsHref = `/workflows/${encodeURIComponent(slug)}?tab=runs`;
+
   return (
-    <div className="max-w-5xl mx-auto flex flex-col gap-3">
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <Link
-            href={`/workflows/${encodeURIComponent(slug)}`}
-            className="text-sm hover:underline"
-          >
-            {slug}
-          </Link>
-          <h1 className="text-base font-medium">
-            <span className={statusColor(run.status)}>{run.status}</span>{' '}
-            <span className="text-xs text-[color:var(--muted)] font-normal">
-              {run.id}
-            </span>
-          </h1>
-          <p className="text-xs text-[color:var(--muted)]">
-            started {shortTime(run.startedAt)}
-            {run.finishedAt ? ` · finished ${shortTime(run.finishedAt)}` : ''}
-            {run.parentRunId
-              ? ` · forked from ${run.parentRunId} at ${run.forkedAtNode}`
-              : ''}
-          </p>
-          {run.error && (
-            <p className="text-xs text-[#d05353] mt-1">{run.error}</p>
-          )}
-        </div>
+    <div className="flex flex-col gap-3">
+      <PageHeader
+        crumbs={[
+          { label: 'Workflows', href: '/workflows' },
+          { label: slug, href: runsHref },
+        ]}
+        title={run.id}
+      />
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Link
+          href={runsHref}
+          className="flex items-center gap-1.5 rounded-md border border-[color:var(--border)] bg-[color:var(--card)] px-2.5 py-1 text-[12px] text-[color:var(--muted)] hover:text-[color:var(--fg)]"
+        >
+          ‹ All runs
+        </Link>
+        <span
+          className="flex items-center gap-2 rounded-full border px-3 py-1 text-[12px] font-medium"
+          style={{
+            color: pill.color,
+            background: pill.bg,
+            borderColor: pill.border,
+          }}
+        >
+          <span
+            className="h-1.5 w-1.5 rounded-full"
+            style={{ background: pill.color }}
+          />
+          {pill.label}
+        </span>
+        <span className="font-mono text-[11.5px] text-[color:var(--muted)]">
+          started {shortTime(run.startedAt)} · {done} of {total} steps
+          {run.finishedAt ? ` · finished ${shortTime(run.finishedAt)}` : ''}
+          {run.parentRunId
+            ? ` · forked from ${run.parentRunId} at ${run.forkedAtNode}`
+            : ''}
+        </span>
+        <span className="grow" />
         {(run.status === 'running' || run.status === 'waiting') && (
           <button
+            type="button"
             onClick={async () => {
               await api.cancelRun(runId);
               load();
             }}
-            className="text-xs px-2 py-1 rounded-md border border-[color:var(--border)] hover:bg-[color:var(--card)]"
+            className="rounded-md border border-[color:var(--border)] px-2.5 py-1 text-[12px] text-[color:var(--muted)] hover:text-[color:var(--fg)]"
           >
-            Cancel
+            Cancel run
+          </button>
+        )}
+        {(run.status === 'succeeded' ||
+          run.status === 'failed' ||
+          run.status === 'cancelled') && (
+          <button
+            type="button"
+            onClick={async () => {
+              const res = await api.runWorkflow(slug);
+              if (res.runId)
+                window.location.href = `/workflows/${encodeURIComponent(
+                  slug,
+                )}/runs/${res.runId}`;
+            }}
+            className="rounded-md border border-[color:var(--border)] px-2.5 py-1 text-[12px] text-[color:var(--muted)] hover:text-[color:var(--fg)]"
+          >
+            Run it again
           </button>
         )}
       </div>
 
-      <div className="grid gap-3 md:grid-cols-[1fr_320px]">
-        <WorkflowGraph
+      {run.error && (
+        <p className="rounded-md border border-[color:var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-[11.5px] text-[color:var(--danger)]">
+          {run.error}
+        </p>
+      )}
+
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <WorkflowCanvas
           definition={definition}
           statuses={statuses}
+          durations={durations}
           selected={selected}
           onSelect={setSelected}
-          height={480}
+          height="min(62vh, 560px)"
         />
 
-        <aside className="flex flex-col gap-3 min-w-0">
+        <aside className="flex min-w-0 flex-col gap-3">
           {selected ? (
-            <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--card)] p-3 flex flex-col gap-2">
-              <div>
-                <div className="text-sm font-medium">{selected}</div>
-                <div className="text-xs text-[color:var(--muted)]">
+            <div className="overflow-hidden rounded-lg border border-[color:var(--border)] bg-[color:var(--card)]">
+              <div className="border-b border-[color:var(--border)] px-3.5 py-3">
+                <div className="font-mono text-[13px]">{selected}</div>
+                <div className="mt-0.5 text-[11px] text-[color:var(--muted)]">
                   {definition.nodes[selected]?.type}
                   {selectedStep
                     ? ` · ${selectedStep.status}${
                         selectedStep.port ? ` → ${selectedStep.port}` : ''
-                      } · attempt ${selectedStep.attempt}`
-                    : ' · not run'}
+                      } · attempt ${selectedStep.attempt}${
+                        took(selectedStep) ? ` · ${took(selectedStep)}` : ''
+                      }`
+                    : ' · not started'}
                 </div>
               </div>
 
-              {selectedStep?.error && (
-                <pre className="text-xs whitespace-pre-wrap text-[#d05353]">
-                  {selectedStep.error}
-                </pre>
-              )}
-
-              {selectedStep && selectedStep.output !== null && (
-                <pre className="text-xs whitespace-pre-wrap break-all max-h-56 overflow-y-auto">
-                  {JSON.stringify(selectedStep.output, null, 2)}
-                </pre>
-              )}
-
-              {selectedStep?.agentSessionId && (
-                <Link
-                  href={`/admin/transcripts?session=${selectedStep.agentSessionId}`}
-                  className="text-xs underline text-[color:var(--muted)]"
-                >
-                  Agent transcript
-                </Link>
-              )}
-
               {selectedWait && (
-                <WaitControls wait={selectedWait} onDone={load} />
+                <div className="border-b border-[color:var(--border)] bg-[var(--warn-bg)] px-3.5 py-3">
+                  <div className="mb-2 text-[10.5px] uppercase tracking-wider text-[color:var(--warn)]">
+                    Waiting on you
+                  </div>
+                  <WaitControls wait={selectedWait} onDone={load} />
+                </div>
               )}
 
-              {selectedStep && (
-                <button
-                  onClick={async () => {
-                    const res = await api.retryRun(runId, selected);
-                    window.location.href = `/workflows/${encodeURIComponent(
-                      slug,
-                    )}/runs/${res.runId}`;
-                  }}
-                  className="self-start text-xs px-2 py-1 rounded-md border border-[color:var(--border)] hover:bg-[color:var(--bg)]"
-                >
-                  Retry from here
-                </button>
-              )}
+              <div className="px-3.5 py-3">
+                <div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-[color:var(--muted)]">
+                  Output
+                </div>
+                {selectedStep?.error ? (
+                  <pre className="max-h-52 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-[color:var(--danger)]">
+                    {selectedStep.error}
+                  </pre>
+                ) : (
+                  <pre className="max-h-52 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-[color:var(--muted)]">
+                    {selectedStep
+                      ? JSON.stringify(selectedStep.output, null, 2)
+                      : '—'}
+                  </pre>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-2 px-3.5 pb-3.5">
+                {selectedStep && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await api.retryRun(runId, selected);
+                      window.location.href = `/workflows/${encodeURIComponent(
+                        slug,
+                      )}/runs/${res.runId}`;
+                    }}
+                    className="rounded-md border border-[color:var(--border)] px-2.5 py-1 text-[11.5px] text-[color:var(--muted)] hover:text-[color:var(--fg)]"
+                  >
+                    Retry from here
+                  </button>
+                )}
+                {selectedStep?.agentSessionId && (
+                  <Link
+                    href={`/admin/transcripts?session=${selectedStep.agentSessionId}`}
+                    className="rounded-md border border-[color:var(--border)] px-2.5 py-1 text-[11.5px] text-[color:var(--muted)] hover:text-[color:var(--fg)]"
+                  >
+                    Agent transcript
+                  </Link>
+                )}
+              </div>
             </div>
           ) : (
             <p className="text-sm text-[color:var(--muted)]">
-              Select a node to see its input, output and log.
+              Select a node to see its output and log.
             </p>
           )}
 
-          <div className="rounded-lg border border-[color:var(--border)] p-3">
-            <div className="text-sm mb-2">Timeline</div>
-            <ol className="flex flex-col gap-1">
+          <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--card)] px-3.5 py-3">
+            <div className="mb-2 text-[10.5px] uppercase tracking-wider text-[color:var(--muted)]">
+              Timeline
+            </div>
+            <ol className="flex flex-col gap-1.5">
               {timeline.map((t) => (
-                <li key={t.id} className="text-xs text-[color:var(--muted)]">
-                  {t.ts.slice(11, 19)} · {t.kind}
-                  {t.node_id ? ` · ${t.node_id}` : ''}
+                <li key={t.id} className="flex items-baseline gap-2.5">
+                  <span className="shrink-0 font-mono text-[10.5px] text-[color:var(--muted)]">
+                    {t.ts.slice(11, 19)}
+                  </span>
+                  <span
+                    className="font-mono text-[11px]"
+                    style={{
+                      color: t.kind.includes('failed')
+                        ? 'var(--danger)'
+                        : t.kind.includes('wait')
+                          ? 'var(--warn)'
+                          : 'var(--ok)',
+                    }}
+                  >
+                    {t.kind}
+                  </span>
+                  <span className="truncate font-mono text-[11px] text-[color:var(--muted)]">
+                    {t.node_id ?? ''}
+                  </span>
                 </li>
               ))}
             </ol>
           </div>
         </aside>
       </div>
-    </div>
-  );
-}
-
-export function WaitControls({
-  wait,
-  onDone,
-}: {
-  wait: WorkflowWait;
-  onDone: () => void;
-}) {
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const respond = async (response: unknown) => {
-    setBusy(true);
-    try {
-      await api.respondToWait(wait.id, response);
-      onDone();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="flex flex-col gap-2 border-t border-[color:var(--border)] pt-2">
-      {wait.prompt && <p className="text-sm">{wait.prompt}</p>}
-      {wait.kind === 'human' && wait.options?.length ? (
-        <div className="flex gap-1 flex-wrap">
-          {wait.options.map((o) => (
-            <button
-              key={o}
-              disabled={busy}
-              onClick={() => respond({ choice: o })}
-              className="text-xs px-2 py-1 rounded-md border border-[color:var(--border)] hover:bg-[color:var(--bg)]"
-            >
-              {o}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {!wait.options?.length && (
-        <>
-          <div className="flex gap-1">
-            <button
-              disabled={busy}
-              onClick={() => respond({ approved: true })}
-              className="text-xs px-2 py-1 rounded-md border border-[#3fa06b] text-[#3fa06b] hover:bg-[color:var(--bg)]"
-            >
-              Approve
-            </button>
-            <button
-              disabled={busy}
-              onClick={() => respond({ approved: false })}
-              className="text-xs px-2 py-1 rounded-md border border-[#d05353] text-[#d05353] hover:bg-[color:var(--bg)]"
-            >
-              Reject
-            </button>
-          </div>
-          <div className="flex gap-1">
-            <input
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Or reply with text"
-              className="flex-1 text-xs rounded-md border border-[color:var(--border)] bg-[color:var(--bg)] px-2 py-1"
-            />
-            <button
-              disabled={busy || !text.trim()}
-              onClick={() => respond({ text })}
-              className="text-xs px-2 py-1 rounded-md border border-[color:var(--border)] disabled:opacity-50"
-            >
-              Send
-            </button>
-          </div>
-        </>
-      )}
-      {wait.expiresAt && (
-        <p className="text-xs text-[color:var(--muted)]">
-          expires {shortTime(wait.expiresAt)}
-        </p>
-      )}
     </div>
   );
 }

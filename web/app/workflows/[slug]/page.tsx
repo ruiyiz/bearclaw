@@ -1,3 +1,5 @@
+import { Suspense } from 'react';
+
 import { WorkflowDetail } from './workflow-detail';
 
 export default async function WorkflowPage({
@@ -6,5 +8,11 @@ export default async function WorkflowPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  return <WorkflowDetail slug={decodeURIComponent(slug)} />;
+  // The detail view reads ?tab= to open on a given tab, which needs a
+  // boundary for the prerender.
+  return (
+    <Suspense fallback={null}>
+      <WorkflowDetail slug={decodeURIComponent(slug)} />
+    </Suspense>
+  );
 }
