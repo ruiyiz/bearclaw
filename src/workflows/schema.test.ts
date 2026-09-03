@@ -280,3 +280,26 @@ test('reading a node that does not exist at all is caught', () => {
     );
   }
 });
+
+test('tags are lower-cased and de-duplicated', () => {
+  const def = parseDefinition({
+    name: 'Tagged',
+    slug: 'tagged',
+    owner: 'main',
+    tags: ['Email', ' email ', 'Digest'],
+    nodes: { a: { type: 'shell', cmd: 'true' } },
+    edges: [],
+  });
+  assert.deepEqual(def.tags, ['email', 'digest']);
+});
+
+test('a workflow with no tags gets an empty list', () => {
+  const def = parseDefinition({
+    name: 'Bare',
+    slug: 'bare',
+    owner: 'main',
+    nodes: { a: { type: 'shell', cmd: 'true' } },
+    edges: [],
+  });
+  assert.deepEqual(def.tags, []);
+});

@@ -13,6 +13,7 @@ export const REMINDER: WorkflowDefinition = {
   slug: 'reminder',
   owner: 'main',
   description: 'Delivers a one-off reminder to a chat target.',
+  tags: ['reminders'],
   inputs: {
     type: 'object',
     required: ['text'],

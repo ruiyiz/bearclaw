@@ -1013,6 +1013,7 @@ function workflowSummary(row: ReturnType<typeof listWorkflowRows>[number]) {
     owner: row.owner,
     enabled: row.enabled,
     description: row.definition.description ?? null,
+    tags: row.definition.tags ?? [],
     nodeCount: Object.keys(row.definition.nodes ?? {}).length,
     lastStatus: row.last_status,
     lastRunId: row.last_run_id,

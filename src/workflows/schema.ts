@@ -213,6 +213,20 @@ export const definitionSchema = z.object({
   slug: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
   owner: z.string(),
   description: z.string().optional(),
+  // Free-form labels for grouping a growing shelf of workflows. Lower-cased
+  // on the way in so "Email" and "email" are the same tag.
+  tags: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(32)
+        .transform((s) => s.toLowerCase()),
+    )
+    .max(12)
+    .default([])
+    .transform((list) => [...new Set(list)]),
   inputs: z
     .object({
       type: z.literal('object').default('object'),

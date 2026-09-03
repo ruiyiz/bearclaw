@@ -3,6 +3,7 @@
   "name": "Feed triage",
   "slug": "feed-triage",
   "owner": "main",
+  "tags": ["digest", "email"],
   "description": "Nightly RSS digest by email. Deterministic everywhere except the summaries: the send guard is an edge, marking items read is structurally after a confirmed send, and the watchdog is the on_missed policy.",
   "inputs": {
     "type": "object",

@@ -56,19 +56,27 @@ export function createWorkflowTools(ctx: WorkflowToolContext) {
   return [
     tool(
       'workflow_list',
-      `List workflows with their triggers, next run, last status and open human waits.
+      `List workflows with their tags, triggers, next run, last status and open human waits.
 A workflow is a small flowchart of typed nodes stored at ~/.bearclaw/workflows/<slug>.json.`,
       {
         slug: z
           .string()
           .optional()
           .describe('Limit the listing to one workflow'),
+        tag: z
+          .string()
+          .optional()
+          .describe('Limit the listing to workflows carrying this tag'),
       },
       async (args) => {
+        const tag = args.tag?.trim().toLowerCase();
         const rows = listWorkflowRows().filter(
-          (w) => !args.slug || w.slug === args.slug,
+          (w) =>
+            (!args.slug || w.slug === args.slug) &&
+            (!tag || (w.definition.tags ?? []).includes(tag)),
         );
-        if (!rows.length) return ok('No workflows.');
+        if (!rows.length)
+          return ok(tag ? `No workflows tagged "${tag}".` : 'No workflows.');
         const waits = listOpenWaits('human');
         const lines = rows.map((w) => {
           const triggers = listTriggers(w.slug)
@@ -82,8 +90,10 @@ A workflow is a small flowchart of typed nodes stored at ~/.bearclaw/workflows/<
           const open = waits.filter(
             (x) => getRun(x.run_id)?.slug === w.slug,
           ).length;
+          const tags = w.definition.tags ?? [];
           return [
             `${w.slug} — ${w.name} [owner ${w.owner}${w.enabled ? '' : ', disabled'}]`,
+            `  tags: ${tags.length ? tags.join(', ') : 'none'}`,
             `  nodes: ${Object.keys(w.definition.nodes ?? {}).join(', ')}`,
             `  triggers: ${triggers || 'none'}`,
             `  last: ${w.last_status ?? 'never run'}${open ? ` · ${open} waiting on a human` : ''}`,
@@ -97,7 +107,7 @@ A workflow is a small flowchart of typed nodes stored at ~/.bearclaw/workflows/<
       'workflow_upsert',
       `Create or replace a workflow definition. Pass the full JSON definition.
 
-Shape: { name, slug, owner, inputs?, triggers?, policies?, nodes, edges }
+Shape: { name, slug, owner, tags?, inputs?, triggers?, policies?, nodes, edges }
 Node types: agent, shell, http, template, transform, condition, switch, send, human, wait_event, emit, delay.
 Edges leave a named port: success/error by default, true/false on condition, the case labels on switch,
 approved/rejected/submitted/timeout on human, received/timeout on wait_event.
