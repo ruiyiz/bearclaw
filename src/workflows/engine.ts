@@ -750,7 +750,8 @@ function openWait(
   attempt: number,
   spec: WaitSpec,
 ): string {
-  const id = newId('wait');
+  // The human executor mints its own so the prompt can name it.
+  const id = spec.id ?? newId('wait');
   insertWait({
     id,
     run_id: run.id,

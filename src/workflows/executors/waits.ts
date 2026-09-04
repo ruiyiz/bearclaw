@@ -1,3 +1,4 @@
+import { newId } from '../db.js';
 import { parseDuration, render, renderDeep } from '../expr.js';
 import { errText, fail, type Executor } from '../runtime.js';
 
@@ -8,13 +9,20 @@ export const humanExecutor: Executor = async (ctx) => {
     const resumeAt = new Date(
       ctx.deps.now().getTime() + parseDuration(node.expires),
     ).toISOString();
+    // The id is minted here rather than at insert time so `{{wait.id}}` can go
+    // into the prompt. A workflow that writes its own message (notify: false)
+    // can then carry its own return address: one run may have several
+    // questions open at once, so the run id alone would not say which.
+    const id = newId('wait');
+    const scope = { ...ctx.scope, wait: { id } };
     return {
       kind: 'wait',
       wait: {
+        id,
         kind: 'human',
-        prompt: render(node.prompt, ctx.scope),
-        options: node.options?.map((o) => render(o, ctx.scope)) ?? null,
-        targets: node.to?.map((t) => render(t, ctx.scope)) ?? null,
+        prompt: render(node.prompt, scope),
+        options: node.options?.map((o) => render(o, scope)) ?? null,
+        targets: node.to?.map((t) => render(t, scope)) ?? null,
         fields: node.fields ?? null,
         resume_at: resumeAt,
         on_timeout: node.on_timeout ?? null,

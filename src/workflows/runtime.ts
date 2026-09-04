@@ -89,6 +89,8 @@ export interface EngineDeps {
 }
 
 export interface WaitSpec {
+  /** Minted by the executor when the wait's own id has to be renderable. */
+  id?: string;
   kind: WaitKind;
   prompt?: string | null;
   options?: string[] | null;

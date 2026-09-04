@@ -84,6 +84,61 @@ test('yes and no resolve an approval, anything else does not', async () => {
   assert.equal(matchReply(waits, 'save 1 4, summarize 7'), null);
 });
 
+test('a human prompt can name its own wait, and the reply routes by it', async () => {
+  // notify:false means the engine sends nothing, so the workflow's own message
+  // is the only thing the user sees. {{wait.id}} lets it carry a return
+  // address — and a run can have two questions open at once, so the run id
+  // would not be enough to tell them apart.
+  const definition = register({
+    slug: 'self-identifying',
+    nodes: {
+      ask_a: {
+        type: 'human',
+        kind: 'approve',
+        notify: false,
+        prompt: 'Branch A? Reply quoting {{wait.id}}',
+      },
+      ask_b: {
+        type: 'human',
+        kind: 'approve',
+        notify: false,
+        prompt: 'Branch B? Reply quoting {{wait.id}}',
+      },
+      done_a: { type: 'transform', expr: '"a"' },
+      done_b: { type: 'transform', expr: '"b"' },
+    },
+    edges: [
+      { from: 'ask_a', port: 'approved', to: 'done_a' },
+      { from: 'ask_b', port: 'approved', to: 'done_b' },
+    ],
+  });
+  const { runId } = await startRun({ slug: 'self-identifying', definition });
+
+  // Both branches park in the same pass, under one run id.
+  const waits = listOpenWaits('human').filter((w) => w.run_id === runId);
+  assert.equal(waits.length, 2);
+  assert.equal(new Set(waits.map((w) => w.run_id)).size, 1);
+
+  // Each prompt names the wait it belongs to, not some other one.
+  for (const wait of waits)
+    assert.match(wait.prompt ?? '', new RegExp(wait.id));
+
+  // Naming that id resolves exactly that branch, never the other one.
+  const b = waits.find((w) => w.node_id === 'ask_b')!;
+  const match = matchReply(waits, `yes ${b.id}`);
+  assert.equal(match?.wait.id, b.id);
+  assert.deepEqual(match?.response, { approved: true });
+
+  // A quoted email reply routes to the right wait but does not auto-resolve:
+  // the quoted digest is still in the body, so it is not an exact answer and
+  // goes to the agent, which now has an unambiguous id to hand to
+  // workflow_respond.
+  assert.equal(
+    matchReply(waits, `yes\n\n> Branch B? Reply quoting ${b.id}`),
+    null,
+  );
+});
+
 test('a bare answer is refused while more than one question is open', async () => {
   // Two concurrent digests, each parked on its own question. "yes" belongs to
   // neither in particular, so it goes to the agent instead of the older one.

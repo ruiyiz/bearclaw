@@ -9,6 +9,8 @@ export interface EvalScope {
   error?: { node: string; message: string } | null;
   item?: unknown;
   index?: number;
+  /** Only while a human node renders its own prompt. */
+  wait?: { id: string };
 }
 
 export class ExpressionError extends Error {
@@ -64,6 +66,7 @@ function contextFor(scope: EvalScope): vm.Context {
     error: scope.error ?? null,
     item: scope.item,
     index: scope.index,
+    wait: scope.wait,
   };
   const context = vm.createContext(sandbox, {
     codeGeneration: { strings: false, wasm: false },
