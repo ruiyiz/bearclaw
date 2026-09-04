@@ -8,6 +8,7 @@ import {
   deleteTriggersForSlug,
   deleteWorkflowRow,
   getWorkflowRow,
+  listTriggerRows,
   listWorkflowRows,
   upsertWorkflowIndex,
 } from './db.js';
@@ -29,6 +30,8 @@ function hashOf(text: string): string {
 export interface LoadReport {
   loaded: string[];
   removed: string[];
+  /** Slugs whose leftover trigger rows were swept; see the sweep below. */
+  orphanTriggers: string[];
   errors: { file: string; issues: string[] }[];
 }
 
@@ -36,7 +39,12 @@ export interface LoadReport {
 // ordinary file tools, they diff in git, and the index table is a cache.
 export function syncWorkflowFiles(): LoadReport {
   fs.mkdirSync(WORKFLOWS_DIR, { recursive: true });
-  const report: LoadReport = { loaded: [], removed: [], errors: [] };
+  const report: LoadReport = {
+    loaded: [],
+    removed: [],
+    orphanTriggers: [],
+    errors: [],
+  };
   const seen = new Set<string>();
 
   for (const file of fs.readdirSync(WORKFLOWS_DIR)) {
@@ -86,8 +94,26 @@ export function syncWorkflowFiles(): LoadReport {
     report.removed.push(row.slug);
   }
 
+  // A trigger whose workflow row went first is unreachable: the API refuses to
+  // delete a file-sourced row ("edit the file instead") and there is no file
+  // left to edit. Sweep by slug so the pair can never drift apart.
+  const orphans = new Set(
+    listTriggerRows()
+      .map((t) => t.slug)
+      .filter((slug) => !seen.has(slug)),
+  );
+  for (const slug of orphans) {
+    const removed = deleteTriggersForSlug(slug);
+    if (removed) report.orphanTriggers.push(slug);
+  }
+
   if (report.errors.length)
     logger.warn({ errors: report.errors }, 'workflow: invalid definitions');
+  if (report.orphanTriggers.length)
+    logger.warn(
+      { slugs: report.orphanTriggers },
+      'workflow: swept triggers with no workflow',
+    );
   logger.info(
     { loaded: report.loaded.length, removed: report.removed.length },
     'workflow: definitions synced',

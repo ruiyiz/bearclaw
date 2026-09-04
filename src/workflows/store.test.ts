@@ -12,7 +12,8 @@ process.env.NODE_ENV = 'test';
 
 const { initDatabase } = await import('../db.js');
 initDatabase(':memory:');
-const { getWorkflowRow, listWorkflowRows } = await import('./db.js');
+const { getWorkflowRow, listTriggerRows, listWorkflowRows, upsertTrigger } =
+  await import('./db.js');
 const {
   deleteWorkflow,
   syncWorkflowFiles,
@@ -91,6 +92,32 @@ test('a file that disappears drops out of the index', () => {
     listWorkflowRows().map((r) => r.slug),
     ['checkin'],
   );
+});
+
+test('a trigger left behind by a vanished workflow is swept', () => {
+  // The pair can drift: the workflow row goes first, and the leftover trigger
+  // is then unreachable — the API refuses to delete a file-sourced row and
+  // points at a file that no longer exists.
+  upsertTrigger({
+    id: 'ghost:schedule',
+    slug: 'ghost',
+    type: 'cron',
+    source: 'file',
+    config: { cron: '0 7 * * *' },
+    args: {},
+    enabled: true,
+    next_run_at: null,
+    created_by: null,
+  });
+  assert.equal(listTriggerRows('ghost').length, 1);
+
+  const report = syncWorkflowFiles();
+  assert.deepEqual(report.orphanTriggers, ['ghost']);
+  assert.equal(listTriggerRows('ghost').length, 0);
+
+  // A workflow that is still on disk keeps its triggers.
+  assert.ok(getWorkflowRow('checkin'));
+  assert.deepEqual(syncWorkflowFiles().orphanTriggers, []);
 });
 
 test('deleteWorkflow removes both the file and the row', () => {
