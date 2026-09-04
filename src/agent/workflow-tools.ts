@@ -12,6 +12,7 @@ import {
   setWorkflowEnabled,
 } from '../workflows/db.js';
 import { cancelRun, resolveWait } from '../workflows/engine.js';
+import { advise, formatIssue } from '../workflows/checks.js';
 import { WorkflowValidationError } from '../workflows/schema.js';
 import { deleteWorkflow, writeWorkflowFile } from '../workflows/store.js';
 import {
@@ -128,8 +129,20 @@ Templates use {{ }} over { inputs, nodes, trigger, run, env }.`,
             ...(args.definition as Record<string, unknown>),
             owner,
           } as never);
+          // Saved, but say what is questionable about it: the author is
+          // usually an agent that can fix it in the same turn.
+          const notes = advise(def);
           return ok(
-            `Workflow "${def.slug}" saved with ${Object.keys(def.nodes).length} nodes and ${def.triggers.length} declared triggers.`,
+            [
+              `Workflow "${def.slug}" saved with ${Object.keys(def.nodes).length} nodes and ${def.triggers.length} declared triggers.`,
+              notes.length
+                ? `\n${notes.length} thing${notes.length === 1 ? '' : 's'} to look at:\n${notes
+                    .map((i) => `- ${formatIssue(i)}`)
+                    .join('\n')}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join('\n'),
           );
         } catch (e) {
           return err(describe(e));

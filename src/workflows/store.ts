@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { WORKFLOWS_DIR } from '../config.js';
+import { advise, formatIssue } from './checks.js';
 import { logger } from '../logger.js';
 import {
   deleteTriggersForSlug,
@@ -32,6 +33,8 @@ export interface LoadReport {
   removed: string[];
   /** Slugs whose leftover trigger rows were swept; see the sweep below. */
   orphanTriggers: string[];
+  /** Advisory issues per slug: saved, but worth someone's attention. */
+  warnings: { slug: string; issues: string[] }[];
   errors: { file: string; issues: string[] }[];
 }
 
@@ -43,6 +46,7 @@ export function syncWorkflowFiles(): LoadReport {
     loaded: [],
     removed: [],
     orphanTriggers: [],
+    warnings: [],
     errors: [],
   };
   const seen = new Set<string>();
@@ -78,6 +82,12 @@ export function syncWorkflowFiles(): LoadReport {
       syncFileTriggers(def);
       seen.add(def.slug);
       report.loaded.push(def.slug);
+      const notes = advise(def);
+      if (notes.length)
+        report.warnings.push({
+          slug: def.slug,
+          issues: notes.map(formatIssue),
+        });
     } catch (err) {
       const issues =
         err instanceof WorkflowValidationError
@@ -109,6 +119,11 @@ export function syncWorkflowFiles(): LoadReport {
 
   if (report.errors.length)
     logger.warn({ errors: report.errors }, 'workflow: invalid definitions');
+  if (report.warnings.length)
+    logger.warn(
+      { warnings: report.warnings },
+      'workflow: definitions worth a look',
+    );
   if (report.orphanTriggers.length)
     logger.warn(
       { slugs: report.orphanTriggers },
