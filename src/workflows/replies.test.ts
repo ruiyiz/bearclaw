@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
 
 import { initDatabase } from '../db.js';
-import { listOpenWaits, upsertWorkflowIndex } from './db.js';
+import { cancelWaitsForRun, listOpenWaits, upsertWorkflowIndex } from './db.js';
 import { setEngineDeps, startRun } from './engine.js';
 import { parseDefinition, type WorkflowDefinition } from './schema.js';
 import { makeFakeDeps, type FakeDeps } from './testing.js';
@@ -21,6 +21,9 @@ let fake: FakeDeps;
 beforeEach(() => {
   fake = makeFakeDeps();
   setEngineDeps(fake);
+  // One in-memory database serves the whole file, so a wait left open by an
+  // earlier test would count towards the next one's ambiguity check.
+  for (const wait of listOpenWaits()) cancelWaitsForRun(wait.run_id);
 });
 
 function register(partial: Record<string, unknown>): WorkflowDefinition {
@@ -79,6 +82,24 @@ test('yes and no resolve an approval, anything else does not', async () => {
   assert.deepEqual(matchReply(waits, 'yes')?.response, { approved: true });
   assert.deepEqual(matchReply(waits, 'Reject')?.response, { approved: false });
   assert.equal(matchReply(waits, 'save 1 4, summarize 7'), null);
+});
+
+test('a bare answer is refused while more than one question is open', async () => {
+  // Two concurrent digests, each parked on its own question. "yes" belongs to
+  // neither in particular, so it goes to the agent instead of the older one.
+  const first = await askApproval('two-open-a');
+  const second = await askApproval('two-open-b');
+  const both = [...first, ...second];
+  assert.equal(both.length, 2);
+  assert.equal(matchReply(both, 'yes'), null);
+
+  // Naming a wait still resolves that one, and only that one.
+  const named = matchReply(both, `yes ${second[0].id}`);
+  assert.equal(named?.wait.id, second[0].id);
+  assert.deepEqual(named?.response, { approved: true });
+
+  // One question open is unambiguous, so the bare answer still works.
+  assert.deepEqual(matchReply(first, 'yes')?.response, { approved: true });
 });
 
 test('a choice wait matches its option labels exactly', async () => {

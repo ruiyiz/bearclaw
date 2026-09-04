@@ -25,7 +25,15 @@ export function matchReply(waits: WaitRow[], text: string): ReplyMatch | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
+  // A wait id in the reply picks its own run: the notification ends with
+  // `(wait_…)`, and a quoted email reply carries it back.
   const byId = waits.find((w) => trimmed.includes(w.id));
+  // Without one, a bare "yes" is only unambiguous when a single question is
+  // open. With several — concurrent runs under `allow`, or two workflows
+  // asking at once — guessing answers somebody else's question, so hand it to
+  // the agent, which sees every wait id and can ask which one they mean.
+  if (!byId && waits.length > 1) return null;
+
   const target = byId ?? waits[0];
   if (!target) return null;
 
