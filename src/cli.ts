@@ -6,6 +6,24 @@ import { bootstrap } from './store/bootstrap.js';
 const USAGE = `bearclaw <command> [options]
 
 Commands:
+  setup [--yes] [--generate] [--skip-build] [--skip-web] [--skip-services]
+      Install or repair this machine: fill the config database, seed the
+      starter context, render the launchd agents, build, and start the
+      services. Safe to rerun. --generate prints a random web password
+      instead of asking for one.
+
+  doctor [--json] [--skip-services]
+      Check the install and print one line per check. Exits 1 on a failure.
+
+  export [file] [--with-conversations] [--with-messages]
+      Write a bundle holding the config database, the channel credentials
+      and a manifest. The bundle contains secrets in the clear.
+
+  import <bundle> [--force] [--skip-setup] [--skip-build] [--skip-web]
+                  [--skip-services]
+      Restore a bundle into BEARCLAW_HOME, then run setup for the parts
+      that belong to this machine. --force moves an existing database aside.
+
   migrate-fs [--dry-run] [--force] [--keep-files]
       Import ~/.bearclaw's files (.env, context, agents, skills, workflows,
       config) into the config database, then move the originals aside to
@@ -35,11 +53,97 @@ Commands:
 
 Environment:
   BEARCLAW_HOME                 Install root (default ~/.bearclaw)
+  BEARCLAW_LAUNCH_AGENTS_DIR    Where setup writes plists
+                                (default ~/Library/LaunchAgents)
 `;
 
 function fail(message: string): number {
   console.error(message);
   return 1;
+}
+
+async function cmdSetup(argv: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      yes: { type: 'boolean', default: false },
+      generate: { type: 'boolean', default: false },
+      'skip-web': { type: 'boolean', default: false },
+      'skip-services': { type: 'boolean', default: false },
+      'skip-build': { type: 'boolean', default: false },
+      'launch-agents-dir': { type: 'string' },
+    },
+    allowPositionals: false,
+  });
+  const { runSetup } = await import('./cli/setup.js');
+  return runSetup({
+    yes: values.yes,
+    generate: values.generate,
+    skipWeb: values['skip-web'],
+    skipServices: values['skip-services'],
+    skipBuild: values['skip-build'],
+    launchAgentsDir: values['launch-agents-dir'],
+  });
+}
+
+async function cmdDoctor(argv: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      json: { type: 'boolean', default: false },
+      'skip-services': { type: 'boolean', default: false },
+    },
+    allowPositionals: false,
+  });
+  const { runDoctor } = await import('./cli/doctor.js');
+  return runDoctor({
+    json: values.json,
+    skipServices: values['skip-services'],
+  });
+}
+
+async function cmdExport(argv: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: {
+      'with-conversations': { type: 'boolean', default: false },
+      'with-messages': { type: 'boolean', default: false },
+    },
+    allowPositionals: true,
+  });
+  // No bootstrap(): export snapshots the database on disk, it never creates one.
+  const { runExport } = await import('./cli/export.js');
+  return runExport({
+    out: positionals[0],
+    withConversations: values['with-conversations'],
+    withMessages: values['with-messages'],
+  });
+}
+
+async function cmdImport(argv: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: {
+      force: { type: 'boolean', default: false },
+      'skip-setup': { type: 'boolean', default: false },
+      'skip-web': { type: 'boolean', default: false },
+      'skip-services': { type: 'boolean', default: false },
+      'skip-build': { type: 'boolean', default: false },
+      'launch-agents-dir': { type: 'string' },
+    },
+    allowPositionals: true,
+  });
+  if (!positionals[0]) return fail('import <bundle.tgz>');
+  // Deliberately no bootstrap(): the database arrives with the bundle.
+  const { runImport } = await import('./cli/import.js');
+  return runImport(positionals[0], {
+    force: values.force,
+    skipSetup: values['skip-setup'],
+    skipWeb: values['skip-web'],
+    skipServices: values['skip-services'],
+    skipBuild: values['skip-build'],
+    launchAgentsDir: values['launch-agents-dir'],
+  });
 }
 
 async function cmdMigrateFs(argv: string[]): Promise<number> {
@@ -342,6 +446,15 @@ async function run(argv: string[]): Promise<number> {
     return command ? 0 : 1;
   }
   switch (command) {
+    case 'setup':
+      return cmdSetup(rest);
+    // No bootstrap(): doctor must report a missing database, not create one.
+    case 'doctor':
+      return cmdDoctor(rest);
+    case 'export':
+      return cmdExport(rest);
+    case 'import':
+      return cmdImport(rest);
     case 'migrate-fs':
       return cmdMigrateFs(rest);
     case 'config':

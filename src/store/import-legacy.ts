@@ -104,7 +104,7 @@ function isZeroByte(file: string): boolean {
   }
 }
 
-function detectLegacyPaths(home: string): string[] {
+export function detectLegacyPaths(home: string = BEARCLAW_HOME): string[] {
   const found: string[] = [];
   const always = [
     '.env',

@@ -9,10 +9,13 @@
   },
   "scripts": {
     "build": "tsc",
+    "postbuild": "chmod +x dist/cli.js",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "cli": "tsx src/cli.ts",
     "auth": "tsx src/cli.ts whatsapp-auth",
+    "setup": "tsx src/cli.ts setup",
+    "doctor": "tsx src/cli.ts doctor",
     "web:dev": "cd web && bun run dev",
     "web:build": "cd web && bun run build",
     "web:start": "cd web && bun run start",
