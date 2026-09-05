@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
+import { BearclawMark } from '@/components/bearclaw-mark';
 import { CommandPalette } from '@/components/command-palette';
 import { HEADER_ACTIONS_ID, HEADER_LEFT_ID } from '@/components/page-header';
 import { api } from '@/lib/api';
@@ -211,8 +212,7 @@ export function AppShell({
           href="/chat"
           className="flex items-center gap-2.5 px-4 py-4 text-[14px] font-semibold tracking-tight"
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="" width={24} height={24} />
+          <BearclawMark size={24} className="text-[color:var(--brand)]" />
           bearclaw
         </Link>
         {nav}
@@ -226,7 +226,10 @@ export function AppShell({
           />
           <aside className="fixed inset-y-0 left-0 z-40 flex w-[248px] flex-col border-r border-[color:var(--border)] bg-[color:var(--bg-2)] md:hidden">
             <div className="flex items-center justify-between px-4 py-4">
-              <span className="text-[14px] font-semibold">bearclaw</span>
+              <span className="flex items-center gap-2.5 text-[14px] font-semibold">
+                <BearclawMark size={22} className="text-[color:var(--brand)]" />
+                bearclaw
+              </span>
               <button
                 type="button"
                 aria-label="Close menu"

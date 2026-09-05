@@ -63,8 +63,11 @@ export const metadata: Metadata = {
     title: 'BearClaw',
   },
   icons: {
-    icon: [{ url: '/logo.png', type: 'image/png' }],
-    shortcut: '/logo.png',
+    icon: [
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/icons/icon-32.png', sizes: '32x32', type: 'image/png' },
+    ],
+    shortcut: '/icons/icon-32.png',
     apple: '/icons/apple-touch-icon.png',
   },
 };

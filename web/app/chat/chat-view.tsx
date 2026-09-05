@@ -14,6 +14,7 @@ import {
   parseMediaTag,
   type BubbleData,
 } from '@/components/chat-bubble';
+import { BearclawMark } from '@/components/bearclaw-mark';
 import { SettingsModal } from '@/components/settings-modal';
 import { useConfirm } from '@/components/confirm-dialog';
 import { loadKeepFocusOnSend } from '@/lib/prefs';
@@ -1336,6 +1337,10 @@ export function ChatView() {
                   <div className="flex-1 flex flex-col items-stretch pt-[28dvh]">
                     <div className="px-3 md:px-6 lg:px-10 pb-4">
                       <div className="max-w-3xl mx-auto flex items-center justify-center gap-3 flex-wrap">
+                        <BearclawMark
+                          size={40}
+                          className="text-[color:var(--brand)]"
+                        />
                         <h1 className="text-3xl md:text-4xl font-serif text-[color:var(--fg)]">
                           {welcomeMessage}
                         </h1>

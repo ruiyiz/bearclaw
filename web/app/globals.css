@@ -59,6 +59,7 @@ body {
     --border: #23262b;
     --accent: #5fb3c9;
     --accent-soft: rgba(95, 179, 201, 0.16);
+    --brand: #8ab0d4;
     --on-accent: #08191e;
     --wire: #2f353c;
     --grid: #1b1e23;
@@ -93,6 +94,7 @@ body {
     --border: #e3e6ea;
     --accent: #17788f;
     --accent-soft: rgba(23, 120, 143, 0.14);
+    --brand: #5980a6;
     --on-accent: #ffffff;
     --wire: #c9ced4;
     --grid: #e6e9ec;
@@ -128,6 +130,7 @@ body {
   --border: #23262b;
   --accent: #5fb3c9;
   --accent-soft: rgba(95, 179, 201, 0.16);
+  --brand: #8ab0d4;
   --on-accent: #08191e;
   --wire: #2f353c;
   --grid: #1b1e23;
@@ -152,6 +155,7 @@ body {
   --border: #e3e6ea;
   --accent: #17788f;
   --accent-soft: rgba(23, 120, 143, 0.14);
+  --brand: #5980a6;
   --on-accent: #ffffff;
   --wire: #c9ced4;
   --grid: #e6e9ec;
