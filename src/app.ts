@@ -27,7 +27,7 @@ import {
 import { AgentSession } from './agent/session.js';
 import type { EffortLevel } from './agent/runner.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
-import { initBotPool, TelegramChannel } from './channels/telegram.js';
+import { startTelegramChannel, TelegramChannel } from './channels/telegram.js';
 import { IMessageChannel } from './channels/imessage.js';
 import { EmailChannel } from './channels/email.js';
 import {
@@ -1307,11 +1307,11 @@ export async function main(): Promise<void> {
       registeredAgents: () => registeredAgents,
       onChoice: (jid, data) => resolveFromCallback(jid, data),
     });
-    attachOutboundPersistence(telegram, () => registeredAgents);
-    channels.push(telegram);
-    await telegram.connect();
-    if (TELEGRAM_BOT_POOL.length > 0) {
-      await initBotPool(TELEGRAM_BOT_POOL);
+    // A wrong token must not stop the boot: the channel is only wired up once
+    // it is actually connected.
+    if (await startTelegramChannel(telegram, TELEGRAM_BOT_POOL)) {
+      attachOutboundPersistence(telegram, () => registeredAgents);
+      channels.push(telegram);
     }
   }
 

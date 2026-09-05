@@ -17,10 +17,19 @@ BearClaw gives you the same core functionality in a codebase you can understand 
 ```bash
 git clone https://github.com/gavrielc/bearclaw.git
 cd bearclaw
-claude
+npm install
+npm run setup
 ```
 
-Then run `/setup`. Claude Code handles everything: dependencies, authentication, service configuration.
+`npm run setup` asks for a Claude token, a model, an assistant name and a web
+password, writes them to the config database at `~/.bearclaw/bearclaw.db`, seeds
+the starter context, renders the launchd services, builds both apps and starts
+them. It is safe to rerun.
+
+Then open <http://127.0.0.1:3030>. Anything setup could not fill in is asked for
+by the first-run wizard at `/setup`, which also wires up your channels and lets
+you edit `USER.md`, `SOUL.md` and the main agent's `IDENTITY.md` before the
+first conversation.
 
 ## Philosophy
 
@@ -30,7 +39,7 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 
 **Customization = code changes.** No configuration sprawl. Want different behavior? Modify the code. The codebase is small enough that this is safe.
 
-**AI-native.** No installation wizard; Claude Code guides setup. No monitoring dashboard; ask Claude what's happening. No debugging tools; describe the problem, Claude fixes it.
+**AI-native.** Setup is one command and a browser page, not a manual. No monitoring dashboard; ask Claude what's happening. No debugging tools; describe the problem, Claude fixes it.
 
 **Skills over features.** Contributors shouldn't add features (e.g. support for Telegram) to the codebase. Instead, they contribute [claude code skills](https://code.claude.com/docs/en/skills) like `/add-telegram` that transform your fork. You end up with clean code that does exactly what you need.
 
@@ -108,10 +117,13 @@ Skills we'd love to see:
 - macOS
 - Node.js 20+
 - [Claude Code](https://claude.ai/download) (`npm install -g @anthropic-ai/claude-code`)
+- [bun](https://bun.sh), which builds and runs the web UI
 
 ## Service Management
 
-BearClaw runs as a launchd service (`~/Library/LaunchAgents/com.bearclaw.plist`).
+BearClaw runs as two launchd services: the main process
+(`~/Library/LaunchAgents/com.bearclaw.plist`) and the web UI
+(`com.bearclaw.web.plist`). `npm run setup` writes both.
 
 ```bash
 # Start
@@ -120,11 +132,32 @@ launchctl load ~/Library/LaunchAgents/com.bearclaw.plist
 # Stop
 launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist
 
-# Restart
+# Restart (also how a settings change takes effect)
 launchctl kickstart -k gui/$(id -u)/com.bearclaw
 
 # Check status
 launchctl list | grep bearclaw
+```
+
+Check the install, one line per check:
+
+```bash
+npm run doctor       # or `bearclaw doctor` after a build
+```
+
+Move an install to another Mac, or keep a backup:
+
+```bash
+bearclaw export                  # config database + channel credentials, secrets in the clear
+bearclaw import bundle.tgz       # restore, then run setup for the machine-local parts
+```
+
+Settings live in the config database. Read and write them from the CLI, or from
+Admin > Settings in the web UI:
+
+```bash
+npm run cli -- config list
+npm run cli -- config set TELEGRAM_BOT_TOKEN 123456:abc
 ```
 
 Logs:
@@ -132,7 +165,8 @@ Logs:
 ```bash
 tail -f logs/bearclaw.log        # Main log
 tail -f logs/bearclaw.error.log  # Errors
-cat ~/.bearclaw/agents/main/logs/agent-*.log | tail -50  # Agent logs
+tail -f logs/bearclaw.web.log    # Web UI
+cat ~/.bearclaw/var/agents/main/logs/agent-*.log | tail -50  # Agent logs
 ```
 
 Re-authenticate WhatsApp (if disconnected):
@@ -152,14 +186,16 @@ Single Node.js process. Agents execute via the Claude Agent SDK directly in the 
 
 Key files:
 
-- `src/index.ts` - Main app: channel connections, routing, IPC
+- `src/index.ts` - Entry: loads the config database into the environment, then `app.ts`
+- `src/app.ts` - Main app: channel connections, routing, IPC
+- `src/cli.ts` - The `bearclaw` command: setup, doctor, export, import, config
 - `src/agent/runner.ts` - Runs the Claude Agent SDK in-process
-- `src/agent/ipc-mcp.ts` - MCP tools for agent ↔ host communication (send*message, workflow*_, trigger\__, image_generate, …)
+- `src/agent/ipc-mcp.ts` - MCP tools for agent ↔ host communication (send*message, workflow*\_, trigger\_\_, context_write, image_generate, …)
 - `src/workflows/engine.ts` - Runs workflows: the decider, retries, waits, recovery
 - `src/workflows/triggers.ts` - Cron, one-shot, event and webhook triggers
 - `src/db.ts` - SQLite operations
-- `~/.bearclaw/agents/{name}/IDENTITY.md` - Per-agent identity
-- `~/.bearclaw/context/{AGENTS,SOUL,USER,MEMORY}.md` - Shared context
+- `~/.bearclaw/bearclaw.db` - Config database: settings, agents, context, skills, workflows, MCP servers
+- `~/.bearclaw/var/` - Runtime state: messages, channel credentials, logs, conversation archives
 
 ## FAQ
 
@@ -169,11 +205,11 @@ Because I use WhatsApp. Fork it and run a skill to change it. That's the whole p
 
 **Is this secure?**
 
-Agents run directly on the host, so they have access to the host filesystem. Each agent runs with `cwd` set to its own `~/.bearclaw/agents/{folder}/` directory, and the `settingSources: ['project']` option means it reads project settings from that folder. However, there is no OS-level isolation between agents — a determined prompt injection could access files outside the agent folder. For stronger isolation, you could run BearClaw in a container itself. See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
+Agents run directly on the host, so they have access to the host filesystem. Each agent runs with `cwd` set to its own `~/.bearclaw/var/agents/{folder}/` directory, and the `settingSources: ['project']` option means it reads project settings from that folder. However, there is no OS-level isolation between agents — a determined prompt injection could access files outside the agent folder. For stronger isolation, you could run BearClaw in a container itself. See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
 
-**Why no configuration files?**
+**Where does my configuration live?**
 
-We don't want configuration sprawl. Every user should customize it to so that the code matches exactly what they want rather than configuring a generic system. If you like having config files, tell Claude to add them.
+In one SQLite database, `~/.bearclaw/bearclaw.db`: settings and secrets, the agent registry, your context documents, skills, workflow definitions and MCP servers. There are no config files to hand-edit and no `.env`. Change things with `bearclaw config`, the web admin, or by editing the code. The codebase is small enough that behavior changes belong in code rather than in a growing settings surface.
 
 **How do I debug issues?**
 
@@ -181,7 +217,7 @@ Ask Claude Code. "Why isn't the scheduler running?" "What's in the recent logs?"
 
 **Why isn't the setup working for me?**
 
-I don't know. Run `claude`, then run `/debug`. If claude finds an issue that is likely affecting other users, open a PR to modify the setup SKILL.md.
+Run `npm run doctor` first: it checks the config database, the Claude token, the model, the password, the channel credentials, both launchd services and the two HTTP ports, and prints what failed. If that doesn't explain it, run `claude` and then `/debug`. If Claude finds an issue that is likely affecting other users, open a PR.
 
 **What changes will be accepted into the codebase?**
 

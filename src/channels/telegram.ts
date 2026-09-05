@@ -411,7 +411,12 @@ export class TelegramChannel implements Channel {
       logger.error({ err: err.message }, 'Telegram bot error');
     });
 
-    return new Promise<void>((resolve) => {
+    // start() only settles once polling stops, so onStart is what resolves a
+    // successful connect. A rejected start (a bad token answers getMe with
+    // HTTP 401) has to reject this promise too: left floating it would be an
+    // unhandled rejection that kills the process, and connect() would never
+    // return.
+    return new Promise<void>((resolve, reject) => {
       this.bot!.start({
         onStart: (botInfo) => {
           logger.info(
@@ -434,6 +439,9 @@ export class TelegramChannel implements Channel {
           });
           resolve();
         },
+      }).catch((err) => {
+        this.bot = null;
+        reject(err instanceof Error ? err : new Error(String(err)));
       });
     });
   }
@@ -707,6 +715,46 @@ export async function initBotPool(tokens: string[]): Promise<void> {
   if (poolApis.length > 0) {
     logger.info({ count: poolApis.length }, 'Telegram bot pool ready');
   }
+}
+
+// Just enough of a channel for the boot guard below to drive, so the guard can
+// be tested without a bot on the other end of the wire.
+export interface StartableChannel {
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+}
+
+// Telegram is optional; booting is not. A token pasted into the setup wizard
+// can be wrong, and grammY reports that as a rejected start (HTTP 401) — which
+// must not take the whole process down. Log the failure with the fix and tell
+// the caller to carry on without the channel.
+export async function startTelegramChannel(
+  channel: StartableChannel,
+  poolTokens: string[] = [],
+): Promise<boolean> {
+  try {
+    await channel.connect();
+  } catch (err) {
+    logger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      'Telegram channel failed to start, continuing without it — check TELEGRAM_BOT_TOKEN in Admin > Settings',
+    );
+    await channel.disconnect().catch(() => {});
+    return false;
+  }
+  if (poolTokens.length > 0) {
+    // initBotPool already swallows per-token failures; this is belt and braces
+    // so a surprise there cannot abort the boot either.
+    try {
+      await initBotPool(poolTokens);
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        'Telegram bot pool failed to start, continuing without it — check TELEGRAM_BOT_POOL in Admin > Settings',
+      );
+    }
+  }
+  return true;
 }
 
 async function sendPoolMessage(

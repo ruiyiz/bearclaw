@@ -5,6 +5,10 @@ description: Debug agent issues. Use when things aren't working, agent fails, au
 
 # BearClaw Agent Debugging
 
+> **Stale in parts.** This skill predates the config database (2026-09); prefer
+> `bearclaw doctor`, `bearclaw config`, and the web admin over any `.env` or
+> flat-file step described below.
+
 This guide covers debugging the in-process agent execution system. Agents run directly via the Codex Agent SDK `query()` function within the BearClaw Node.js process — there are no containers, VMs, or Docker involved.
 
 ## Architecture Overview
@@ -17,31 +21,31 @@ src/index.ts                     src/agent/runner.ts
     │ routes inbound messages         │ calls query() from
     │ (WhatsApp/Telegram/iMessage)    │ @anthropic-ai/Codex-agent-sdk
     │ to agent runner                 │
-    │                                ├── cwd: ~/.bearclaw/agents/{folder}/
+    │                                ├── cwd: ~/.bearclaw/var/agents/{folder}/
     │                                ├── resume: sessionId (per-agent)
     │                                ├── permissionMode: 'bypassPermissions'
     │                                ├── settingSources: ['project']
     │                                ├── mcpServers: { bearclaw: ipcMcp }
     │                                └── allowedTools: [Bash, Read, Write, ...]
     │
-    ├── ~/.bearclaw/agents/{folder}/         Agent working directory (cwd)
-    ├── ~/.bearclaw/data/ipc/{folder}/       IPC files (messages, tasks)
-    ├── ~/.bearclaw/context/                 Shared context (AGENTS, SOUL, USER, MEMORY)
+    ├── ~/.bearclaw/var/agents/{folder}/     Agent working directory (cwd)
+    ├── ~/.bearclaw/var/run/ipc/{folder}/    IPC files (messages, tasks)
+    ├── ~/.bearclaw/var/cache/context/       Context mirror (AGENTS, CONTEXT, SOUL, USER)
     ├── ~/.Codex/projects/{encodedCwd}/     Codex Agent SDK transcript files
-    └── .env                                 Auth tokens (process.env)
+    └── ~/.bearclaw/bearclaw.db              Settings + secrets (copied into process.env at boot)
 ```
 
-**Key point:** The agent runs in the same Node.js process as the host. Environment variables from `.env` are available directly via `process.env`. No volume mounts, no container runtimes, no user mapping.
+**Key point:** The agent runs in the same Node.js process as the host. Settings rows are copied into `process.env` at boot and are available directly there. No volume mounts, no container runtimes, no user mapping.
 
 ## Log Locations
 
-| Log                   | Location                                           | Content                                      |
-| --------------------- | -------------------------------------------------- | -------------------------------------------- |
-| **Main app logs**     | `logs/bearclaw.log`                                | Channel connections, routing, agent spawning |
-| **Main app errors**   | `logs/bearclaw.error.log`                          | Application errors                           |
-| **Agent run logs**    | `~/.bearclaw/agents/{folder}/logs/agent-*.log`     | Per-run: agent, duration, status, errors     |
-| **Agent transcripts** | `~/.Codex/projects/{encodedCwd}/{sessionId}.jsonl` | Codex Agent SDK conversation history         |
-| **Daily memory**      | `~/.bearclaw/agents/{folder}/memory/YYYY-MM-DD.md` | Agent's running daily log                    |
+| Log                   | Location                                                      | Content                                      |
+| --------------------- | ------------------------------------------------------------- | -------------------------------------------- |
+| **Main app logs**     | `logs/bearclaw.log`                                           | Channel connections, routing, agent spawning |
+| **Main app errors**   | `logs/bearclaw.error.log`                                     | Application errors                           |
+| **Agent run logs**    | `~/.bearclaw/var/agents/{folder}/logs/agent-*.log`            | Per-run: agent, duration, status, errors     |
+| **Agent transcripts** | `~/.Codex/projects/{encodedCwd}/{sessionId}.jsonl`            | Codex Agent SDK conversation history         |
+| **Conversations**     | `~/.bearclaw/var/agents/{folder}/conversations/YYYY-MM-DD.md` | Agent's running daily log                    |
 
 ## Enabling Debug Logging
 
@@ -66,7 +70,7 @@ Debug level shows:
 
 ### 1. Agent Errors or Unexpected Exits
 
-**Check the agent log file** in `~/.bearclaw/agents/{folder}/logs/agent-*.log`
+**Check the agent log file** in `~/.bearclaw/var/agents/{folder}/logs/agent-*.log`
 
 #### Missing Authentication
 
@@ -74,12 +78,13 @@ Debug level shows:
 Invalid API key
 ```
 
-**Fix:** Ensure `.env` file exists in the project root with either OAuth token or API key:
+**Fix:** Make sure one of the tokens is stored in the config database:
 
 ```bash
-cat .env  # Should show one of:
-# CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  (subscription)
-# ANTHROPIC_API_KEY=sk-ant-api03-...        (pay-per-use)
+npm run cli -- config list      # Should list one of:
+# CLAUDE_CODE_OAUTH_TOKEN  (subscription, from `claude setup-token`)
+# ANTHROPIC_API_KEY        (pay-per-use)
+npm run cli -- config set CLAUDE_CODE_OAUTH_TOKEN sk-ant-oat01-...
 ```
 
 #### SDK Import or Version Mismatch
@@ -110,10 +115,10 @@ Agent timeout after 300000ms, aborting
 AGENT_TIMEOUT=600000 npm run dev  # 10 minutes
 ```
 
-Or set it in `.env`:
+Or store it as a setting (restart to apply):
 
-```
-AGENT_TIMEOUT=600000
+```bash
+npm run cli -- config set AGENT_TIMEOUT 600000
 ```
 
 ### 3. Session Not Resuming
@@ -136,7 +141,7 @@ grep "Session initialized" logs/bearclaw.log | tail -5
 **Fix:** Clear BearClaw's session tracking and let the agent recreate one:
 
 ```bash
-echo '{}' > ~/.bearclaw/data/sessions.json
+echo '{}' > ~/.bearclaw/var/sessions.json
 ```
 
 ### 4. MCP Server Failures
@@ -146,19 +151,19 @@ The agent uses a file-based IPC MCP server (`bearclaw`) for sending messages and
 **Check:** Ensure the IPC directory is writable:
 
 ```bash
-ls -la ~/.bearclaw/data/ipc/{folder}/
+ls -la ~/.bearclaw/var/run/ipc/{folder}/
 # Should have messages/ and tasks/ subdirectories
 ```
 
 ### 5. Permission Errors on Agent Directories
 
-The agent runs with `cwd` set to `~/.bearclaw/agents/{folder}/`. If this directory is not writable, tools like Bash, Write, and Edit will fail.
+The agent runs with `cwd` set to `~/.bearclaw/var/agents/{folder}/`. If this directory is not writable, tools like Bash, Write, and Edit will fail.
 
 **Fix:**
 
 ```bash
-ls -la ~/.bearclaw/agents/
-chmod -R u+rw ~/.bearclaw/agents/{folder}/
+ls -la ~/.bearclaw/var/agents/
+chmod -R u+rw ~/.bearclaw/var/agents/{folder}/
 ```
 
 ### 6. Codex CLI Not Found
@@ -218,7 +223,7 @@ query({
   prompt,
   options: {
     abortController,
-    cwd: agentDir,                          // ~/.bearclaw/agents/{folder}/
+    cwd: agentDir,                          // ~/.bearclaw/var/agents/{folder}/
     resume: input.sessionId,                // Per-agent session resumption
     model: 'Codex-opus-4-7',
     systemPrompt: { type: 'preset', preset: 'Codex', append: ... },
@@ -248,23 +253,23 @@ npm run dev    # tsx with hot reload
 
 ## IPC Debugging
 
-The agent communicates back to the host via files in `~/.bearclaw/data/ipc/{folder}/`:
+The agent communicates back to the host via files in `~/.bearclaw/var/run/ipc/{folder}/`:
 
 ```bash
 # Pending outbound messages
-ls -la ~/.bearclaw/data/ipc/{folder}/messages/
+ls -la ~/.bearclaw/var/run/ipc/{folder}/messages/
 
 # Pending task/handler operations
-ls -la ~/.bearclaw/data/ipc/{folder}/tasks/
+ls -la ~/.bearclaw/var/run/ipc/{folder}/tasks/
 
 # Read a specific IPC file
-cat ~/.bearclaw/data/ipc/{folder}/messages/*.json
+cat ~/.bearclaw/var/run/ipc/{folder}/messages/*.json
 
 # Available channel chats (main agent only)
-cat ~/.bearclaw/data/ipc/main/available_groups.json
+cat ~/.bearclaw/var/run/ipc/main/available_groups.json
 
 # Current handlers snapshot
-cat ~/.bearclaw/data/ipc/{folder}/current_handlers.json
+cat ~/.bearclaw/var/run/ipc/{folder}/current_handlers.json
 ```
 
 **IPC file types:**
@@ -281,7 +286,7 @@ cat ~/.bearclaw/data/ipc/{folder}/current_handlers.json
 echo "=== Checking BearClaw Setup ==="
 
 echo -e "\n1. Authentication configured?"
-[ -f .env ] && (grep -q "CLAUDE_CODE_OAUTH_TOKEN=sk-" .env || grep -q "ANTHROPIC_API_KEY=sk-" .env) && echo "OK" || echo "MISSING - add CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY to .env"
+npm run doctor  # checks the token, the model, the password, the services
 
 echo -e "\n2. Codex CLI available?"
 which Codex &>/dev/null && echo "OK - $(Codex --version 2>&1 | head -1)" || echo "MISSING - install with: npm install -g @anthropic-ai/Codex"
@@ -293,13 +298,13 @@ echo -e "\n4. Node.js version?"
 node --version
 
 echo -e "\n5. Agents directory?"
-ls -la ~/.bearclaw/agents/ 2>/dev/null || echo "MISSING - run setup"
+ls -la ~/.bearclaw/var/agents/ 2>/dev/null || echo "MISSING - run npm run setup"
 
 echo -e "\n6. IPC directories?"
-ls -d ~/.bearclaw/data/ipc/*/ 2>/dev/null && echo "OK" || echo "No IPC directories yet (created on first run)"
+ls -d ~/.bearclaw/var/run/ipc/*/ 2>/dev/null && echo "OK" || echo "No IPC directories yet (created on first run)"
 
 echo -e "\n7. Recent agent logs?"
-ls -t ~/.bearclaw/agents/*/logs/agent-*.log 2>/dev/null | head -3 || echo "No agent logs yet"
+ls -t ~/.bearclaw/var/agents/*/logs/agent-*.log 2>/dev/null | head -3 || echo "No agent logs yet"
 
 echo -e "\n8. Session continuity working?"
 SESSIONS=$(grep "Session initialized" logs/bearclaw.log 2>/dev/null | tail -5 | awk '{print $NF}' | sort -u | wc -l)

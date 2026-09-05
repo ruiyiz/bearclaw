@@ -26,6 +26,16 @@ export interface ContextListing {
 const NAME_RE = /^[A-Za-z0-9._-]+\.(md|txt|html|hbs|json)$/;
 const FOLDER_RE = /^[A-Za-z0-9._-]+$/;
 
+// A (scope, folder, name) triple that names no row. Callers distinguish it
+// from a validation failure: the HTTP layer answers 404 for this one and 400
+// for everything else.
+export class ContextFileNotFound extends Error {
+  constructor() {
+    super('file not found');
+    this.name = 'ContextFileNotFound';
+  }
+}
+
 interface Row {
   scope: ContextScope;
   folder: string;
@@ -144,7 +154,7 @@ export function readContextFile(
     .get(key.scope, key.folder, key.name) as
     | { content: string; updated_at: string }
     | undefined;
-  if (!row) throw new Error('file not found');
+  if (!row) throw new ContextFileNotFound();
   return { content: row.content, modifiedAt: row.updated_at };
 }
 
@@ -196,6 +206,6 @@ export function deleteContextFile(
       'DELETE FROM context_files WHERE scope = ? AND folder = ? AND name = ?',
     )
     .run(key.scope, key.folder, key.name);
-  if (info.changes === 0) throw new Error('file not found');
+  if (info.changes === 0) throw new ContextFileNotFound();
   materializeContextFile(key.scope, key.folder, key.name, null);
 }

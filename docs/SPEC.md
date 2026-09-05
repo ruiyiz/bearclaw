@@ -2,7 +2,7 @@
 
 A personal Claude assistant accessible via chat platforms (WhatsApp, Telegram, iMessage) and Gmail, with persistent per-agent state, scheduled and event-driven workflows, and shared context.
 
-This document describes design and architecture decisions. Not a code reference; for that, follow the source from `src/index.ts`.
+This document describes design and architecture decisions. Not a code reference; for that, follow the source from `src/index.ts` into `src/app.ts`.
 
 ---
 
@@ -12,7 +12,7 @@ This document describes design and architecture decisions. Not a code reference;
 2. [Folder Structure](#folder-structure)
 3. [Configuration](#configuration)
 4. [Memory System](#memory-system)
-5. [Daily Conversation Flush](#daily-conversation-flush)
+5. [Daily Rollover](#daily-rollover)
 6. [Session Management](#session-management)
 7. [Message Flow](#message-flow)
 8. [Workflows](#workflows)
@@ -47,15 +47,10 @@ This document describes design and architecture decisions. Not a code reference;
 │              └────────────────────────────────────────────┘        │
 │                                                                    │
 │              ┌────────────────────────────────────────────┐        │
-│              │       Conversation Checkpoint              │        │
-│              │  every MEMORY_FLUSH_INTERVAL: full         │        │
-│              │  transcript → checkpoints/{sessionId}.md   │        │
-│              └────────────────────────────────────────────┘        │
-│                                                                    │
-│              ┌────────────────────────────────────────────┐        │
-│              │       Daily Conversation Flush (01:00)     │        │
-│              │  consolidate yesterday's checkpoints →     │        │
-│              │  conversations/{date}.md per agent         │        │
+│              │            Daily Rollover (01:00)          │        │
+│              │  yesterday's messages →                    │        │
+│              │  conversations/{date}.md per agent,        │        │
+│              │  then reset folder-keyed sessions          │        │
 │              └────────────────────────────────────────────┘        │
 │                                                                    │
 │              ┌────────────────────────────────────────────┐        │
@@ -64,9 +59,15 @@ This document describes design and architecture decisions. Not a code reference;
 │              └────────────────────────────────────────────┘        │
 │                                                                    │
 │              ┌────────────────────────────────────────────┐        │
-│              │         SQLite (~/.bearclaw/var/)          │        │
+│              │        SQLite: var/messages.db             │        │
 │              │   chats, messages, events, workflows,      │        │
 │              │   runs, steps, waits, triggers             │        │
+│              └────────────────────────────────────────────┘        │
+│                                                                    │
+│              ┌────────────────────────────────────────────┐        │
+│              │      SQLite: ~/.bearclaw/bearclaw.db       │        │
+│              │   settings, agents, context, skills,       │        │
+│              │   workflow definitions, MCP, model catalog │        │
 │              └────────────────────────────────────────────┘        │
 │                                                                    │
 └────────────────────────────────────────────────────────────────────┘
@@ -82,58 +83,62 @@ This document describes design and architecture decisions. Not a code reference;
 | Email     | `gog` CLI                        | Gmail polling and sending           |
 | Storage   | `better-sqlite3`                 | Messages, workflow state, event bus |
 | Agent     | `@anthropic-ai/claude-agent-sdk` | In-process Claude execution         |
-| TUI       | `ink` + `react`                  | Status terminal UI                  |
+| Web UI    | Next.js 15 PWA (`web/`)          | Chat, workflows, inbox, admin       |
 | Runtime   | Node.js 20+                      | Single host process                 |
 
 ---
 
 ## Folder Structure
 
-BearClaw separates source repo, runtime config (`~/.bearclaw/config/`), and runtime state (`~/.bearclaw/var/`). Stable user content lives at the top level (`agents/`, `context/`, `skills/`); volatile state is namespaced under `var/`.
+BearClaw separates the source repo, the config database (`~/.bearclaw/bearclaw.db`), and runtime state (`~/.bearclaw/var/`). Everything stable that the user owns is a row: settings and secrets, the agent registry, context documents, skills, workflow definitions, MCP servers and the model catalog. Nothing under `var/` is user-authored.
 
 ```
 ~/.bearclaw/
-├── .env                              # Auth tokens, integration keys
-├── config/                           # Stable, user-edited
-│   ├── registered_agents.json
-│   ├── mcp.json                      # user-added MCP servers
-│   └── ...
-├── context/                          # Stable shared context
-│   ├── AGENTS.md                     # Operating manual (manual)
-│   ├── CONTEXT.md                    # Cross-agent domain knowledge (manual)
-│   ├── USER.md                       # Facts about the user (manual)
-│   └── SOUL.md                       # Persona (manual)
-├── agents/
-│   └── {folder}/
-│       └── IDENTITY.md               # Per-agent role/personality (manual)
-├── skills/                           # User-installed skills
+├── bearclaw.db                       # Config database (mode 0600)
+│     settings          key/value, secrets flagged; keys are env var names
+│     agents            folder → name, channels, per-agent config
+│     context_files     shared + per-agent markdown (AGENTS, CONTEXT, USER,
+│                       SOUL, IDENTITY, workflow templates)
+│     skills/skill_files/skill_sources
+│     workflow_definitions, mcp_servers, model_catalog
 └── var/                              # Volatile runtime state
     ├── messages.db                   # SQLite (chats, messages, events, workflow state)
     ├── sessions.json                 # Active session IDs per agent folder
+    ├── auth-secret                   # HMAC key for web sessions
     ├── auth/                         # Channel credentials
     ├── run/ipc/{folder}/             # IPC inbox per agent
-    ├── backups/                      # pre-cutover tarballs etc.
-    └── agents/{folder}/              # Per-agent volatile state
+    ├── cache/                        # Read-only mirrors of DB rows
+    │   ├── skills/{name}/            # What the SDK discovers
+    │   └── context/                  # shared/ and agents/{folder}/
+    └── agents/{folder}/              # Per-agent volatile state, and the agent's cwd
+        ├── .claude/skills → ../../../cache/skills
+        ├── context → ../../cache/context
         ├── conversations/{date}.md   # One file per day per agent (daily flush)
-        ├── checkpoints/{sessionId}.md   # Live transcript checkpoints
         └── logs/agent-*.log
 ```
 
-`agents/{folder}/` (stable, user-meaningful) vs `var/agents/{folder}/` (volatile, system-meaningful) is deliberate: `agents/` is what the user backs up, edits, or manually inspects; `var/` is what BearClaw owns and may rewrite.
+The split is deliberate: rows are what the user backs up (`bearclaw export`) and edits (CLI or web admin); `var/` is what BearClaw owns and may rewrite. The mirrors exist because the Agent SDK loads skills and context from real files; a `PreToolUse` hook denies agent writes under `var/cache/`, so the only way to change a document is `context_write` or the admin API. `~/.bearclaw` is not a git repo, and there is no `.env`.
 
 ---
 
 ## Configuration
 
-`src/config.ts` is the single source of truth for env vars, paths, and intervals. `~/.bearclaw/.env` is loaded at startup.
+`src/index.ts` bootstraps before anything else is imported: it creates the `var/` layout, opens the config database, and copies every settings row into `process.env` without overwriting a variable already set there. Only then does it import `src/app.ts`. `src/config.ts` reads that environment once and is the single source of truth for paths and intervals, so a settings change takes effect on the next restart.
+
+Setting keys are env var names, which is what makes the override work: the environment wins over the database, and the database wins over the code default. `bearclaw config list|get|set|unset` and Admin > Settings are the two ways in. `BEARCLAW_HOME`, `NODE_ENV`, `BEARCLAW_HTTP_PORT`, `BEARCLAW_HTTP_HOST` and `BEARCLAW_BACKEND_URL` stay environment-only: they are read before, or outside, the database.
 
 ### Authentication
 
-```bash
-CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...   # Subscription, OR
-ANTHROPIC_API_KEY=sk-ant-api03-...         # Pay-per-use
-OPENAI_API_KEY=sk-...                      # image_generate
 ```
+CLAUDE_CODE_OAUTH_TOKEN   # Subscription, from `claude setup-token`, OR
+ANTHROPIC_API_KEY         # Pay-per-use
+OPENAI_API_KEY            # image_generate
+```
+
+Keys matching `TOKEN|KEY|PASSWORD|SECRET` are stored with the `secret` flag and
+redacted by every listing route. The web password is the exception: it is kept
+as an scrypt hash under the internal key `bearclaw.password_hash`, and internal
+`bearclaw.*` keys are never exported to the environment.
 
 ### Channels (optional)
 
@@ -145,7 +150,7 @@ OPENAI_API_KEY=sk-...                      # image_generate
 
 ### Memory tunables
 
-`WARM_START_DAYS` (default `2`), `WARM_START_BUDGET_BYTES` (default `16384`), `MEMORY_FLUSH_INTERVAL` (default 10 min).
+`WARM_START_DAYS` (default `2`), `WARM_START_BUDGET_BYTES` (default `32768`).
 
 ---
 
@@ -153,63 +158,61 @@ OPENAI_API_KEY=sk-...                      # image_generate
 
 BearClaw's memory layers are designed around two principles:
 
-1. **Files are authoritative; the database is auxiliary.** Conversations and context files live as markdown on disk. SQLite carries channel state, event bus, and workflow bookkeeping — no curated content.
-2. **Every layer is a file the user can open.** Checkpoints, daily conversations and manual context files are the whole of memory; recall over them is keyword search, not a second system to keep in sync. Nothing curated lives outside `~/.bearclaw/`.
+1. **One store per kind of state.** Conversation archives are markdown on disk under `var/`; context documents are rows in the config database, mirrored to files the SDK can read. `var/messages.db` carries channel state, the event bus and workflow bookkeeping.
+2. **Every layer is something the user can open.** Daily conversations are files; context documents are one editor away in Admin > Context or one `bearclaw config` neighbour. Recall over the archives is keyword search, not a second system to keep in sync.
 
-| Layer                  | Location                                         | Owner            | Purpose                                    |
-| ---------------------- | ------------------------------------------------ | ---------------- | ------------------------------------------ |
-| **Operating manual**   | `context/AGENTS.md`                              | User (manual)    | Behavior rules, tool conventions           |
-| **Persona**            | `context/SOUL.md`                                | User (manual)    | Voice, style, character                    |
-| **User profile**       | `context/USER.md`                                | User (manual)    | Durable facts about the user               |
-| **Domain knowledge**   | `context/CONTEXT.md`                             | User (manual)    | Lasting world / project / domain knowledge |
-| **Per-agent identity** | `agents/{folder}/IDENTITY.md`                    | User (manual)    | Per-agent role / personality               |
-| **Conversations**      | `var/agents/{folder}/conversations/{date}.md`    | Daily flush      | One file per day per agent (full-fidelity) |
-| **Checkpoints**        | `var/agents/{folder}/checkpoints/{sessionId}.md` | Periodic flusher | Crash-safety: live in-flight transcript    |
-| **Recall**             | `mcp__bearclaw__recall_history`                  | SQLite FTS5      | BM25 search over this agent's archives     |
-
-### Conversation checkpoint
-
-Every `MEMORY_FLUSH_INTERVAL` ticks (default 10 min), the full transcript of every live session is rewritten to `checkpoints/{sessionId}.md`. The checkpoint is a single file per session, overwritten each tick, not appended. Crash-safety material — bounded data loss is the tick interval.
+| Layer                  | Location                                      | Owner             | Purpose                                       |
+| ---------------------- | --------------------------------------------- | ----------------- | --------------------------------------------- |
+| **Operating manual**   | `context_files` row `AGENTS.md` (shared)      | User + agent      | Behavior rules, tool conventions              |
+| **Persona**            | `context_files` row `SOUL.md` (shared)        | User + agent      | Voice, style, character                       |
+| **User profile**       | `context_files` row `USER.md` (shared)        | User + agent      | Durable facts about the user                  |
+| **Domain knowledge**   | `context_files` row `CONTEXT.md` (shared)     | User + agent      | Lasting world / project / domain knowledge    |
+| **Per-agent identity** | `context_files` row `IDENTITY.md` ({folder})  | User + agent      | Per-agent role / personality                  |
+| **Conversations**      | `var/agents/{folder}/conversations/{date}.md` | Daily flush       | One file per day per agent (full-fidelity)    |
+| **Warm start**         | last `WARM_START_DAYS` of `var/messages.db`   | SessionStart hook | Recent cross-channel context on a new session |
+| **Recall**             | `mcp__bearclaw__recall_history`               | SQLite FTS5       | BM25 search over this agent's archives        |
 
 ### Warm-start context
 
-When a new session starts, the agent's SessionStart hook injects, in this order, up to `WARM_START_BUDGET_BYTES` (default 16 KB):
+When a new session starts, the agent's SessionStart hook injects the last
+`WARM_START_DAYS` (default 2) of this agent's messages, read back from
+`var/messages.db` across every jid the folder owns (web sessions folded in),
+tail-capped at `WARM_START_BUDGET_BYTES` (default 32 KB).
 
-1. Today's checkpoint (if a session crashed earlier today).
-2. Last `WARM_START_DAYS` (default 2) of conversation archives, oldest → newest.
-
-Cross-session shared context (AGENTS.md, SOUL.md, USER.md, IDENTITY.md) is appended to the system prompt — separate path, not part of the warm-start budget.
+Cross-session shared context (AGENTS.md, SOUL.md, USER.md, IDENTITY.md) is
+appended to the system prompt, a separate path that is not part of the
+warm-start budget.
 
 ### Recall beyond the warm-start window
 
-For anything older, the agent calls `mcp__bearclaw__recall_history`: FTS5 with BM25 ranking over its own `conversations/*.md` and `checkpoints/*.md`. Chunks are indexed lazily and reindexed on first call after a file changes, so there is no sync job to fall behind. Results carry file path and line range, so the agent can Read for more context.
+For anything older, the agent calls `mcp__bearclaw__recall_history`: FTS5 with BM25 ranking over its own `conversations/*.md` (plus any `checkpoints/*.md` left behind by earlier versions). Chunks are indexed lazily and reindexed on first call after a file changes, so there is no sync job to fall behind. Results carry file path and line range, so the agent can Read for more context.
 
 ### Multi-agent boundaries
 
-| Action                               | `main` | Non-main |
-| ------------------------------------ | ------ | -------- |
-| Read own conversations + checkpoints | yes    | yes      |
-| Read other agents' conversations     | no     | no       |
-| `register_agent`, IPC fan-out        | yes    | no       |
+| Action                           | `main` | Non-main |
+| -------------------------------- | ------ | -------- |
+| Read own conversation archives   | yes    | yes      |
+| Read other agents' conversations | no     | no       |
+| `register_agent`, IPC fan-out    | yes    | no       |
 
-Manual context files in `~/.bearclaw/context/` are visible to every agent. Per-agent identity is isolated to `agents/{folder}/IDENTITY.md`.
+Shared context rows are visible to every agent. Per-agent identity is isolated to that folder's `IDENTITY.md` row. `context_write` enforces the same split: only the main agent may write a shared row or another folder's row.
 
 ---
 
-## Daily Conversation Flush
+## Daily Rollover
 
-A single in-process timer fires at **01:00 local** (configurable via TIMEZONE). For each agent it consolidates every checkpoint older than today (by mtime) into `conversations/{date}.md`, appending if the file already exists, then deletes the consumed checkpoints. Live sessions are skipped — their checkpoint waits until the next 01:00 boundary.
+A single in-process timer fires at **01:00 local** (configurable via TIMEZONE) and does two things per agent folder.
+
+1. **Flush.** Every message from yesterday, across each jid the folder owns plus its `web:{folder}:*` sessions, is read back from `var/messages.db` and written to `conversations/{date}.md`. The file is rewritten rather than appended, so replaying the flush is a no-op.
+2. **Reset.** Folder-keyed IM and email sessions are marked to drain and their session ids dropped, so the next message opens a fresh session with warm-start re-injection. Web sessions are left alone; the UI owns those.
 
 ```
-checkpoints/abc123.md  (mtime 2026-05-08 11:42)  ┐
-checkpoints/def456.md  (mtime 2026-05-08 19:03)  ├─→ conversations/2026-05-08.md
-checkpoints/ghi789.md  (mtime 2026-05-08 23:55)  ┘
-checkpoints/jkl012.md  (live session, mtime 2026-05-09 00:14)  → skipped
+messages.db rows for 2026-05-08, folder `main`  ─→ var/agents/main/conversations/2026-05-08.md
 ```
 
-A startup sweep also runs the consolidator, so a crash that left checkpoints behind from a prior day is cleaned up immediately rather than waiting up to 24 hours.
+A boot catch-up runs the flush only. The reset is deliberately not replayed on startup: it would close sessions opened since the last 01:00 boundary.
 
-`/new` writes a final checkpoint of the cleared session and drops the session id. It does **not** archive to `conversations/`. The daily flush is the only writer of `conversations/`.
+`/new` drops a session id on demand. The rollover is the only writer of `conversations/`.
 
 ---
 
@@ -219,9 +222,7 @@ Each agent maintains a Claude Agent SDK session. `var/sessions.json` maps agent 
 
 ### Resets
 
-Sessions are cleared on `/new`. There is no daily session reset. Long-running sessions stay live across the daily flush boundary; only their checkpoints get consumed once the day rolls over.
-
-The conversation checkpoint provides crash safety; the daily flush prevents `checkpoints/` from accumulating stale files. Manual `/new` is the only operator-driven reset.
+Sessions are cleared on `/new`, and folder-keyed sessions are also reset by the 01:00 rollover, which bounds how long one session's context can grow. Web sessions are exempt; users manage those from the UI.
 
 ---
 
@@ -234,10 +235,10 @@ The conversation checkpoint provides crash safety; the daily flush prevents `che
 4. agent/runner.ts invokes query():
      cwd: var/agents/{folder}/
      resume: sessionId
-     systemPrompt: claude_code preset + context/{AGENTS,CONTEXT,SOUL,USER}.md
-                 + IDENTITY.md + SYSTEM_PROMPT
+     systemPrompt: claude_code preset + shared {AGENTS,CONTEXT,SOUL,USER}.md rows
+                 + the folder's IDENTITY.md row + SYSTEM_PROMPT
      mcpServers: { bearclaw: ipcMcp, ...userMcpServers }
-     SessionStart hook: warm-start budget (today's checkpoint + last N days)
+     SessionStart hook: warm-start budget (last N days of this folder's messages)
 5. The agent streams output. Channel side effects (send_message, register_agent, …)
    are written to var/run/ipc/{folder}/ and dispatched by the IPC watcher; the
    workflow tools act on the engine directly.
@@ -251,12 +252,14 @@ A recovery sweep runs every poll interval to catch messages missed during channe
 
 ## Workflows
 
-A workflow is a definition file at `~/.bearclaw/workflows/<slug>.json`: a name, an
-owner agent, an `inputs` schema, typed nodes, and edges leaving named ports. Node
-types are `agent`, `shell`, `http`, `template`, `transform`, `condition`, `switch`,
-`send`, `human`, `wait_event`, `emit` and `delay` — most of them are not LLM calls.
-Files are the source of truth; SQLite holds the index, runs, steps, waits and
-triggers.
+A workflow is a JSON definition in the config database (`workflow_definitions`,
+keyed by slug): a name, an owner agent, an `inputs` schema, typed nodes, and edges
+leaving named ports. Node types are `agent`, `shell`, `http`, `template`,
+`transform`, `condition`, `switch`, `send`, `human`, `wait_event`, `emit` and
+`delay`, most of them not LLM calls. The definition rows are the source of truth;
+`var/messages.db` holds the index, runs, steps, waits and triggers. Definitions
+move in and out as files through `bearclaw workflows export|import`, the web
+detail page, or the `workflow_upsert` tool.
 
 A run copies the definition into its own row and executes against that snapshot.
 The decider computes the nodes whose incoming edges are satisfied, runs them,
@@ -318,30 +321,33 @@ The previous `memory_search` / `memory_write` tools are removed. Retrieval goes 
 
 ### User MCP servers
 
-`~/.bearclaw/config/mcp.json` is merged into every agent's `mcpServers` config. Users add Notion, GitHub, etc. there without editing source.
+Enabled rows of the `mcp_servers` table are merged into every agent's `mcpServers` config, with `${VAR}` references expanded from the environment (so a token can stay a secret settings row). Users add Notion, GitHub, and the rest with `bearclaw config mcp set` or Admin > Settings, without editing source.
 
 ---
 
 ## Deployment
 
-BearClaw runs as a single macOS launchd service (`~/Library/LaunchAgents/com.bearclaw.plist`).
+BearClaw runs as macOS launchd services. `bearclaw setup` renders them from the templates in `launchd/`, substituting the node path, the project root and the home directory, and starts them.
 
 ```
 ~/Library/LaunchAgents/
-├── com.bearclaw.plist                # main agent runner
-└── com.bearclaw.imsg-watcher.plist   # iMessage tail
+├── com.bearclaw.plist                # main process: channels, scheduler, HTTP API
+├── com.bearclaw.web.plist            # Next.js web UI on :3030
+└── com.bearclaw.imsg-watcher.plist   # iMessage tail (added by the iMessage setup script)
 ```
+
+The plists carry only machine-local environment (`BEARCLAW_HOME` when it is not the default, `PATH`); everything else comes from the config database, so a plist can never shadow a setting.
 
 ### Startup sequence
 
-1. Initialize SQLite (creates tables; runs incremental migrations; drops legacy `memory_*` and `dream_*` tables on first boot post-cutover).
-2. Load `sessions.json`, `registered_agents.json`.
-3. Run startup checkpoint consolidation (handles crash residue).
-4. Start the conversation checkpoint ticker.
-5. Schedule the daily 01:00 conversation flush.
+1. Bootstrap (`src/index.ts`): create the `var/` layout, open `bearclaw.db`, run its migrations, copy settings into `process.env`, then import `src/app.ts`.
+2. Initialize `var/messages.db` (creates tables; runs incremental migrations).
+3. Load `sessions.json` and the agent registry from the config database; rebuild the `var/cache/` mirrors and the per-agent symlinks.
+4. Run the boot catch-up flush (yesterday's archive, idempotent).
+5. Schedule the 01:00 daily rollover (flush + session reset).
 6. Initialize the subprocess manager.
-7. Start the workflow service: seed built-ins, migrate legacy handlers once, load definition files, recover interrupted runs.
-8. Connect channels.
+7. Start the workflow service: seed built-ins, migrate legacy handlers once, load the definition rows, recover interrupted runs.
+8. Connect channels. A channel that cannot start (a rejected Telegram token, say) is logged and skipped; the rest of the boot continues.
 9. Start: workflow service loop, IPC watcher, message recovery loop, email poll loops.
 
 ### Service management
@@ -362,10 +368,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model. Highlights:
 - **Per-agent `cwd`.** Each agent's working directory is its own `var/agents/{folder}/`.
 - **IPC authorization.** The IPC watcher rejects cross-agent operations from non-main agents (sending to other chats, managing workflows owned by other agents, calling `register_agent` / `refresh_agents`).
 - **Trigger gate.** Non-main agents only fire on messages matching their configured trigger.
-- **Manual context applies; no auto-write.** `~/.bearclaw/context/` is never written by BearClaw. The user holds the commit button — agents propose changes via chat, the user replies with instructions, the agent edits via Read/Edit.
-- **Credentials.** Loaded from `~/.bearclaw/.env` into `process.env`. Agents can read them via Bash; this is a known limitation of the in-process model.
-
-```bash
-chmod 700 ~/.bearclaw/agents/
-chmod 600 ~/.bearclaw/.env
-```
+- **Context changes are explicit.** BearClaw never rewrites a context row on its own. An agent changes one only through `mcp__bearclaw__context_write`, which is scoped to its own folder unless it is main; the mirrors under `var/cache/` are read-only to the agent, enforced by a `PreToolUse` hook.
+- **Credentials.** Settings rows are copied into `process.env` at boot, so agents can read them via Bash. This is a known limitation of the in-process model, unchanged by the move off `.env`.
+- **Database permissions.** `bearclaw.db` is created mode 0600 and holds every secret in the clear except the web password, which is an scrypt hash. `bearclaw doctor` checks the mode.
+- **Export bundles.** `bearclaw export` writes the config database and the channel credentials to a single `0600` tarball. Treat it like a password file.

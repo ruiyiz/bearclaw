@@ -363,6 +363,19 @@ async function get<T>(path: string): Promise<T> {
   return res.json();
 }
 
+// Same as get, but a 404 is an answer rather than a failure: "no such row
+// yet". Used where absence is the normal first-run case.
+async function getOptional<T>(path: string): Promise<T | null> {
+  const res = await fetch(path, { cache: 'no-store' });
+  if (res.status === 401) {
+    bounceToLogin();
+    throw new Error('unauthorized');
+  }
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${res.status} ${path}`);
+  return res.json();
+}
+
 async function send<T>(
   path: string,
   method: string,
@@ -598,6 +611,22 @@ export const api = {
     const p = new URLSearchParams({ scope, name });
     if (scope === 'agent' && folder) p.set('folder', folder);
     return get<{
+      scope: ContextScope;
+      folder: string | null;
+      name: string;
+      content: string;
+      modifiedAt: string;
+    }>(`/api/admin/context/file?${p.toString()}`);
+  },
+  // Prefill helper for the setup wizard: null when the file does not exist yet.
+  contextReadIfExists: (
+    scope: ContextScope,
+    folder: string | null,
+    name: string,
+  ) => {
+    const p = new URLSearchParams({ scope, name });
+    if (scope === 'agent' && folder) p.set('folder', folder);
+    return getOptional<{
       scope: ContextScope;
       folder: string | null;
       name: string;

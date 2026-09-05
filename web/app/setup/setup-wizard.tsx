@@ -146,12 +146,10 @@ export function SetupWizard() {
               ['IDENTITY', 'agent', 'main', 'IDENTITY.md'],
             ] as const
           ).map(async ([key, scope, folder, file]) => {
-            try {
-              const r = await api.contextRead(scope, folder, file);
-              return [key, r.content] as const;
-            } catch {
-              return [key, null] as const;
-            }
+            // Absent files answer 404 and come back null; the step then shows
+            // the seed template instead.
+            const r = await api.contextReadIfExists(scope, folder, file);
+            return [key, r?.content ?? null] as const;
           }),
         );
         if (!alive) return;

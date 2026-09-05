@@ -20,7 +20,7 @@ The entire codebase should be something you can read and understand. One Node.js
 
 ### Session Isolation
 
-Each agent runs with its own working directory (`~/.bearclaw/agents/{folder}/`) and conversation session. The agent's `cwd` is set to the agent folder, and `settingSources: ['project']` reads project settings from there. IPC authorization ensures non-main agents can only message their own chats and manage their own workflows.
+Each agent runs with its own working directory (`~/.bearclaw/var/agents/{folder}/`) and conversation session. The agent's `cwd` is set to that folder, and `settingSources: ['project']` reads project settings from there, including the skills mirrored into `.claude/skills`. IPC authorization ensures non-main agents can only message their own chats and manage their own workflows.
 
 ### Built for One User
 
@@ -28,11 +28,11 @@ This isn't a framework or a platform. It's working software for my specific need
 
 ### Customization = Code Changes
 
-No configuration sprawl. If you want different behavior, modify the code. The codebase is small enough that this is safe and practical. Very minimal things like the trigger word are in config. Everything else - just change the code to do what you want.
+No configuration sprawl. If you want different behavior, modify the code. The codebase is small enough that this is safe and practical. Minimal things like the trigger word, the model and the API tokens are settings rows in the config database, reachable from `bearclaw config` and Admin > Settings. Everything else - just change the code to do what you want.
 
 ### AI-Native Development
 
-I don't need an installation wizard - Claude Code guides the setup. I don't need a monitoring dashboard - I ask Claude Code what's happening. I don't need elaborate logging UIs - I ask Claude to read the logs. I don't need debugging tools - I describe the problem and Claude fixes it.
+Installation is one command (`npm run setup`) plus a browser page, not a manual. I don't need a monitoring dashboard - I ask Claude Code what's happening. I don't need elaborate logging UIs - I ask Claude to read the logs. I don't need debugging tools - I describe the problem and Claude fixes it.
 
 The codebase assumes you have an AI collaborator. It doesn't need to be excessively self-documenting or self-debugging because Claude is always there.
 
@@ -80,7 +80,7 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 - Use existing tools (WhatsApp connector, Claude Agent SDK, MCP servers)
 - Minimal glue code
-- File-based systems where possible (`~/.bearclaw/context/` for shared memory, `~/.bearclaw/agents/` for per-agent data)
+- One SQLite config database (`~/.bearclaw/bearclaw.db`) for everything durable the user owns, mirrored to files under `~/.bearclaw/var/cache/` where the SDK needs real files; `~/.bearclaw/var/` for runtime state
 
 ---
 
@@ -90,16 +90,17 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 - Channel adapters (WhatsApp, Telegram, iMessage) deliver inbound messages, which the router dispatches based on chat JID
 - Only messages from registered chats trigger an agent
-- Trigger: `@Andy` prefix (case insensitive), configurable via `ASSISTANT_NAME` env var
+- Trigger: `@Andy` prefix (case insensitive), configurable via the `ASSISTANT_NAME` setting (env var of the same name overrides it)
 - Unregistered chats are ignored
 
 ### Memory System
 
-- **Shared context**: `~/.bearclaw/context/{AGENTS,SOUL,USER,MEMORY}.md` is loaded into every agent's prompt
-- **Per-agent identity**: `~/.bearclaw/agents/{name}/IDENTITY.md` defines the agent's role/persona
-- **Daily memory**: `~/.bearclaw/agents/{name}/memory/YYYY-MM-DD.md` is appended via `memory_write` and indexed for `memory_search`
-- **Conversations**: archived to `~/.bearclaw/agents/{name}/conversations/` when sessions reset
-- Agent runs with its folder as `cwd`; the SDK reads `.claude/` project settings from there
+- **Shared context**: the `shared` context rows (`AGENTS.md`, `SOUL.md`, `USER.md`, `CONTEXT.md`) are loaded into every agent's prompt
+- **Per-agent identity**: the agent's `IDENTITY.md` row defines its role/persona
+- **Conversations**: the 1am rollover writes each day to `~/.bearclaw/var/agents/{name}/conversations/{date}.md`
+- **Recall**: `recall_history` runs BM25 search over those archives; there is no separate memory store
+- Context rows are mirrored read-only to `~/.bearclaw/var/cache/context/` and linked into each agent's `cwd`; agents change them through `context_write`, never by editing the mirror
+- Agent runs with `~/.bearclaw/var/agents/{folder}/` as `cwd`; the SDK reads `.claude/` project settings from there
 
 ### Session Management
 
@@ -117,7 +118,7 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 ### Workflows (Scheduled + Event-Driven)
 
-- A workflow is a flowchart of typed nodes stored as JSON at `~/.bearclaw/workflows/<slug>.json`; most nodes are not LLM calls
+- A workflow is a flowchart of typed nodes stored as a JSON definition in the config database (`workflow_definitions`); most nodes are not LLM calls
 - Triggers are separate rows binding a firing condition (cron, at, event, webhook, manual) to a workflow and supplying its inputs
 - A run snapshots the definition, persists after every step, and resumes from the database after a restart
 - Human steps park a run on a `workflow_waits` row and resolve from the web inbox, a channel reply, or the agent's `workflow_respond`
@@ -128,14 +129,14 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 ### Agent Management
 
-- New agents are registered via the `register_agent` MCP tool (main only) or directly via `~/.bearclaw/data/registered_agents.json`
-- Each agent gets a dedicated folder under `~/.bearclaw/agents/`
+- New agents are registered via the `register_agent` MCP tool (main only), Admin > Agents, or the `agents` table in the config database
+- Each agent gets a dedicated folder under `~/.bearclaw/var/agents/`
 - Agents can have per-agent configuration: `containerConfig.timeout`, `email`, `activeHours`
 
 ### Main Channel Privileges
 
 - Main channel is the admin/control surface (typically self-chat)
-- Can write to shared `~/.bearclaw/context/MEMORY.md`
+- Can write the shared context rows through `context_write`
 - Can register workflows, triggers and agents for any folder
 - Can view and manage workflows across all agents
 - Can configure per-agent settings
@@ -153,7 +154,7 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 ### Integrations
 
-- **Email** (`src/integrations/email.ts`): polls Gmail via the `gog` CLI, emits `email_received` events; reply primitive available to agents via the `reply_email` MCP tool
+- **Email** (`src/channels/email.ts`): polls Gmail via the `gog` CLI, emits `email_received` events; reply primitive available to agents via the `reply_email` MCP tool
 
 ### Workflows + MCP Tools
 
@@ -164,7 +165,7 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
   - `trigger_create`, `trigger_list`, `trigger_set_enabled`, `trigger_delete`
   - `subprocess_start/read/write/poll/kill/list`
   - `image_generate` (registered when either `OPENAI_API_KEY` or `GOOGLE_API_KEY` is set; routes by model — `gpt-image-*` → OpenAI, `nano-banana`/`gemini-*` → Google)
-- Definitions live at `~/.bearclaw/workflows/*.json`; runs, steps, waits and triggers live in SQLite
+- Definitions live in the config database; runs, steps, waits and triggers live in `var/messages.db`
 - One service loop drives event triggers, due cron and one-shot rows, and the engine's own timers
 
 ### Web Access
@@ -178,15 +179,20 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 ### Philosophy
 
-- Minimal configuration files
-- Setup and customization done via Claude Code
-- Users clone the repo and run Claude Code to configure
+- No configuration files to hand-edit: one config database, reachable from the CLI and the web admin
+- Installation is scripted; customization is still done via Claude Code
+- Users clone the repo, run `npm run setup`, and finish in the browser
 - Each user gets a custom setup matching their exact needs
+
+### Install path
+
+- `npm run setup` (`bearclaw setup`) fills the config database, seeds the starter context, renders the launchd agents, builds and starts the services. Idempotent.
+- The first-run wizard at `/setup` covers whatever setup left open: password, model, Claude token, starter context, channels.
+- `bearclaw doctor` checks an install; `bearclaw export` / `bearclaw import` move one between machines.
 
 ### Skills
 
-- `/setup` - Install dependencies, authenticate WhatsApp, configure scheduler, start services
-- `/customize` - General-purpose skill for adding capabilities (new channels like Telegram, new integrations, behavior changes)
+- `/customize` - General-purpose skill for adding capabilities (new channels like Telegram, new integrations, behavior changes). Predates the config database, so parts of it are stale.
 
 ### Deployment
 
@@ -197,9 +203,9 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 ## Personal Configuration (Reference)
 
-These are the creator's settings, stored here for reference:
+These are the creator's settings, stored here for reference. They live as rows in `~/.bearclaw/bearclaw.db` (`bearclaw config list`):
 
-- **Trigger**: `@Andy` (case insensitive)
+- **Trigger**: `@Andy` (case insensitive), from the `ASSISTANT_NAME` setting
 - **Response prefix**: `Andy:`
 - **Persona**: Default Claude (no custom personality)
 - **Main channel**: Self-chat (messaging yourself in WhatsApp)

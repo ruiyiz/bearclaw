@@ -5,6 +5,10 @@ description: Add new capabilities or modify BearClaw behavior. Use when user wan
 
 # BearClaw Customization
 
+> **Stale in parts.** This skill predates the config database (2026-09); prefer
+> `bearclaw doctor`, `bearclaw config`, and the web admin over any `.env` or
+> flat-file step described below.
+
 This skill helps users add capabilities or modify behavior. Use AskUserQuestion to understand what they want before making changes.
 
 ## Workflow
@@ -16,17 +20,17 @@ This skill helps users add capabilities or modify behavior. Use AskUserQuestion 
 
 ## Key Files
 
-| File                            | Purpose                                           |
-| ------------------------------- | ------------------------------------------------- |
-| `src/config.ts`                 | Assistant name, trigger pattern, directories      |
-| `src/index.ts`                  | Message routing, channel wiring, agent invocation |
-| `src/agent/runner.ts`           | Agent SDK execution, MCP server config            |
-| `src/agent/ipc-mcp.ts`          | MCP tools the agent uses to call back to the host |
-| `src/db.ts`                     | Database initialization and queries               |
-| `src/types.ts`                  | TypeScript interfaces                             |
-| `src/scripts/whatsapp-auth.ts`  | Standalone WhatsApp authentication script         |
-| `.mcp.json`                     | MCP server configuration (reference)              |
-| `~/.bearclaw/context/MEMORY.md` | Shared memory across all agents                   |
+| File                                      | Purpose                                           |
+| ----------------------------------------- | ------------------------------------------------- |
+| `src/config.ts`                           | Assistant name, trigger pattern, directories      |
+| `src/index.ts`                            | Message routing, channel wiring, agent invocation |
+| `src/agent/runner.ts`                     | Agent SDK execution, MCP server config            |
+| `src/agent/ipc-mcp.ts`                    | MCP tools the agent uses to call back to the host |
+| `src/db.ts`                               | Database initialization and queries               |
+| `src/types.ts`                            | TypeScript interfaces                             |
+| `src/cli/whatsapp-auth.ts`                | WhatsApp pairing, run it with `npm run auth`      |
+| `.mcp.json`                               | MCP server configuration (reference)              |
+| `~/.bearclaw/var/cache/context/MEMORY.md` | Shared memory across all agents                   |
 
 ## Common Customization Patterns
 
@@ -58,7 +62,7 @@ Implementation:
 
 1. Add MCP server to the `mcpServers` config in `src/agent/runner.ts`
 2. Add tools to `allowedTools` array
-3. Document in `~/.bearclaw/context/MEMORY.md`
+3. Document in `~/.bearclaw/var/cache/context/MEMORY.md`
 
 ### Changing Assistant Behavior
 
@@ -68,7 +72,7 @@ Questions to ask:
 - Apply to all groups or specific ones?
 
 Simple changes -> edit `src/config.ts`
-Persona changes -> edit `~/.bearclaw/context/SOUL.md` or `~/.bearclaw/agents/{folder}/IDENTITY.md`
+Persona changes -> edit `~/.bearclaw/var/cache/context/SOUL.md` or `~/.bearclaw/var/agents/{folder}/IDENTITY.md`
 Per-group behavior -> edit specific group's `AGENTS.md`
 
 ### Adding New Commands

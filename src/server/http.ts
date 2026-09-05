@@ -113,6 +113,7 @@ import {
 import { configDbPath } from '../store/config-db.js';
 import { getWorkflowDefinition } from '../store/workflows.js';
 import {
+  ContextFileNotFound,
   createContextFile,
   deleteContextFile,
   listContextFiles,
@@ -670,6 +671,14 @@ function parseContextQuery(url: URL): {
   return { scope, folder: scope === 'agent' ? folder : null, name };
 }
 
+// A row that does not exist is a 404, not a bad request: the setup wizard
+// asks for USER.md and friends before anything has written them.
+function contextError(res: http.ServerResponse, err: unknown): void {
+  if (err instanceof ContextFileNotFound)
+    return json(res, 404, { error: 'file not found' });
+  json(res, 400, { error: String(err) });
+}
+
 add('GET', /^\/api\/admin\/context\/file$/, (_req, res, url) => {
   const q = parseContextQuery(url);
   if (!q) return json(res, 400, { error: 'missing fields' });
@@ -681,7 +690,7 @@ add('GET', /^\/api\/admin\/context\/file$/, (_req, res, url) => {
       ...readContextFile(q.scope, q.folder, q.name),
     });
   } catch (err) {
-    json(res, 400, { error: String(err) });
+    contextError(res, err);
   }
 });
 
@@ -705,7 +714,7 @@ add('DELETE', /^\/api\/admin\/context\/file$/, (_req, res, url) => {
     deleteContextFile(q.scope, q.folder, q.name);
     json(res, 200, { ok: true });
   } catch (err) {
-    json(res, 400, { error: String(err) });
+    contextError(res, err);
   }
 });
 

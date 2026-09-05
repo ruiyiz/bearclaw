@@ -6,6 +6,7 @@ import { after, beforeEach, test } from 'node:test';
 import { createAgent } from './agents.js';
 import { getConfigDb } from './config-db.js';
 import {
+  ContextFileNotFound,
   createContextFile,
   deleteContextFile,
   getContextFile,
@@ -85,13 +86,22 @@ test('create refuses an existing file, read and delete refuse a missing one', ()
     () => createContextFile('shared', null, 'SOUL.md', 'b'),
     /already exists/,
   );
+  // The HTTP layer keys its 404 off this class, so the type is part of the
+  // contract, not just the message.
   assert.throws(
     () => readContextFile('shared', null, 'GONE.md'),
-    /file not found/,
+    (err: unknown) =>
+      err instanceof ContextFileNotFound && /file not found/.test(String(err)),
   );
   assert.throws(
     () => deleteContextFile('shared', null, 'GONE.md'),
-    /file not found/,
+    (err: unknown) => err instanceof ContextFileNotFound,
+  );
+  // A bad name is still a validation failure, not a missing file.
+  assert.throws(
+    () => readContextFile('shared', null, 'nope.exe'),
+    (err: unknown) =>
+      err instanceof Error && !(err instanceof ContextFileNotFound),
   );
 });
 
