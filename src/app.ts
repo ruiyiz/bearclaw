@@ -1,0 +1,1525 @@
+import fs from 'fs';
+import path from 'path';
+
+import {
+  ASSISTANT_NAME,
+  AUTH_DIR,
+  CACHE_DIR,
+  CONFIG_DIR,
+  CONTEXT_DIR,
+  DATA_DIR,
+  DISPLAY_NAME,
+  AGENTS_DIR,
+  AGENTS_VAR_DIR,
+  IPC_POLL_INTERVAL,
+  IMESSAGE_ENABLED,
+  LOG_DIR,
+  MAIN_AGENT_FOLDER,
+  BEARCLAW_HOME,
+  POLL_INTERVAL,
+  RUN_DIR,
+  SKILLS_DIR,
+  TELEGRAM_BOT_POOL,
+  TELEGRAM_BOT_TOKEN,
+  TELEGRAM_ONLY,
+  TMP_DIR,
+  VAR_DIR,
+  STT_ECHO_ENABLED,
+  TELEGRAM_STREAM_MODE,
+  agentVarDir,
+} from './config.js';
+import {
+  AvailableGroup,
+  DEFAULT_EFFORT,
+  DEFAULT_MODEL,
+  runContainerAgent,
+  writeAgentsSnapshot,
+} from './agent/runner.js';
+import { AgentSession } from './agent/session.js';
+import type { EffortLevel } from './agent/runner.js';
+import { WhatsAppChannel } from './channels/whatsapp.js';
+import { initBotPool, TelegramChannel } from './channels/telegram.js';
+import { IMessageChannel } from './channels/imessage.js';
+import { EmailChannel } from './channels/email.js';
+import {
+  WebChannel,
+  folderFromJid as webFolderFromJid,
+  isWebJid,
+  sessionIdFromJid as webSessionIdFromJid,
+} from './channels/web.js';
+import { attachOutboundPersistence } from './channels/outbound-persist.js';
+import { startHttpServer } from './server/http.js';
+import { isNestedRegistry, resolveRegistry } from './agent-registry.js';
+import { guessMimetype, resolveMediaSource } from './media/source.js';
+import {
+  getAllChats,
+  deleteMessageById,
+  getMessagesSince,
+  getNewMessages,
+  initDatabase,
+  incrementWebSessionTurnCount,
+  setWebSessionSdkId,
+  storeChatMetadata,
+  storeMessage,
+  touchWebSession,
+  updateMessageContent,
+} from './db.js';
+import { commandMap } from './commands/registry.js';
+import {
+  isInActiveWindow,
+  getNextActiveTime,
+  formatNextActiveTime,
+} from './utils/time.js';
+import { findChannel } from './channels/router.js';
+import { generateSpeech } from './media/tts.js';
+import {
+  AgentRegistry,
+  Channel,
+  MediaType,
+  NewMessage,
+  RegisteredAgent,
+  Session,
+  StoredAgent,
+  StoredChannel,
+} from './types.js';
+import { loadJson, saveJson } from './utils/json.js';
+import { startDailyRollover } from './agent/daily-rollover.js';
+import { generateAndPersistTitle } from './agent/title-gen.js';
+import { logger } from './logger.js';
+import { initSubprocessManager } from './agent/subprocess-manager.js';
+import { startMaintenance } from './maintenance.js';
+import { startWorkflowService } from './workflows/service.js';
+import { isOnboarded } from './store/settings.js';
+import {
+  describeOpenWaits,
+  resolveFromCallback,
+  tryResolveFromMessage,
+} from './workflows/replies.js';
+
+let lastTimestamp = '';
+let sessions: Session = {};
+let agentModels: Record<string, string> = {};
+let agentEfforts: Record<string, string> = {};
+// Nested, folder-keyed source of truth (mirrors registered_agents.json).
+let agentRegistry: AgentRegistry = {};
+// Flat, jid-keyed view derived from `agentRegistry`. Rebuilt on every mutation;
+// this is what the router, channels, bus and heartbeat consume.
+let registeredAgents: Record<string, RegisteredAgent> = {};
+let lastAgentTimestamp: Record<string, string> = {};
+let messageLoopRunning = false;
+let ipcWatcherRunning = false;
+const folderQueues = new Map<string, Promise<void>>();
+const streamingSessions = new Map<string, AgentSession>();
+const lastAutoReply: Record<string, string> = {}; // chat_jid → ISO timestamp of last off-hours reply
+
+const channels: Channel[] = [];
+
+function ensureLayoutDirs(): void {
+  const dirs = [
+    CONFIG_DIR,
+    CONTEXT_DIR,
+    AGENTS_DIR,
+    SKILLS_DIR,
+    VAR_DIR,
+    CACHE_DIR,
+    DATA_DIR,
+    RUN_DIR,
+    LOG_DIR,
+    TMP_DIR,
+    AUTH_DIR,
+    AGENTS_VAR_DIR,
+  ];
+  for (const d of dirs) fs.mkdirSync(d, { recursive: true });
+
+  // Maintain the .claude/skills symlink for SDK auto-discovery.
+  const symlinkDir = path.join(BEARCLAW_HOME, '.claude');
+  const symlinkPath = path.join(symlinkDir, 'skills');
+  if (!fs.existsSync(symlinkPath) && fs.existsSync(SKILLS_DIR)) {
+    fs.mkdirSync(symlinkDir, { recursive: true });
+    try {
+      fs.symlinkSync('../skills', symlinkPath);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function loadState(): void {
+  const statePath = path.join(DATA_DIR, 'router_state.json');
+  const state = loadJson<{
+    last_timestamp?: string;
+    last_agent_timestamp?: Record<string, string>;
+  }>(statePath, {});
+  lastTimestamp = state.last_timestamp || '';
+  lastAgentTimestamp = state.last_agent_timestamp || {};
+  const sessionsPath = path.join(DATA_DIR, 'sessions.json');
+  const raw = loadJson<Record<string, string | boolean>>(sessionsPath, {});
+  const alreadyMigrated = raw.__migrated_v2 === true;
+  const migrated: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (k === '__migrated_v2') continue;
+    if (typeof v !== 'string') continue;
+    if (!alreadyMigrated && k.startsWith('web:') && !k.slice(4).includes(':')) {
+      migrated[`${k}:legacy`] = v;
+    } else {
+      migrated[k] = v;
+    }
+  }
+  sessions = migrated;
+  if (!alreadyMigrated) {
+    saveJson(sessionsPath, { ...sessions, __migrated_v2: true });
+    logger.info(
+      { migrated: Object.keys(migrated).length },
+      'sessions.json migrated',
+    );
+  }
+  agentModels = loadJson(path.join(DATA_DIR, 'models.json'), {});
+  agentEfforts = loadJson(path.join(DATA_DIR, 'efforts.json'), {});
+  const rawRegistry = loadJson<unknown>(
+    path.join(CONFIG_DIR, 'registered_agents.json'),
+    {},
+  );
+  if (!isNestedRegistry(rawRegistry)) {
+    throw new Error(
+      'registered_agents.json is in the old flat format. Run: npx tsx src/scripts/migrate-registered-agents.ts',
+    );
+  }
+  agentRegistry = rawRegistry as AgentRegistry;
+  rebuildResolved();
+  logger.info(
+    {
+      folderCount: Object.keys(agentRegistry).length,
+      channelCount: Object.keys(registeredAgents).length,
+    },
+    'State loaded',
+  );
+}
+
+// Recompute the flat jid-keyed view from the nested registry. Call after every
+// mutation so the resolved view never drifts from the source of truth.
+function rebuildResolved(): void {
+  registeredAgents = resolveRegistry(agentRegistry);
+}
+
+// Persist the nested registry and rebuild the resolved view.
+function persistRegistry(): void {
+  saveJson(path.join(CONFIG_DIR, 'registered_agents.json'), agentRegistry);
+  rebuildResolved();
+}
+
+// Map a routing jid to its stored channel key (web/email jids collapse to the
+// bare "web"/"email" tokens; everything else is its own key). Inverse of
+// jidForChannelKey.
+function channelKeyForJid(jid: string): string {
+  if (jid.startsWith('web:')) return 'web';
+  if (jid.startsWith('email:')) return 'email';
+  return jid;
+}
+
+function persistSessions(): void {
+  saveJson(path.join(DATA_DIR, 'sessions.json'), {
+    ...sessions,
+    __migrated_v2: true,
+  });
+}
+
+function touchWebSessionForJid(chatJid: string, timestamp: string): void {
+  if (!isWebJid(chatJid)) return;
+  const folder = webFolderFromJid(chatJid);
+  const sessionId = webSessionIdFromJid(chatJid);
+  if (!folder || !sessionId) return;
+  touchWebSession(folder, sessionId, timestamp);
+}
+
+// Resolves a chat_jid to its registered agent. Composite jids collapse to a
+// folder-level entry: web threads (`web:<folder>:<sessionId>`) → `web:<folder>`,
+// email threads (`email:<folder>:<threadId>`) → `email:<folder>`. IM and other
+// channels register exact jids.
+function lookupAgent(chatJid: string): RegisteredAgent | undefined {
+  const exact = registeredAgents[chatJid];
+  if (exact) return exact;
+  for (const prefix of ['web:', 'email:']) {
+    if (!chatJid.startsWith(prefix)) continue;
+    const rest = chatJid.slice(prefix.length);
+    const colon = rest.indexOf(':');
+    if (colon !== -1)
+      return registeredAgents[`${prefix}${rest.slice(0, colon)}`];
+  }
+  return undefined;
+}
+
+function saveState(): void {
+  saveJson(path.join(DATA_DIR, 'router_state.json'), {
+    last_timestamp: lastTimestamp,
+    last_agent_timestamp: lastAgentTimestamp,
+  });
+  persistSessions();
+}
+
+// Wire a channel onto an agent folder. Accepts the resolved (flat) shape used
+// by callers and folds it into the nested registry: agent-level fields land on
+// the folder's StoredAgent (set once, on folder creation), channel-level fields
+// on channels[channelKey].
+function registerAgent(jid: string, agent: RegisteredAgent): void {
+  const folder = agent.folder;
+  const channelKey = channelKeyForJid(jid);
+
+  const ch: StoredChannel = { added_at: agent.added_at };
+  // Web threads never trigger — omit the trigger entirely. Other channels keep
+  // their trigger (including the empty string = "respond to everything").
+  if (channelKey !== 'web') ch.trigger = agent.trigger ?? '';
+  if (agent.requiresTrigger !== undefined)
+    ch.requiresTrigger = agent.requiresTrigger;
+  if (agent.primary) ch.primary = true;
+  if (agent.activeHours) ch.activeHours = agent.activeHours;
+
+  let entry: StoredAgent = agentRegistry[folder];
+  if (!entry) {
+    entry = { name: agent.name, channels: {} };
+    agentRegistry[folder] = entry;
+  }
+  if (agent.heartbeat) entry.heartbeat = agent.heartbeat;
+  if (agent.containerConfig) entry.containerConfig = agent.containerConfig;
+  entry.channels[channelKey] = ch;
+  persistRegistry();
+
+  const persistentDir = path.join(AGENTS_DIR, folder);
+  fs.mkdirSync(persistentDir, { recursive: true });
+  fs.mkdirSync(path.join(agentVarDir(folder), 'logs'), {
+    recursive: true,
+  });
+
+  logger.info({ jid, name: agent.name, folder }, 'Agent registered');
+}
+
+// Ensure a folder has a web channel wired (idempotent). Inherits the folder's
+// display name; web threads route by folder, so the trigger stays empty.
+function ensureWebAgentRegistered(folder: string): void {
+  if (registeredAgents[`web:${folder}`]) return;
+  registerAgent(`web:${folder}`, {
+    name: agentRegistry[folder]?.name || folder,
+    folder,
+    trigger: '',
+    added_at: new Date().toISOString(),
+  });
+}
+
+function getAvailableGroups(): AvailableGroup[] {
+  const chats = getAllChats();
+  const registeredJids = new Set(Object.keys(registeredAgents));
+
+  return chats
+    .filter(
+      (c) =>
+        c.jid !== '__group_sync__' &&
+        (c.jid.endsWith('@g.us') ||
+          c.jid.startsWith('tg:') ||
+          c.jid.startsWith('imsg:')),
+    )
+    .map((c) => ({
+      jid: c.jid,
+      name: c.name,
+      lastActivity: c.last_message_time,
+      isRegistered: registeredJids.has(c.jid),
+    }));
+}
+
+const AUTO_REPLY_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+
+async function handleOffHoursReply(
+  msg: NewMessage,
+  agent: RegisteredAgent,
+): Promise<void> {
+  const last = lastAutoReply[msg.chat_jid];
+  if (last && Date.now() - new Date(last).getTime() < AUTO_REPLY_COOLDOWN_MS)
+    return;
+
+  const ch = findChannel(channels, msg.chat_jid);
+  if (!ch) return;
+
+  let reply: string;
+  if (agent.activeHours?.autoReply) {
+    reply = agent.activeHours.autoReply;
+  } else {
+    try {
+      const nextTime = getNextActiveTime(agent.activeHours!.cron);
+      reply = `I'm currently offline. I'll be back ${formatNextActiveTime(nextTime)} and will catch up on messages then.`;
+    } catch {
+      reply = "I'm currently offline and will respond during active hours.";
+    }
+  }
+
+  await ch.sendMessage(msg.chat_jid, reply);
+  lastAutoReply[msg.chat_jid] = new Date().toISOString();
+  logger.debug(
+    { agent: agent.name, jid: msg.chat_jid },
+    'Sent off-hours auto-reply',
+  );
+}
+
+async function processMessage(msg: NewMessage): Promise<void> {
+  const agent = lookupAgent(msg.chat_jid);
+  if (!agent) return;
+
+  let content = msg.content.trim();
+  const isMainAgent = agent.folder === MAIN_AGENT_FOLDER;
+
+  // Trigger gating is declarative: a channel's resolved config carries its own
+  // trigger (empty = respond to everything) and activeHours. Web threads route
+  // by folder and resolve with no trigger, so they fall through without any
+  // channel-prefix special-casing here.
+  if (!isMainAgent && agent.trigger && !content.startsWith('/')) {
+    const triggerPattern = new RegExp(
+      `^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+      'i',
+    );
+    if (!triggerPattern.test(content)) return;
+  }
+
+  if (agent.activeHours && !isInActiveWindow(agent.activeHours.cron)) {
+    await handleOffHoursReply(msg, agent);
+    return;
+  }
+
+  if (agent.trigger) {
+    const stripTriggerRe = new RegExp(
+      `^${agent.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b\\s*`,
+      'i',
+    );
+    content = content.replace(stripTriggerRe, '');
+  }
+
+  // An exact answer to a pending workflow question resolves it here; anything
+  // looser falls through to the agent with the open waits in its context.
+  const resolved = await tryResolveFromMessage(
+    msg.chat_jid,
+    agent.folder,
+    content,
+  );
+  if (resolved) {
+    const ch = findChannel(channels, msg.chat_jid);
+    if (ch)
+      await ch.sendMessage(msg.chat_jid, 'Got it, the workflow moved on.');
+    lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
+    saveState();
+    return;
+  }
+
+  const cmdHead = content.split(/\s+/)[0];
+  if (cmdHead.startsWith('/')) {
+    const cmd = commandMap.get(cmdHead.slice(1).toLowerCase());
+    if (cmd) {
+      const args = content.slice(cmdHead.length).trim();
+      const result = await cmd.handler({
+        args,
+        agent,
+        chatJid: msg.chat_jid,
+        msg,
+        reply: async (text) => {
+          const ch = findChannel(channels, msg.chat_jid);
+          if (ch) await ch.sendMessage(msg.chat_jid, text);
+        },
+        clearSession: () => {
+          const key = sessionKeyFor(msg.chat_jid, agent.folder);
+          delete sessions[key];
+          persistSessions();
+          closeStreamingSession(msg.chat_jid);
+          logger.info({ agent: agent.name }, 'Session cleared by user');
+        },
+        getSessionId: () => sessions[sessionKeyFor(msg.chat_jid, agent.folder)],
+        getModel: () => agentModels[agent.folder],
+        setModel: (model: string) => {
+          agentModels[agent.folder] = model;
+          saveJson(path.join(DATA_DIR, 'models.json'), agentModels);
+          logger.info({ agent: agent.name, model }, 'Agent model set by user');
+          // Push to in-flight streaming Query if one exists, so the change
+          // takes effect on the next turn without recreating the session.
+          const session = streamingSessions.get(msg.chat_jid);
+          if (session && !session.isClosed()) {
+            void session.setModel(model);
+          }
+        },
+        getEffort: () => agentEfforts[agent.folder],
+        setEffort: (effort: string) => {
+          agentEfforts[agent.folder] = effort;
+          saveJson(path.join(DATA_DIR, 'efforts.json'), agentEfforts);
+          logger.info(
+            { agent: agent.name, effort },
+            'Agent effort set by user',
+          );
+          const session = streamingSessions.get(msg.chat_jid);
+          if (session && !session.isClosed()) {
+            void session.setEffort(effort as EffortLevel);
+          }
+        },
+        runInBackground: (bgPrompt: string) => {
+          void runBgAgent(agent, bgPrompt, msg.chat_jid).catch((err) =>
+            logger.error(
+              { err, agent: agent.name },
+              'Background agent run failed',
+            ),
+          );
+        },
+        interruptCurrent: async () => {
+          const session = streamingSessions.get(msg.chat_jid);
+          if (!session || session.isClosed()) return false;
+          if (session.hasPendingTurns()) return session.interrupt();
+          // Auto-interrupt path may have already fired in dispatchMessage
+          // before this slash handler ran. Report success so the user
+          // sees consistent feedback.
+          return session.recentlyInterrupted();
+        },
+      });
+      if (result?.continueAs) {
+        content = result.continueAs;
+      } else {
+        lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
+        saveState();
+        return;
+      }
+    }
+  }
+
+  const sinceTimestamp = lastAgentTimestamp[msg.chat_jid] || '';
+  const missedMessages = getMessagesSince(msg.chat_jid, sinceTimestamp);
+
+  const lines = missedMessages.map((m) => {
+    const escapeXml = (s: string) =>
+      s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`;
+  });
+  const pendingWaits = describeOpenWaits(msg.chat_jid, agent.folder);
+  const prompt = [pendingWaits, `<messages>\n${lines.join('\n')}\n</messages>`]
+    .filter(Boolean)
+    .join('\n\n');
+
+  if (!prompt) return;
+
+  logger.info(
+    { agent: agent.name, messageCount: missedMessages.length },
+    'Processing message',
+  );
+
+  const isVoice = content.startsWith('[Voice message]');
+  const channel = findChannel(channels, msg.chat_jid);
+
+  if (isVoice && channel && STT_ECHO_ENABLED) {
+    const transcription = content.replace(/^\[Voice message\]\s*/, '');
+    if (transcription) {
+      await channel.sendMessage(msg.chat_jid, `> ${transcription}`);
+    }
+  }
+
+  // Set up streaming if the channel supports it (Telegram). Kick off the
+  // placeholder send and the agent in parallel so the SDK doesn't wait on a
+  // Telegram round-trip before producing tokens. onText holds edits until the
+  // placeholder id resolves.
+  let streamingMsgId: number | undefined;
+  let streamingMsgIdPromise: Promise<number | undefined> | undefined;
+  let onText: ((text: string) => void) | undefined;
+  let onActivity: ((label: string) => void) | undefined;
+  let typingInterval: ReturnType<typeof setInterval> | undefined;
+  let progressTimer: ReturnType<typeof setInterval> | undefined;
+  let lastStreamedText = '';
+  let stoppedStreamingEdits = false;
+  let activity = 'Thinking';
+  let lastProgressBody = '';
+  const stopProgressDots = () => {
+    if (progressTimer) {
+      clearInterval(progressTimer);
+      progressTimer = undefined;
+    }
+  };
+  if (channel?.sendMessageWithId && channel?.editMessage) {
+    // Initial placeholder body. Live mode shows a chat+hourglass with a
+    // trailing zero-width space (U+200B) so the body never matches a later
+    // edit byte-for-byte, sidestepping Telegram's "message is not modified"
+    // 400 on the first edit. Progress mode uses the activity indicator
+    // directly so the dialog/hourglass don't flash before the first tick.
+    // Both modes start with the activity indicator. Live mode swaps it for
+    // streaming text once the first token lands.
+    const initialPlaceholder = `🔄 ${activity}… 0s`;
+    streamingMsgIdPromise = channel
+      .sendMessageWithId(msg.chat_jid, initialPlaceholder)
+      .then((id) => {
+        streamingMsgId = id;
+        return id;
+      })
+      .catch((err) => {
+        logger.debug({ err }, 'Failed to send streaming placeholder');
+        return undefined;
+      });
+    // Wait for the placeholder to land before firing the typing chat-action,
+    // otherwise Telegram cancels the action when the bot's message arrives
+    // and the user never sees the indicator.
+    streamingMsgIdPromise.then((id) => {
+      if (id === undefined) return;
+      channel.setTyping?.(msg.chat_jid, true).catch(() => {});
+    });
+    typingInterval = setInterval(() => {
+      channel.setTyping?.(msg.chat_jid, true).catch(() => {});
+    }, 4000);
+
+    if (TELEGRAM_STREAM_MODE === 'progress') {
+      // Progress-bar mode: live-update an activity indicator
+      //   <emoji> <current activity>… <elapsed>s
+      // every tick until the agent finishes. The activity label tracks the
+      // most recent assistant block (Thinking / Tool: arg / Replying); the
+      // elapsed counter advances every tick so the user can tell whether
+      // work is happening even when no text is streaming. The full reply
+      // replaces the placeholder once runAgent returns.
+      const PROGRESS_TICK_MS = 1000;
+      const turnStart = Date.now();
+      activity = 'Thinking';
+      const renderProgress = () => {
+        const sec = Math.max(1, Math.floor((Date.now() - turnStart) / 1000));
+        return `🔄 ${activity}… ${sec}s`;
+      };
+      const tick = () => {
+        const body = renderProgress();
+        if (body === lastProgressBody) return;
+        lastProgressBody = body;
+        streamingMsgIdPromise!.then((id) => {
+          if (id === undefined || progressTimer === undefined) return;
+          channel.editMessage!(msg.chat_jid, id, body).catch(() => {});
+        });
+      };
+      progressTimer = setInterval(tick, PROGRESS_TICK_MS);
+      setTimeout(() => {
+        if (progressTimer !== undefined) tick();
+      }, 250);
+      onActivity = (label: string) => {
+        activity = label;
+        // Edit immediately on activity change so the indicator stays current
+        // even between ticks.
+        tick();
+      };
+    } else {
+      // Live mode: show the same activity indicator as progress mode until
+      // the first text token arrives, then stop the ticker and stream
+      // assistant text into the placeholder. Throttle edits and gate past
+      // STREAM_EDIT_LIMIT so the final chunked pass handles long replies.
+      const PROGRESS_TICK_MS = 1000;
+      const turnStart = Date.now();
+      activity = 'Thinking';
+      let textStarted = false;
+      const renderProgress = () => {
+        const sec = Math.max(1, Math.floor((Date.now() - turnStart) / 1000));
+        return `🔄 ${activity}… ${sec}s`;
+      };
+      const tick = () => {
+        if (textStarted) return;
+        const body = renderProgress();
+        if (body === lastProgressBody) return;
+        lastProgressBody = body;
+        streamingMsgIdPromise!.then((id) => {
+          if (id === undefined || progressTimer === undefined) return;
+          channel.editMessage!(msg.chat_jid, id, body).catch(() => {});
+        });
+      };
+      progressTimer = setInterval(tick, PROGRESS_TICK_MS);
+      setTimeout(() => {
+        if (progressTimer !== undefined) tick();
+      }, 250);
+
+      let lastEditTime = 0;
+      const STREAM_EDIT_LIMIT = 3500;
+      onText = (text: string) => {
+        if (!textStarted) {
+          textStarted = true;
+          stopProgressDots();
+          if (typingInterval) {
+            clearInterval(typingInterval);
+            typingInterval = undefined;
+          }
+          channel.setActivity?.(msg.chat_jid, null).catch(() => {});
+        }
+        if (stoppedStreamingEdits) return;
+        if (text.length > STREAM_EDIT_LIMIT) {
+          stoppedStreamingEdits = true;
+          return;
+        }
+        if (Date.now() - lastEditTime < 600) return;
+        lastEditTime = Date.now();
+        lastStreamedText = text;
+        streamingMsgIdPromise!.then((id) => {
+          if (id === undefined) return;
+          channel.editMessage!(msg.chat_jid, id, text).catch(() => {});
+        });
+      };
+      onActivity = (label: string) => {
+        if (textStarted) return;
+        activity = label;
+        tick();
+        channel.setActivity?.(msg.chat_jid, label).catch(() => {});
+      };
+    }
+  }
+
+  if (!streamingMsgIdPromise && channel)
+    await channel.setTyping?.(msg.chat_jid, true);
+  const { text: response, sentMediaViaIpc } = await runAgent(
+    agent,
+    prompt,
+    msg.chat_jid,
+    onText,
+    onActivity,
+  );
+  if (typingInterval) {
+    clearInterval(typingInterval);
+    typingInterval = undefined;
+  }
+  stopProgressDots();
+  if (streamingMsgIdPromise) await streamingMsgIdPromise;
+  if (!streamingMsgIdPromise && channel)
+    await channel.setTyping?.(msg.chat_jid, false);
+  if (channel) await channel.setActivity?.(msg.chat_jid, null).catch(() => {});
+
+  if (channel) {
+    const cleaned = response ? stripInternalTags(response) : null;
+    // When the agent sent media via IPC (e.g. canvas PNG), the caption is the
+    // reply. Suppress the streaming placeholder regardless of what the agent
+    // returned, so the user sees only the image+caption — not a duplicate
+    // text message edited into the placeholder.
+    if (sentMediaViaIpc) {
+      lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
+      if (streamingMsgId && channel.deleteMessage) {
+        await channel
+          .deleteMessage(msg.chat_jid, streamingMsgId)
+          .catch(() => {});
+      }
+    } else if (cleaned && !isNonResponse(cleaned)) {
+      lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
+      if (streamingMsgId && channel.editMessage) {
+        // Skip the final edit if the last streamed tick already pushed the
+        // identical text — avoids a redundant marked re-parse + Telegram API
+        // call. Always run when the stream gate stopped mid-reply, since the
+        // partial preview was suppressed past STREAM_EDIT_LIMIT.
+        if (stoppedStreamingEdits || cleaned !== lastStreamedText) {
+          await channel.editMessage(msg.chat_jid, streamingMsgId, cleaned);
+        }
+      } else {
+        await channel.sendMessage(msg.chat_jid, cleaned);
+      }
+      if (isVoice && channel.sendMedia) {
+        const audio = await generateSpeech(cleaned);
+        if (audio) {
+          await channel.sendMedia(
+            msg.chat_jid,
+            'audio',
+            { buffer: audio },
+            { ptt: true },
+          );
+        }
+      }
+    } else if (streamingMsgId && channel.deleteMessage) {
+      await channel.deleteMessage(msg.chat_jid, streamingMsgId).catch(() => {});
+    }
+  }
+}
+
+function stripInternalTags(text: string): string {
+  return text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+}
+
+function isNonResponse(text: string): boolean {
+  const normalized = text
+    .trim()
+    .toLowerCase()
+    .replace(/[.\s]+$/g, '');
+  const suppressPatterns = [
+    'no response requested',
+    'no response needed',
+    'no response necessary',
+    'no response required',
+  ];
+  return suppressPatterns.includes(normalized);
+}
+
+function sessionKeyFor(chatJid: string, folder: string): string {
+  // Web channel: every web jid carries its own session id, so each thread
+  // resumes its own SDK session.
+  // IM/event-handler path: legacy keyed by folder so multi-channel chats
+  // continue to share one SDK session per agent identity.
+  return chatJid.startsWith('web:') ? chatJid : folder;
+}
+
+function imJidsForFolder(folder: string): string[] {
+  // IM broadcast targets only — web and email route per-thread and are never
+  // fanned out to here (email especially: a stray broadcast would email the
+  // owner on every proactive turn).
+  return Object.entries(registeredAgents)
+    .filter(
+      ([jid, a]) =>
+        a.folder === folder &&
+        !jid.startsWith('web:') &&
+        !jid.startsWith('email:'),
+    )
+    .map(([jid]) => jid);
+}
+
+function getOrCreateStreamingSession(
+  agent: RegisteredAgent,
+  chatJid: string,
+): AgentSession {
+  let session = streamingSessions.get(chatJid);
+  if (session && (session.isClosed() || session.isDraining())) {
+    streamingSessions.delete(chatJid);
+    session = undefined;
+  }
+  if (!session) {
+    session = new AgentSession({
+      agent,
+      chatJid,
+      isMain: agent.folder === MAIN_AGENT_FOLDER,
+      resumeSessionId: sessions[sessionKeyFor(chatJid, agent.folder)],
+      model: agentModels[agent.folder],
+      effort: agentEfforts[agent.folder] as
+        | 'low'
+        | 'medium'
+        | 'high'
+        | 'xhigh'
+        | 'max'
+        | undefined,
+      imJids: imJidsForFolder(agent.folder),
+    });
+    streamingSessions.set(chatJid, session);
+  }
+  return session;
+}
+
+function closeStreamingSession(key: string): void {
+  const session = streamingSessions.get(key);
+  if (session) {
+    void session.close();
+    streamingSessions.delete(key);
+  }
+}
+
+async function runAgent(
+  agent: RegisteredAgent,
+  prompt: string,
+  chatJid: string,
+  onText?: (text: string) => void,
+  onActivity?: (label: string) => void,
+): Promise<{ text: string | null; sentMediaViaIpc: boolean }> {
+  const isMain = agent.folder === MAIN_AGENT_FOLDER;
+
+  const availableGroups = getAvailableGroups();
+  writeAgentsSnapshot(
+    agent.folder,
+    isMain,
+    availableGroups,
+    new Set(Object.keys(registeredAgents)),
+  );
+
+  try {
+    const session = getOrCreateStreamingSession(agent, chatJid);
+    const turn = await session.runTurn(prompt, { onText, onActivity });
+
+    if (turn.newSessionId) {
+      sessions[sessionKeyFor(chatJid, agent.folder)] = turn.newSessionId;
+      persistSessions();
+      if (isWebJid(chatJid)) {
+        const folder = webFolderFromJid(chatJid);
+        const sessionId = webSessionIdFromJid(chatJid);
+        if (folder && sessionId) {
+          setWebSessionSdkId(folder, sessionId, turn.newSessionId);
+        }
+      }
+    }
+
+    // Title-gen: refresh at turn 1, 5, 20. Fire-and-forget so the user-visible
+    // reply path is unaffected. setWebSessionTitleAuto rechecks `title_manual`
+    // at write time so a concurrent manual rename is not overwritten.
+    if (turn.status === 'success' && isWebJid(chatJid)) {
+      const folder = webFolderFromJid(chatJid);
+      const sessionId = webSessionIdFromJid(chatJid);
+      if (folder && sessionId) {
+        const n = incrementWebSessionTurnCount(folder, sessionId);
+        if (n === 1 || n === 5 || n === 20) {
+          void generateAndPersistTitle(folder, sessionId).catch((err) =>
+            logger.warn(
+              { err, folder, sessionId, turn: n },
+              'Title-gen failed',
+            ),
+          );
+        }
+      }
+    }
+
+    if (turn.status === 'error') {
+      logger.warn(
+        {
+          agent: agent.name,
+          error: turn.error,
+          timedOut: turn.timedOut,
+          interrupted: turn.interrupted,
+        },
+        'Streaming turn ended in error',
+      );
+      if (turn.interrupted) {
+        // Interrupted turns suppress reply — the new message that caused
+        // the interrupt will produce its own reply.
+        return { text: null, sentMediaViaIpc: turn.sentMediaViaIpc };
+      }
+      if (turn.timedOut) {
+        return {
+          text: 'Sorry, I ran out of time on that one. Try again?',
+          sentMediaViaIpc: false,
+        };
+      }
+      return { text: null, sentMediaViaIpc: turn.sentMediaViaIpc };
+    }
+    return { text: turn.result, sentMediaViaIpc: turn.sentMediaViaIpc };
+  } catch (err) {
+    logger.error({ agent: agent.name, err }, 'Agent error');
+    return { text: null, sentMediaViaIpc: false };
+  }
+}
+
+// Fire-and-forget background turn. Runs in a fresh session so it never
+// collides with the agent's main session resume. Posts result back to the
+// originating chat when done. Used by the /bg slash command.
+async function runBgAgent(
+  agent: RegisteredAgent,
+  prompt: string,
+  chatJid: string,
+): Promise<void> {
+  const isMain = agent.folder === MAIN_AGENT_FOLDER;
+  const startedAt = Date.now();
+
+  const availableGroups = getAvailableGroups();
+  writeAgentsSnapshot(
+    agent.folder,
+    isMain,
+    availableGroups,
+    new Set(Object.keys(registeredAgents)),
+  );
+
+  logger.info(
+    { agent: agent.name, chatJid, promptLen: prompt.length },
+    'Starting background agent run',
+  );
+
+  const output = await runContainerAgent(agent, {
+    prompt,
+    sessionId: undefined,
+    agentFolder: agent.folder,
+    chatJid,
+    isMain,
+    model: agentModels[agent.folder],
+    effort: agentEfforts[agent.folder] as
+      | 'low'
+      | 'medium'
+      | 'high'
+      | 'xhigh'
+      | 'max'
+      | undefined,
+    imJids: imJidsForFolder(agent.folder),
+  });
+
+  const channel = findChannel(channels, chatJid);
+  const durationMs = Date.now() - startedAt;
+
+  if (output.status === 'error') {
+    logger.error(
+      {
+        agent: agent.name,
+        durationMs,
+        error: output.error,
+        timedOut: output.timedOut,
+      },
+      'Background agent run error',
+    );
+    if (channel) {
+      const text = output.timedOut
+        ? '🌀❌ Background task timed out.'
+        : `🌀❌ Background task failed: ${output.error || 'unknown error'}`;
+      await channel.sendMessage(chatJid, text);
+    }
+    return;
+  }
+
+  logger.info(
+    {
+      agent: agent.name,
+      durationMs,
+      hasResult: !!output.result,
+      sentMediaViaIpc: !!output.sentMediaViaIpc,
+    },
+    'Background agent run complete',
+  );
+
+  if (!channel) return;
+  if (output.result) {
+    await channel.sendMessage(chatJid, output.result);
+  } else if (!output.sentMediaViaIpc) {
+    await channel.sendMessage(chatJid, '🌀 Background task done (no reply).');
+  }
+}
+
+function startIpcWatcher(): void {
+  if (ipcWatcherRunning) {
+    logger.debug('IPC watcher already running, skipping duplicate start');
+    return;
+  }
+  ipcWatcherRunning = true;
+
+  const ipcBaseDir = path.join(RUN_DIR, 'ipc');
+  fs.mkdirSync(ipcBaseDir, { recursive: true });
+
+  const processIpcFiles = async () => {
+    let agentFolders: string[];
+    try {
+      agentFolders = fs.readdirSync(ipcBaseDir).filter((f) => {
+        const stat = fs.statSync(path.join(ipcBaseDir, f));
+        return stat.isDirectory() && f !== 'errors';
+      });
+    } catch (err) {
+      logger.error({ err }, 'Error reading IPC base directory');
+      setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
+      return;
+    }
+
+    for (const sourceAgent of agentFolders) {
+      const isMain = sourceAgent === MAIN_AGENT_FOLDER;
+      const messagesDir = path.join(ipcBaseDir, sourceAgent, 'messages');
+      const tasksDir = path.join(ipcBaseDir, sourceAgent, 'tasks');
+
+      try {
+        if (fs.existsSync(messagesDir)) {
+          const messageFiles = fs
+            .readdirSync(messagesDir)
+            .filter((f) => f.endsWith('.json'));
+          for (const file of messageFiles) {
+            const filePath = path.join(messagesDir, file);
+            try {
+              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              if (data.type === 'message' && (data.text || data.mediaType)) {
+                // Resolve target JIDs: specific JID from chatJid, or all JIDs for the agent
+                let targetJids: string[];
+                if (data.chatJid) {
+                  targetJids = [data.chatJid];
+                } else {
+                  // No originating channel (e.g. event handler). Prefer the
+                  // folder's primary channel if one is flagged; otherwise fan
+                  // out to every channel registered to the folder. Email is
+                  // excluded — proactive output must target it explicitly via
+                  // an email:<folder> chatJid, never the broadcast fan-out.
+                  const folderJids = Object.entries(registeredAgents).filter(
+                    ([jid, a]) =>
+                      a.folder === data.agentFolder &&
+                      !jid.startsWith('email:'),
+                  );
+                  const primary = folderJids.find(([, a]) => a.primary);
+                  targetJids = primary
+                    ? [primary[0]]
+                    : folderJids.map(([jid]) => jid);
+                }
+
+                for (const targetJid of targetJids) {
+                  const targetAgent = lookupAgent(targetJid);
+                  if (
+                    !isMain &&
+                    !(targetAgent && targetAgent.folder === sourceAgent)
+                  ) {
+                    logger.warn(
+                      { targetJid, sourceAgent },
+                      'Unauthorized IPC message attempt blocked',
+                    );
+                    continue;
+                  }
+
+                  const ipcChannel = findChannel(channels, targetJid);
+                  if (!ipcChannel) {
+                    logger.error(
+                      { targetJid, sourceAgent },
+                      'No channel found for target JID',
+                    );
+                    continue;
+                  }
+
+                  if (data.mediaType) {
+                    const mediaSource = resolveMediaSource(
+                      data.filePath,
+                      data.mediaUrl,
+                      sourceAgent,
+                    );
+                    if (mediaSource && ipcChannel.sendMedia) {
+                      const caption = data.text || undefined;
+                      const mediaType = data.mediaType as MediaType;
+                      const fileName =
+                        data.fileName ||
+                        (data.filePath
+                          ? path.basename(data.filePath)
+                          : undefined);
+                      const mimetype =
+                        data.mimetype ||
+                        guessMimetype(data.filePath || data.mediaUrl || '');
+
+                      const ptt = (data as any).ptt || false;
+                      if (data.sender && ipcChannel.sendMediaAsAgent) {
+                        await ipcChannel.sendMediaAsAgent(
+                          targetJid,
+                          mediaType,
+                          mediaSource,
+                          { caption, fileName, mimetype, ptt },
+                          data.sender,
+                          sourceAgent,
+                        );
+                      } else {
+                        await ipcChannel.sendMedia(
+                          targetJid,
+                          mediaType,
+                          mediaSource,
+                          { caption, fileName, mimetype, ptt },
+                        );
+                      }
+                    } else if (!mediaSource) {
+                      logger.error(
+                        { targetJid, sourceAgent },
+                        'Could not resolve media source',
+                      );
+                    } else {
+                      logger.warn(
+                        { targetJid, channel: ipcChannel.name },
+                        'Channel does not support media',
+                      );
+                    }
+                  } else if (
+                    Array.isArray(data.choices) &&
+                    data.choices.length &&
+                    ipcChannel.sendChoices
+                  ) {
+                    await ipcChannel.sendChoices(
+                      targetJid,
+                      data.text,
+                      data.choices,
+                    );
+                  } else if (data.sender && ipcChannel.sendAsAgent) {
+                    await ipcChannel.sendAsAgent(
+                      targetJid,
+                      data.text,
+                      data.sender,
+                      sourceAgent,
+                    );
+                  } else {
+                    await ipcChannel.sendMessage(targetJid, data.text);
+                  }
+                  logger.info(
+                    {
+                      targetJid,
+                      sourceAgent,
+                      mediaType: data.mediaType || 'text',
+                    },
+                    'IPC message sent',
+                  );
+                }
+              }
+              fs.unlinkSync(filePath);
+            } catch (err) {
+              logger.error(
+                { file, sourceAgent, err },
+                'Error processing IPC message',
+              );
+              const errorDir = path.join(ipcBaseDir, 'errors');
+              fs.mkdirSync(errorDir, { recursive: true });
+              fs.renameSync(
+                filePath,
+                path.join(errorDir, `${sourceAgent}-${file}`),
+              );
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(
+          { err, sourceAgent },
+          'Error reading IPC messages directory',
+        );
+      }
+
+      try {
+        if (fs.existsSync(tasksDir)) {
+          const taskFiles = fs
+            .readdirSync(tasksDir)
+            .filter((f) => f.endsWith('.json'));
+          for (const file of taskFiles) {
+            const filePath = path.join(tasksDir, file);
+            try {
+              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              await processTaskIpc(data, sourceAgent, isMain);
+              fs.unlinkSync(filePath);
+            } catch (err) {
+              logger.error(
+                { file, sourceAgent, err },
+                'Error processing IPC task',
+              );
+              const errorDir = path.join(ipcBaseDir, 'errors');
+              fs.mkdirSync(errorDir, { recursive: true });
+              fs.renameSync(
+                filePath,
+                path.join(errorDir, `${sourceAgent}-${file}`),
+              );
+            }
+          }
+        }
+      } catch (err) {
+        logger.error({ err, sourceAgent }, 'Error reading IPC tasks directory');
+      }
+    }
+
+    setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
+  };
+
+  processIpcFiles();
+  logger.info('IPC watcher started (per-agent namespaces)');
+}
+
+async function processTaskIpc(
+  data: {
+    type: string;
+    jid?: string;
+    name?: string;
+    folder?: string;
+    trigger?: string;
+    requestId?: string;
+    messageId?: string;
+    to?: string;
+    subject?: string;
+    body?: string;
+    activeHours?: { cron: string; autoReply?: string };
+  },
+  sourceAgent: string,
+  isMain: boolean,
+): Promise<void> {
+  switch (data.type) {
+    case 'register_agent':
+      if (!isMain) {
+        logger.warn(
+          { sourceAgent },
+          'Unauthorized register_agent attempt blocked',
+        );
+        break;
+      }
+      if (data.jid && data.name && data.folder && data.trigger) {
+        registerAgent(data.jid, {
+          name: data.name,
+          folder: data.folder,
+          trigger: data.trigger,
+          added_at: new Date().toISOString(),
+          ...(data.activeHours ? { activeHours: data.activeHours } : {}),
+        });
+      } else {
+        logger.warn(
+          { data },
+          'Invalid register_agent request - missing required fields',
+        );
+      }
+      break;
+
+    default:
+      logger.warn({ type: data.type }, 'Unknown IPC task type');
+  }
+}
+
+function dispatchMessage(msg: NewMessage): void {
+  const agent = lookupAgent(msg.chat_jid);
+  if (!agent) return;
+  const botPrefixes =
+    DISPLAY_NAME !== ASSISTANT_NAME
+      ? [DISPLAY_NAME, ASSISTANT_NAME]
+      : [ASSISTANT_NAME];
+  if (botPrefixes.some((p) => msg.content.startsWith(`${p}:`))) return;
+
+  // /cancel  → preempt the in-flight turn here, before chaining.
+  // other    → don't interrupt; folderQueues serializes processMessage so
+  //            the new message lands in the next turn after the current one
+  //            finishes (queue-and-wait, preserves prior work). When a turn
+  //            is in flight, ack with a 👀 reaction so the user sees the
+  //            message landed.
+  const session = streamingSessions.get(msg.chat_jid);
+  const inFlight = session && !session.isClosed() && session.hasPendingTurns();
+  if (inFlight) {
+    const trimmed = msg.content.trim();
+    if (/^\/cancel\b/.test(trimmed)) {
+      logger.info(
+        { agent: agent.name, msgId: msg.id },
+        '/cancel preempting in-flight turn',
+      );
+      void session.interrupt();
+    } else {
+      const channel = findChannel(channels, msg.chat_jid);
+      if (channel?.reactToMessage) {
+        logger.info(
+          { agent: agent.name, msgId: msg.id, channel: channel.name },
+          'Mid-turn message — acking with reaction',
+        );
+        void channel.reactToMessage(msg.chat_jid, msg.id, '👀');
+      }
+    }
+  }
+
+  lastTimestamp = msg.timestamp;
+  saveState();
+  const prev = folderQueues.get(agent.folder) ?? Promise.resolve();
+  const next = prev
+    .then(() => processMessage(msg))
+    .catch((err) =>
+      logger.error({ err, msg: msg.id }, 'Error processing message'),
+    );
+  folderQueues.set(agent.folder, next);
+}
+
+async function startMessageLoop(): Promise<void> {
+  if (messageLoopRunning) {
+    logger.debug('Message loop already running, skipping duplicate start');
+    return;
+  }
+  messageLoopRunning = true;
+  logger.info(`BearClaw running (trigger: @${ASSISTANT_NAME})`);
+
+  while (true) {
+    try {
+      // Recovery sweep: catches messages missed during channel disconnects or restarts
+      const jids = Object.keys(registeredAgents);
+      const { messages } = getNewMessages(jids, lastTimestamp);
+      if (messages.length > 0) {
+        logger.info(
+          { count: messages.length },
+          'Recovery: dispatching missed messages',
+        );
+        for (const msg of messages) dispatchMessage(msg);
+      }
+    } catch (err) {
+      logger.error({ err }, 'Error in message loop');
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+  }
+}
+
+export async function main(): Promise<void> {
+  ensureLayoutDirs();
+  if (!DEFAULT_MODEL) {
+    logger.warn(
+      { onboarded: isOnboarded() },
+      'No model configured — run `bearclaw setup` or set DEFAULT_MODEL; agent runs will fail until then',
+    );
+  }
+  initDatabase();
+  logger.info('Database initialized');
+  loadState();
+
+  startDailyRollover({
+    registeredAgents: () => registeredAgents,
+    streamingSessions: () => streamingSessions,
+    sessions: () => sessions,
+    persistSessions,
+  });
+  initSubprocessManager();
+  startMaintenance();
+
+  // Initialize channels based on config
+  if (!TELEGRAM_ONLY) {
+    const whatsapp = new WhatsAppChannel({
+      onMessage: (_chatJid, msg) => {
+        storeMessage(msg);
+        dispatchMessage(msg);
+      },
+      onChatMetadata: (chatJid, ts, name) =>
+        storeChatMetadata(chatJid, ts, name),
+      registeredAgents: () => registeredAgents,
+    });
+    attachOutboundPersistence(whatsapp, () => registeredAgents);
+    channels.push(whatsapp);
+    whatsapp.connect(); // fire-and-forget, internal reconnection
+  }
+
+  if (TELEGRAM_BOT_TOKEN) {
+    const telegram = new TelegramChannel(TELEGRAM_BOT_TOKEN, {
+      onMessage: (_chatJid, msg) => {
+        storeMessage(msg);
+        dispatchMessage(msg);
+      },
+      onChatMetadata: (chatJid, timestamp, name) =>
+        storeChatMetadata(chatJid, timestamp, name),
+      registeredAgents: () => registeredAgents,
+      onChoice: (jid, data) => resolveFromCallback(jid, data),
+    });
+    attachOutboundPersistence(telegram, () => registeredAgents);
+    channels.push(telegram);
+    await telegram.connect();
+    if (TELEGRAM_BOT_POOL.length > 0) {
+      await initBotPool(TELEGRAM_BOT_POOL);
+    }
+  }
+
+  if (IMESSAGE_ENABLED) {
+    const imessage = new IMessageChannel({
+      onMessage: (_chatJid, msg) => {
+        storeMessage(msg);
+        dispatchMessage(msg);
+      },
+      onChatMetadata: (chatJid, ts, name) =>
+        storeChatMetadata(chatJid, ts, name),
+      registeredAgents: () => registeredAgents,
+    });
+    attachOutboundPersistence(imessage, () => registeredAgents);
+    channels.push(imessage);
+    await imessage.connect();
+  }
+
+  // Email channel — one channel owns every email thread. Per-folder poll loops
+  // (for folders with an email channel in the registry) feed inbound mail
+  // through the same dispatch path as the other channels; replies are
+  // delivered structurally by jid. Fire-and-forget connect (starts polling).
+  const email = new EmailChannel({
+    onMessage: (_chatJid, msg) => {
+      storeMessage(msg);
+      dispatchMessage(msg);
+    },
+    onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
+    registeredAgents: () => registeredAgents,
+  });
+  attachOutboundPersistence(email, () => registeredAgents);
+  channels.push(email);
+  void email.connect();
+
+  // Web channel — backs the Next.js app. Always on; bound to a local HTTP
+  // server (127.0.0.1) so the PWA can chat, watch events, and run admin ops.
+  const webChannel = new WebChannel({
+    onMessage: (_chatJid, msg) => {
+      storeMessage(msg);
+      touchWebSessionForJid(msg.chat_jid, msg.timestamp);
+      dispatchMessage(msg);
+    },
+    onChatMetadata: (chatJid, ts, name) => storeChatMetadata(chatJid, ts, name),
+    registeredAgents: () => registeredAgents,
+    onOutbound: (msg) => {
+      storeMessage(msg, 1);
+      touchWebSessionForJid(msg.chat_jid, msg.timestamp);
+    },
+    onOutboundEdit: (id, jid, content) =>
+      updateMessageContent(id, jid, content),
+    onOutboundDelete: (id, jid) => deleteMessageById(id, jid),
+  });
+  channels.push(webChannel);
+  await webChannel.connect();
+
+  startHttpServer({
+    webChannel,
+    registeredAgents: () => registeredAgents,
+    registerWebAgent: (folder: string) => {
+      ensureWebAgentRegistered(folder);
+    },
+    addRegisteredAgent: (jid: string, agent: RegisteredAgent) => {
+      registerAgent(jid, agent);
+    },
+    updateRegisteredAgent: (jid, patch) => {
+      const existing = registeredAgents[jid];
+      if (!existing) return null;
+      const folder = existing.folder;
+      const entry = agentRegistry[folder];
+      if (!entry) return null;
+      // name is agent-level — patching it via a single channel renames the
+      // whole folder (matches the folder-wide display-name model).
+      if (typeof patch.name === 'string') entry.name = patch.name;
+      const channelKey = channelKeyForJid(jid);
+      const ch = entry.channels[channelKey];
+      if (ch) {
+        // Web channels never trigger — ignore trigger patches for them.
+        if (typeof patch.trigger === 'string' && channelKey !== 'web')
+          ch.trigger = patch.trigger;
+        if (typeof patch.primary === 'boolean') {
+          if (patch.primary) ch.primary = true;
+          else delete ch.primary;
+        }
+      }
+      persistRegistry();
+      const next = registeredAgents[jid] ?? null;
+      logger.info({ jid, name: entry.name, folder }, 'Agent entry updated');
+      return next;
+    },
+    removeRegisteredAgent: (jid: string) => {
+      const existing = registeredAgents[jid];
+      if (!existing) return;
+      const entry = agentRegistry[existing.folder];
+      if (entry) {
+        delete entry.channels[channelKeyForJid(jid)];
+        // Drop the folder entry once its last routing channel is gone (an
+        // email-only channels map would leave a non-routable folder).
+        const routingLeft = Object.keys(entry.channels).some(
+          (k) => k !== 'email',
+        );
+        if (!routingLeft) delete agentRegistry[existing.folder];
+      }
+      persistRegistry();
+      logger.info({ jid }, 'Agent unwired');
+    },
+    removeRegisteredAgentsByFolder: (folder: string) => {
+      const removed = Object.keys(registeredAgents).filter(
+        (jid) => registeredAgents[jid].folder === folder,
+      );
+      delete agentRegistry[folder];
+      if (removed.length > 0) persistRegistry();
+      logger.info({ folder, count: removed.length }, 'Agent removed (jids)');
+      return removed;
+    },
+    setAgentDisplayName: (folder: string, name: string) => {
+      const entry = agentRegistry[folder];
+      if (!entry) return [];
+      entry.name = name;
+      const updated = Object.keys(registeredAgents).filter(
+        (jid) => registeredAgents[jid].folder === folder,
+      );
+      persistRegistry();
+      logger.info(
+        { folder, name, count: updated.length },
+        'Agent display name set',
+      );
+      return updated;
+    },
+    getAgentModel: (folder: string) => agentModels[folder],
+    setAgentModel: (folder: string, model: string) => {
+      agentModels[folder] = model;
+      saveJson(path.join(DATA_DIR, 'models.json'), agentModels);
+      // Push to any live streaming session for this agent so the change
+      // takes effect on the next turn without recreating the session.
+      for (const [jid, session] of streamingSessions.entries()) {
+        const reg = registeredAgents[jid];
+        if (reg && reg.folder === folder && !session.isClosed()) {
+          void session.setModel(model);
+        }
+      }
+    },
+    getAgentEffort: (folder: string) => agentEfforts[folder],
+    setAgentEffort: (folder: string, effort: string) => {
+      agentEfforts[folder] = effort;
+      saveJson(path.join(DATA_DIR, 'efforts.json'), agentEfforts);
+      for (const [jid, session] of streamingSessions.entries()) {
+        const reg = registeredAgents[jid];
+        if (reg && reg.folder === folder && !session.isClosed()) {
+          void session.setEffort(effort as EffortLevel);
+        }
+      }
+    },
+    defaultModel: DEFAULT_MODEL,
+    defaultEffort: DEFAULT_EFFORT,
+  });
+  // Auto-wire the main agent so first-load chat works without manual setup.
+  ensureWebAgentRegistered(MAIN_AGENT_FOLDER);
+
+  // Start all subsystems unconditionally
+  void startWorkflowService();
+  startIpcWatcher();
+  startMessageLoop();
+}
+
+main().catch((err) => {
+  logger.error({ err }, 'Failed to start BearClaw');
+  process.exit(1);
+});

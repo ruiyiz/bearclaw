@@ -1,11 +1,30 @@
-import dotenv from 'dotenv';
-import os from 'os';
 import path from 'path';
 
-// Load .env before reading any env vars.
-// This MUST happen here (not in index.ts) because ESM hoists imports,
-// so config.ts is evaluated before index.ts body runs.
-dotenv.config({ path: path.join(os.homedir(), '.bearclaw', '.env') });
+import {
+  AGENTS_VAR_DIR,
+  AUTH_DIR,
+  BEARCLAW_HOME,
+  CACHE_DIR,
+  DATA_DIR,
+  LOG_DIR,
+  RUN_DIR,
+  TMP_DIR,
+  VAR_DIR,
+  agentVarDir,
+} from './store/paths.js';
+
+export {
+  AGENTS_VAR_DIR,
+  AUTH_DIR,
+  BEARCLAW_HOME,
+  CACHE_DIR,
+  DATA_DIR,
+  LOG_DIR,
+  RUN_DIR,
+  TMP_DIR,
+  VAR_DIR,
+  agentVarDir,
+};
 
 export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 export const TELEGRAM_ONLY = process.env.TELEGRAM_ONLY === 'true';
@@ -21,9 +40,7 @@ export const POLL_INTERVAL = 30000; // Recovery sweep interval; normal dispatch 
 export const SCHEDULER_POLL_INTERVAL = 60000;
 export const EVENT_POLL_INTERVAL = 5000;
 
-export const BEARCLAW_HOME = path.resolve(os.homedir(), '.bearclaw');
-
-// Persistent (tracked)
+// Persistent (tracked) — removed in a later phase once the config DB owns them.
 export const CONFIG_DIR = path.resolve(BEARCLAW_HOME, 'config');
 export const CONTEXT_DIR = path.resolve(BEARCLAW_HOME, 'context');
 export const AGENTS_DIR = path.resolve(BEARCLAW_HOME, 'agents');
@@ -31,16 +48,6 @@ export const SKILLS_DIR = path.resolve(BEARCLAW_HOME, 'skills');
 export const WORKFLOWS_DIR = path.resolve(
   process.env.BEARCLAW_WORKFLOWS_DIR || path.join(BEARCLAW_HOME, 'workflows'),
 );
-
-// Runtime (gitignored)
-export const VAR_DIR = path.resolve(BEARCLAW_HOME, 'var');
-export const CACHE_DIR = path.resolve(VAR_DIR, 'cache');
-export const DATA_DIR = VAR_DIR; // top-level state files (sessions.json etc.) live directly under var/
-export const RUN_DIR = path.resolve(VAR_DIR, 'run');
-export const LOG_DIR = path.resolve(VAR_DIR, 'log');
-export const TMP_DIR = path.resolve(VAR_DIR, 'tmp');
-export const AUTH_DIR = path.resolve(VAR_DIR, 'auth');
-export const AGENTS_VAR_DIR = path.resolve(VAR_DIR, 'agents');
 
 export const MAIN_AGENT_FOLDER = 'main';
 
@@ -52,8 +59,6 @@ export const PUBLIC_URL = (
 
 export const agentDir = (folder: string): string =>
   path.join(AGENTS_DIR, folder);
-export const agentVarDir = (folder: string): string =>
-  path.join(AGENTS_VAR_DIR, folder);
 
 export const AGENT_TIMEOUT = parseInt(
   process.env.AGENT_TIMEOUT || '300000',
@@ -96,15 +101,18 @@ export const WARM_START_BUDGET_BYTES = parseInt(
 );
 
 // Default model — used when no per-agent override is set in models.json.
-// Required: must be set in ~/.bearclaw/.env (e.g. DEFAULT_MODEL=claude-sonnet-4-6).
-// Tests run against the real modules, so they get a placeholder rather than
-// the operator's model.
-if (!process.env.DEFAULT_MODEL && process.env.NODE_ENV !== 'test') {
-  throw new Error(
-    'DEFAULT_MODEL is required. Set it in ~/.bearclaw/.env (e.g. DEFAULT_MODEL=claude-sonnet-4-6).',
-  );
+// Empty until setup writes it: the process must still boot far enough to serve
+// the setup UI, so a missing model only fails once an agent actually runs.
+export const DEFAULT_MODEL = process.env.DEFAULT_MODEL || '';
+
+export const NO_MODEL_ERROR =
+  'No model configured — finish setup at /setup or run bearclaw setup';
+
+export function requireModel(model?: string): string {
+  const resolved = model || DEFAULT_MODEL;
+  if (!resolved) throw new Error(NO_MODEL_ERROR);
+  return resolved;
 }
-export const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'test-model';
 
 // OpenAI key — used by image_generate (gpt-image-2). bearclaw does not embed
 // anything itself.

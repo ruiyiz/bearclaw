@@ -17,6 +17,7 @@ import {
   DEFAULT_MODEL,
   RUN_DIR,
   TIMEZONE,
+  requireModel,
   WARM_START_BUDGET_BYTES,
   WARM_START_DAYS,
   agentDir as agentPersistentDir,
@@ -468,7 +469,7 @@ export async function runContainerAgent(
         abortController,
         cwd: varDir,
         resume: input.sessionId,
-        model: input.model || DEFAULT_MODEL,
+        model: requireModel(input.model),
         effort: maxEffort(
           input.effort || DEFAULT_EFFORT,
           detectEffortKeyword(input.prompt),

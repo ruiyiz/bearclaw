@@ -4,11 +4,15 @@
   "description": "Personal Claude assistant. Lightweight, secure, customizable.",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "bearclaw": "dist/cli.js"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "auth": "tsx src/scripts/whatsapp-auth.ts",
+    "cli": "tsx src/cli.ts",
+    "auth": "tsx src/cli.ts whatsapp-auth",
     "web:dev": "cd web && bun run dev",
     "web:build": "cd web && bun run build",
     "web:start": "cd web && bun run start",

@@ -3,13 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type http from 'node:http';
 
-import { CONFIG_DIR, VAR_DIR } from '../config.js';
+import { VAR_DIR } from '../config.js';
 import { logger } from '../logger.js';
+import { hasPassword, verifyPassword } from '../store/settings.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const SECRET_PATH = path.join(VAR_DIR, 'auth-secret');
-const INITIAL_PW_PATH = path.join(VAR_DIR, 'initial-password');
 const SESSION_TTL_S = 60 * 60 * 24 * 30; // 30 days
 const SESSION_COOKIE = 'nc_session';
 const CSRF_COOKIE = 'nc_csrf';
@@ -27,7 +27,7 @@ interface SessionPayload {
 // ─── Bootstrap ──────────────────────────────────────────────────────────────
 
 export function initAuth(): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.mkdirSync(VAR_DIR, { recursive: true });
   if (fs.existsSync(SECRET_PATH)) {
     SECRET = fs.readFileSync(SECRET_PATH);
   } else {
@@ -36,26 +36,11 @@ export function initAuth(): void {
     logger.info({ path: SECRET_PATH }, 'Generated auth secret');
   }
 
-  // Bootstrap a one-time password if BEARCLAW_PASSWORD is unset and no
-  // password file exists yet. Owner reads it from the file/log, logs in,
-  // and is expected to set BEARCLAW_PASSWORD in ~/.bearclaw/.env afterwards.
-  if (!process.env.BEARCLAW_PASSWORD && !fs.existsSync(INITIAL_PW_PATH)) {
-    const pw = crypto.randomBytes(16).toString('base64url');
-    fs.writeFileSync(INITIAL_PW_PATH, pw, { mode: 0o600 });
+  if (!hasPassword()) {
     logger.warn(
-      { path: INITIAL_PW_PATH },
-      `INITIAL ADMIN PASSWORD: ${pw}  (write to ~/.bearclaw/.env as BEARCLAW_PASSWORD then delete the file)`,
+      'No owner password set — the web UI will refuse logins until setup runs',
     );
   }
-}
-
-function expectedPassword(): string | null {
-  const env = process.env.BEARCLAW_PASSWORD;
-  if (env) return env;
-  if (fs.existsSync(INITIAL_PW_PATH)) {
-    return fs.readFileSync(INITIAL_PW_PATH, 'utf-8').trim();
-  }
-  return null;
 }
 
 // ─── Token sign/verify ──────────────────────────────────────────────────────
@@ -208,15 +193,10 @@ export function handleLogin(
   res: http.ServerResponse,
   body: { password?: string },
 ): LoginResult {
-  const expected = expectedPassword();
-  if (!expected) {
-    return { ok: false, error: 'auth not configured' };
+  if (!hasPassword()) {
+    return { ok: false, error: 'setup required' };
   }
-  const supplied = body.password || '';
-  // timing-safe compare
-  const a = Buffer.from(supplied);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+  if (!verifyPassword(body.password || '')) {
     return { ok: false, error: 'bad password' };
   }
   const csrf = crypto.randomBytes(24).toString('base64url');

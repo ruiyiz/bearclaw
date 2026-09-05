@@ -23,6 +23,7 @@ import {
   RUN_DIR,
   agentDir as agentPersistentDir,
   agentVarDir,
+  requireModel,
 } from '../config.js';
 import { logger } from '../logger.js';
 import { RegisteredAgent } from '../types.js';
@@ -236,7 +237,7 @@ export class AgentSession {
       options: {
         cwd: this.varDir,
         resume: this.sessionId,
-        model: this.model,
+        model: requireModel(this.model),
         effort: this.effort,
         systemPrompt: {
           type: 'preset',
