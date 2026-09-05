@@ -3,11 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import {
-  CONFIG_DIR,
-  DATA_DIR,
-  SKILLS_DIR as BEARCLAW_SKILLS_DIR,
-} from '../config.js';
+import { DATA_DIR } from '../config.js';
 import { resolveRegistry } from '../agent-registry.js';
 import {
   agentExists,
@@ -16,7 +12,17 @@ import {
   listAgents,
   loadRegistry,
 } from '../store/agents.js';
-import { loadJson } from '../utils/json.js';
+import {
+  addSkillSource as addSourceDir,
+  getSkillFile,
+  importSkillDir,
+  listSkillSources,
+  listSkills,
+  parseSkillDescription,
+  removeSkill,
+  skillMirrorPath,
+} from '../store/skills.js';
+import { skillsCacheDir } from '../store/paths.js';
 import type { EventRecord, RegisteredAgent } from '../types.js';
 
 const DB_PATH = path.join(DATA_DIR, 'messages.db');
@@ -393,6 +399,10 @@ function cronToMs(cron: string): number {
 
 // ─── Skills ─────────────────────────────────────────────────────────────────
 
+// Thin wrappers over store/skills. Installed skills live in the config
+// database; `path` names their mirrored copy under var/cache/skills, which is
+// what the SDK actually opens.
+
 export interface SkillInfo {
   name: string;
   description: string;
@@ -407,75 +417,28 @@ export interface SkillSource {
   builtin: boolean;
 }
 
-const SKILLS_DIR = BEARCLAW_SKILLS_DIR;
-const SKILL_SOURCES_PATH = path.join(CONFIG_DIR, 'skill_sources.json');
-const SKILL_INSTALL_META_PATH = path.join(
-  CONFIG_DIR,
-  'skill_install_meta.json',
-);
 const CLAUDE_SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 
-function parseSkillDescription(content: string): string {
-  const lines = content.split('\n');
-  for (const line of lines) {
-    const match = line.match(/^description:\s*(.+)/i);
-    if (match) return match[1].trim().replace(/^["']|["']$/g, '');
-  }
-  // Fallback: first non-empty, non-heading line
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('---')) {
-      return trimmed.slice(0, 80);
-    }
-  }
-  return '';
+function sourceLabel(dir: string): string {
+  if (dir === CLAUDE_SKILLS_DIR) return 'Claude Code';
+  return path.basename(path.dirname(dir)) + '/' + path.basename(dir);
 }
 
 export function getInstalledSkills(): SkillInfo[] {
-  if (!fs.existsSync(SKILLS_DIR)) return [];
-  const skills: SkillInfo[] = [];
-  try {
-    const entries = [...fs.readdirSync(SKILLS_DIR, { withFileTypes: true })]
-      .filter((e) => e.isDirectory())
-      .sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      const skillMd = path.join(SKILLS_DIR, entry.name, 'SKILL.md');
-      if (!fs.existsSync(skillMd)) continue;
-      const content = fs.readFileSync(skillMd, 'utf-8');
-      skills.push({
-        name: entry.name,
-        description: parseSkillDescription(content),
-        path: skillMd,
-        installed: true,
-        source: '',
-      });
-    }
-  } catch {
-    // ignore read errors
-  }
-  return skills;
-}
-
-type SkillInstallMeta = Record<string, { sourcePath: string }>;
-
-function getSkillInstallMeta(): SkillInstallMeta {
-  return loadJson<SkillInstallMeta>(SKILL_INSTALL_META_PATH, {});
-}
-
-function setSkillInstallMeta(meta: SkillInstallMeta): void {
-  fs.mkdirSync(path.dirname(SKILL_INSTALL_META_PATH), { recursive: true });
-  fs.writeFileSync(SKILL_INSTALL_META_PATH, JSON.stringify(meta, null, 2));
-}
-
-function getSkillSources(): string[] {
-  return loadJson<string[]>(SKILL_SOURCES_PATH, []);
+  return listSkills().map((s) => ({
+    name: s.name,
+    description: s.description,
+    path: skillMirrorPath(s.name),
+    installed: true,
+    source: '',
+  }));
 }
 
 export function getAllSkillSources(): SkillSource[] {
-  const userDirs = getSkillSources();
+  const userDirs = listSkillSources();
   const userSources = userDirs.map((dir) => ({
     dir,
-    label: path.basename(path.dirname(dir)) + '/' + path.basename(dir),
+    label: sourceLabel(dir),
     builtin: false,
   }));
   const builtins: SkillSource[] = userDirs.includes(CLAUDE_SKILLS_DIR)
@@ -484,13 +447,11 @@ export function getAllSkillSources(): SkillSource[] {
   return [...userSources, ...builtins];
 }
 
+// Uninstalled skills are still read straight off disk: they have no rows yet.
 export function getAvailableSkillsForSource(sourceDir: string): SkillInfo[] {
-  if (!fs.existsSync(sourceDir)) return [];
-  const installed = new Set(getInstalledSkills().map((s) => s.name));
-  const sourceLabel =
-    sourceDir === CLAUDE_SKILLS_DIR
-      ? 'Claude Code'
-      : path.basename(path.dirname(sourceDir)) + '/' + path.basename(sourceDir);
+  if (!sourceDir || !fs.existsSync(sourceDir)) return [];
+  const installed = new Set(listSkills().map((s) => s.name));
+  const label = sourceLabel(sourceDir);
   const skills: SkillInfo[] = [];
   try {
     const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
@@ -501,13 +462,12 @@ export function getAvailableSkillsForSource(sourceDir: string): SkillInfo[] {
       const skillMd = path.join(sourceDir, entry.name, 'SKILL.md');
       if (!fs.existsSync(skillMd)) continue;
       if (installed.has(entry.name)) continue;
-      const content = fs.readFileSync(skillMd, 'utf-8');
       skills.push({
         name: entry.name,
-        description: parseSkillDescription(content),
+        description: parseSkillDescription(fs.readFileSync(skillMd, 'utf-8')),
         path: skillMd,
         installed: false,
-        source: sourceLabel,
+        source: label,
       });
     }
   } catch {
@@ -516,20 +476,18 @@ export function getAvailableSkillsForSource(sourceDir: string): SkillInfo[] {
   return skills;
 }
 
+// Re-import every installed skill from the directory it came from, falling
+// back to a matching directory under any registered source.
 export function syncInstalledSkills(): { synced: string[]; skipped: string[] } {
-  const meta = getSkillInstallMeta();
-  const installed = getInstalledSkills();
-  const allSources = getAllSkillSources();
+  const sources = getAllSkillSources();
   const synced: string[] = [];
   const skipped: string[] = [];
 
-  for (const skill of installed) {
-    const knownSource = meta[skill.name]?.sourcePath;
-    let sourcePath = knownSource;
-
+  for (const skill of listSkills()) {
+    let sourcePath = skill.sourcePath ?? undefined;
     if (!sourcePath || !fs.existsSync(sourcePath)) {
-      // Fallback: search all sources
-      for (const src of allSources) {
+      sourcePath = undefined;
+      for (const src of sources) {
         const candidate = path.join(src.dir, skill.name, 'SKILL.md');
         if (fs.existsSync(candidate)) {
           sourcePath = candidate;
@@ -537,27 +495,18 @@ export function syncInstalledSkills(): { synced: string[]; skipped: string[] } {
         }
       }
     }
-
-    if (!sourcePath || !fs.existsSync(sourcePath)) {
+    if (!sourcePath) {
       skipped.push(skill.name);
       continue;
     }
-
-    const sourceDir = path.dirname(sourcePath);
-    const destDir = path.join(SKILLS_DIR, skill.name);
     try {
-      fs.rmSync(destDir, { recursive: true, force: true });
-      fs.mkdirSync(destDir, { recursive: true });
-      fs.cpSync(sourceDir, destDir, { recursive: true });
+      importSkillDir(path.dirname(sourcePath), skill.name, sourcePath);
       synced.push(skill.name);
-      // Update metadata with confirmed source
-      meta[skill.name] = { sourcePath };
     } catch {
       skipped.push(skill.name);
     }
   }
 
-  setSkillInstallMeta(meta);
   return { synced, skipped };
 }
 
@@ -565,35 +514,28 @@ export function addSkillSource(dir: string): void {
   const resolved = dir.startsWith('~/')
     ? path.join(os.homedir(), dir.slice(2))
     : dir;
-  const sources = getSkillSources();
-  if (!sources.includes(resolved)) {
-    sources.push(resolved);
-    fs.mkdirSync(path.dirname(SKILL_SOURCES_PATH), { recursive: true });
-    fs.writeFileSync(SKILL_SOURCES_PATH, JSON.stringify(sources, null, 2));
-  }
+  addSourceDir(resolved);
 }
 
 export function installSkill(sourcePath: string, name: string): void {
-  const sourceDir = path.dirname(sourcePath);
-  const destDir = path.join(SKILLS_DIR, name);
-  fs.mkdirSync(destDir, { recursive: true });
-  fs.cpSync(sourceDir, destDir, { recursive: true });
-  const meta = getSkillInstallMeta();
-  meta[name] = { sourcePath };
-  setSkillInstallMeta(meta);
+  importSkillDir(path.dirname(sourcePath), name, sourcePath);
 }
 
 export function uninstallSkill(name: string): void {
-  const dir = path.join(SKILLS_DIR, name);
-  if (fs.existsSync(dir)) {
-    fs.rmSync(dir, { recursive: true });
-  }
-  const meta = getSkillInstallMeta();
-  delete meta[name];
-  setSkillInstallMeta(meta);
+  removeSkill(name);
 }
 
+// Installed skills answer from the database; anything else is a source file
+// still sitting on disk.
 export function readSkillContent(skillPath: string): string {
+  const mirror = skillsCacheDir();
+  const rel = path.relative(mirror, skillPath);
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+    const parts = rel.split(path.sep);
+    const file = getSkillFile(parts[0], parts.slice(1).join('/'));
+    if (file) return file.content.toString('utf-8');
+    return '(unable to read file)';
+  }
   try {
     return fs.readFileSync(skillPath, 'utf-8');
   } catch {

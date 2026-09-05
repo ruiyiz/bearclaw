@@ -87,6 +87,12 @@ import {
   type AgentEntryPatch,
 } from '../admin/data.js';
 import {
+  deleteSkillFile,
+  getSkillFile,
+  listSkillFiles,
+  putSkillFile,
+} from '../store/skills.js';
+import {
   createContextFile,
   deleteContextFile,
   listContextFiles,
@@ -221,8 +227,12 @@ add('POST', /^\/api\/admin\/skills\/install$/, async (req, res) => {
   const body = (await readBody(req)) as { sourcePath?: string; name?: string };
   if (!body.sourcePath || !body.name)
     return json(res, 400, { error: 'missing fields' });
-  installSkill(body.sourcePath, body.name);
-  json(res, 200, { ok: true });
+  try {
+    installSkill(body.sourcePath, body.name);
+    json(res, 200, { ok: true });
+  } catch (err) {
+    json(res, 400, { error: String(err) });
+  }
 });
 
 add('POST', /^\/api\/admin\/skills\/uninstall$/, async (req, res) => {
@@ -241,6 +251,74 @@ add('POST', /^\/api\/admin\/skills\/sources$/, async (req, res) => {
   if (!body.dir) return json(res, 400, { error: 'missing dir' });
   addSkillSource(body.dir);
   json(res, 200, { ok: true });
+});
+
+const MAX_SKILL_FILE_BYTES = 1024 * 1024;
+
+function parseSkillFileQuery(
+  url: URL,
+): { name: string; relpath: string } | null {
+  const name = url.searchParams.get('name') || '';
+  const relpath = url.searchParams.get('path') || '';
+  if (!name || !relpath) return null;
+  return { name, relpath };
+}
+
+add('GET', /^\/api\/admin\/skills\/files$/, (_req, res, url) => {
+  const name = url.searchParams.get('name') || '';
+  if (!name) return json(res, 400, { error: 'missing name' });
+  json(res, 200, { name, files: listSkillFiles(name) });
+});
+
+add('GET', /^\/api\/admin\/skills\/file$/, (_req, res, url) => {
+  const q = parseSkillFileQuery(url);
+  if (!q) return json(res, 400, { error: 'missing fields' });
+  const file = getSkillFile(q.name, q.relpath);
+  if (!file) return json(res, 404, { error: 'file not found' });
+  // Only text comes back as content; anything large or non-utf8 is flagged so
+  // the editor refuses to mangle it.
+  const text =
+    file.content.length <= MAX_SKILL_FILE_BYTES
+      ? file.content.toString('utf-8')
+      : null;
+  const binary =
+    text === null || !Buffer.from(text, 'utf-8').equals(file.content);
+  json(res, 200, {
+    name: q.name,
+    path: q.relpath,
+    mode: file.mode,
+    size: file.content.length,
+    updatedAt: file.updatedAt,
+    binary,
+    content: binary ? '' : text,
+  });
+});
+
+add('PUT', /^\/api\/admin\/skills\/file$/, async (req, res) => {
+  const body = (await readBody(req)) as {
+    name?: string;
+    path?: string;
+    content?: string;
+  };
+  if (!body.name || !body.path || typeof body.content !== 'string')
+    return json(res, 400, { error: 'missing fields' });
+  try {
+    const meta = putSkillFile(body.name, body.path, body.content);
+    json(res, 200, { ok: true, ...meta });
+  } catch (err) {
+    json(res, 400, { error: String(err) });
+  }
+});
+
+add('DELETE', /^\/api\/admin\/skills\/file$/, (_req, res, url) => {
+  const q = parseSkillFileQuery(url);
+  if (!q) return json(res, 400, { error: 'missing fields' });
+  try {
+    deleteSkillFile(q.name, q.relpath);
+    json(res, 200, { ok: true });
+  } catch (err) {
+    json(res, 400, { error: String(err) });
+  }
 });
 
 add('GET', /^\/api\/admin\/events$/, (_req, res, url) => {

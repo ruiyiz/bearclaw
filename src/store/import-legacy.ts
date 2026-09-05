@@ -11,6 +11,7 @@ import {
 import { getConfigDb, initConfigDb } from './config-db.js';
 import { materializeAll } from './materialize.js';
 import { BEARCLAW_HOME } from './paths.js';
+import { parseSkillDescription, walkSkillDir } from './skills.js';
 import {
   PASSWORD_HASH_KEY,
   getSetting,
@@ -103,22 +104,6 @@ function isZeroByte(file: string): boolean {
   }
 }
 
-// Same rules as admin/data.ts. Moves to store/skills.ts in a later phase.
-function parseSkillDescription(content: string): string {
-  const lines = content.split('\n');
-  for (const line of lines) {
-    const match = line.match(/^description:\s*(.+)/i);
-    if (match) return match[1].trim().replace(/^["']|["']$/g, '');
-  }
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('---')) {
-      return trimmed.slice(0, 80);
-    }
-  }
-  return '';
-}
-
 function detectLegacyPaths(home: string): string[] {
   const found: string[] = [];
   const always = [
@@ -143,31 +128,6 @@ function detectLegacyPaths(home: string): string[] {
   if (fs.existsSync(path.join(home, 'var', 'initial-password')))
     found.push('var/initial-password');
   return found;
-}
-
-function walkSkillFiles(
-  root: string,
-  rel = '',
-): { relpath: string; abs: string; mode: number }[] {
-  const out: { relpath: string; abs: string; mode: number }[] = [];
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.name.startsWith('.')) continue;
-    if (entry.isSymbolicLink()) continue;
-    const childRel = rel ? path.posix.join(rel, entry.name) : entry.name;
-    const abs = path.join(root, childRel);
-    if (entry.isDirectory()) {
-      out.push(...walkSkillFiles(root, childRel));
-    } else if (entry.isFile()) {
-      out.push({ relpath: childRel, abs, mode: fs.statSync(abs).mode & 0o777 });
-    }
-  }
-  return out;
 }
 
 function legacyDirName(home: string): string {
@@ -415,7 +375,7 @@ function importSkills(
         ts,
       );
       let files = 0;
-      for (const file of walkSkillFiles(dir)) {
+      for (const file of walkSkillDir(dir)) {
         const info = fileStmt.run(
           entry.name,
           file.relpath,

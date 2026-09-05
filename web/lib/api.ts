@@ -15,6 +15,23 @@ export interface SkillSource {
   builtin: boolean;
 }
 
+export interface SkillFileInfo {
+  relpath: string;
+  mode: number;
+  size: number;
+  updatedAt: string;
+}
+
+export interface SkillFileContent {
+  name: string;
+  path: string;
+  mode: number;
+  size: number;
+  updatedAt: string;
+  binary: boolean;
+  content: string;
+}
+
 export interface EventRecord {
   id: number;
   type: string;
@@ -437,6 +454,25 @@ export const api = {
     ),
   addSkillSource: (dir: string) =>
     send<{ ok: boolean }>('/api/admin/skills/sources', 'POST', { dir }),
+  skillFiles: (name: string) =>
+    get<{ name: string; files: SkillFileInfo[] }>(
+      `/api/admin/skills/files?name=${encodeURIComponent(name)}`,
+    ),
+  skillFileRead: (name: string, path: string) =>
+    get<SkillFileContent>(
+      `/api/admin/skills/file?name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}`,
+    ),
+  skillFileWrite: (name: string, path: string, content: string) =>
+    send<{ ok: boolean; updatedAt: string }>('/api/admin/skills/file', 'PUT', {
+      name,
+      path,
+      content,
+    }),
+  skillFileDelete: (name: string, path: string) =>
+    send<{ ok: boolean }>(
+      `/api/admin/skills/file?name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}`,
+      'DELETE',
+    ),
   events: (limit = 200) =>
     get<{ events: EventRecord[] }>(`/api/admin/events?limit=${limit}`),
   agents: () => get<{ agents: RegisteredAgent[] }>('/api/admin/agents'),

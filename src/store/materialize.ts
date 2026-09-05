@@ -112,6 +112,50 @@ export function materializeContext(home?: string): void {
   }
 }
 
+function skillsRoot(home?: string): string {
+  return home ? path.join(home, 'var', 'cache', 'skills') : skillsCacheDir();
+}
+
+// Full rebuild into a sibling temp tree, then an atomic-ish swap. A reader that
+// opened a file keeps its handle; the next open sees the new tree. With no
+// skills at all the directory still has to exist, or the per-agent symlink
+// dangles and the SDK refuses to walk it.
+export function materializeSkills(home?: string): void {
+  const root = skillsRoot(home);
+  const tmp = `${root}.tmp-${process.pid}`;
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+
+  const db = tryGetConfigDb();
+  const rows = db
+    ? (db
+        .prepare(
+          'SELECT skill, relpath, content, mode FROM skill_files ORDER BY skill, relpath',
+        )
+        .all() as {
+        skill: string;
+        relpath: string;
+        content: Buffer;
+        mode: number;
+      }[])
+    : [];
+
+  try {
+    for (const row of rows) {
+      const target = path.join(tmp, row.skill, ...row.relpath.split('/'));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, row.content);
+      fs.chmodSync(target, row.mode & 0o777);
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.renameSync(tmp, root);
+  } catch (err) {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    logger.warn({ err, root }, 'could not rebuild the skills mirror');
+    fs.mkdirSync(root, { recursive: true });
+  }
+}
+
 function ensureSymlink(link: string, target: string): void {
   let current: fs.Stats | null = null;
   try {
@@ -151,6 +195,7 @@ export function ensureAgentVarLayout(folder: string): void {
 
 export function materializeAll(home?: string): void {
   const cache = home ? path.join(home, 'var', 'cache') : cacheDir();
-  fs.mkdirSync(path.join(cache, 'skills'), { recursive: true });
+  fs.mkdirSync(cache, { recursive: true });
+  materializeSkills(home);
   materializeContext(home);
 }
