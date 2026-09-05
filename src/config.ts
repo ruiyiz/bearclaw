@@ -7,6 +7,7 @@ import {
   CACHE_DIR,
   DATA_DIR,
   LOG_DIR,
+  MAIN_AGENT_FOLDER,
   RUN_DIR,
   TMP_DIR,
   VAR_DIR,
@@ -20,6 +21,7 @@ export {
   CACHE_DIR,
   DATA_DIR,
   LOG_DIR,
+  MAIN_AGENT_FOLDER,
   RUN_DIR,
   TMP_DIR,
   VAR_DIR,
@@ -48,8 +50,6 @@ export const SKILLS_DIR = path.resolve(BEARCLAW_HOME, 'skills');
 export const WORKFLOWS_DIR = path.resolve(
   process.env.BEARCLAW_WORKFLOWS_DIR || path.join(BEARCLAW_HOME, 'workflows'),
 );
-
-export const MAIN_AGENT_FOLDER = 'main';
 
 // Origin used to build links the owner clicks from a chat message. Point it at
 // the tunnel hostname when the UI is reachable from outside.

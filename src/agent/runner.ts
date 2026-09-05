@@ -13,16 +13,17 @@ import {
 
 import {
   AGENT_TIMEOUT,
-  CONTEXT_DIR,
   DEFAULT_MODEL,
   RUN_DIR,
   TIMEZONE,
   requireModel,
   WARM_START_BUDGET_BYTES,
   WARM_START_DAYS,
-  agentDir as agentPersistentDir,
   agentVarDir,
 } from '../config.js';
+import { getContextFile } from '../store/context.js';
+import { ensureAgentVarLayout } from '../store/materialize.js';
+import { createCacheGuardHook } from './hooks.js';
 import { createIpcMcp } from './ipc-mcp.js';
 import { emitEvent, getDb, type StoredMessage } from '../db.js';
 import { logger } from '../logger.js';
@@ -363,21 +364,12 @@ export function buildContextPrompt(agentFolder: string): string {
   const parts: string[] = [];
 
   for (const file of ['AGENTS.md', 'CONTEXT.md', 'SOUL.md', 'USER.md']) {
-    const filePath = path.join(CONTEXT_DIR, file);
-    if (fs.existsSync(filePath)) {
-      const content = fs.readFileSync(filePath, 'utf-8').trim();
-      if (content) parts.push(content);
-    }
-  }
-
-  const identityPath = path.join(
-    agentPersistentDir(agentFolder),
-    'IDENTITY.md',
-  );
-  if (fs.existsSync(identityPath)) {
-    const content = fs.readFileSync(identityPath, 'utf-8').trim();
+    const content = getContextFile('shared', '', file)?.trim();
     if (content) parts.push(content);
   }
+
+  const identity = getContextFile('agent', agentFolder, 'IDENTITY.md')?.trim();
+  if (identity) parts.push(identity);
 
   return parts.join('\n\n---\n\n');
 }
@@ -388,13 +380,9 @@ export async function runContainerAgent(
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
-  const persistentDir = agentPersistentDir(group.folder);
   const varDir = agentVarDir(group.folder);
-  fs.mkdirSync(persistentDir, { recursive: true });
-  fs.mkdirSync(varDir, { recursive: true });
-
+  ensureAgentVarLayout(group.folder);
   const logsDir = path.join(varDir, 'logs');
-  fs.mkdirSync(logsDir, { recursive: true });
 
   // Set up per-agent IPC namespace
   const agentIpcDir = path.join(RUN_DIR, 'ipc', group.folder);
@@ -516,6 +504,7 @@ export async function runContainerAgent(
               ],
             },
           ],
+          PreToolUse: [{ hooks: [createCacheGuardHook()] }],
         },
       },
     })) {

@@ -3,27 +3,16 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
-  AUTH_DIR,
-  CACHE_DIR,
-  CONFIG_DIR,
-  CONTEXT_DIR,
   DATA_DIR,
   DISPLAY_NAME,
-  AGENTS_DIR,
-  AGENTS_VAR_DIR,
   IPC_POLL_INTERVAL,
   IMESSAGE_ENABLED,
-  LOG_DIR,
   MAIN_AGENT_FOLDER,
-  BEARCLAW_HOME,
   POLL_INTERVAL,
   RUN_DIR,
-  SKILLS_DIR,
   TELEGRAM_BOT_POOL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
-  TMP_DIR,
-  VAR_DIR,
   STT_ECHO_ENABLED,
   TELEGRAM_STREAM_MODE,
   agentVarDir,
@@ -49,7 +38,9 @@ import {
 } from './channels/web.js';
 import { attachOutboundPersistence } from './channels/outbound-persist.js';
 import { startHttpServer } from './server/http.js';
-import { isNestedRegistry, resolveRegistry } from './agent-registry.js';
+import { resolveRegistry } from './agent-registry.js';
+import { listAgents, loadRegistry, saveRegistry } from './store/agents.js';
+import { ensureAgentVarLayout, materializeAll } from './store/materialize.js';
 import { guessMimetype, resolveMediaSource } from './media/source.js';
 import {
   getAllChats,
@@ -114,36 +105,6 @@ const lastAutoReply: Record<string, string> = {}; // chat_jid → ISO timestamp 
 
 const channels: Channel[] = [];
 
-function ensureLayoutDirs(): void {
-  const dirs = [
-    CONFIG_DIR,
-    CONTEXT_DIR,
-    AGENTS_DIR,
-    SKILLS_DIR,
-    VAR_DIR,
-    CACHE_DIR,
-    DATA_DIR,
-    RUN_DIR,
-    LOG_DIR,
-    TMP_DIR,
-    AUTH_DIR,
-    AGENTS_VAR_DIR,
-  ];
-  for (const d of dirs) fs.mkdirSync(d, { recursive: true });
-
-  // Maintain the .claude/skills symlink for SDK auto-discovery.
-  const symlinkDir = path.join(BEARCLAW_HOME, '.claude');
-  const symlinkPath = path.join(symlinkDir, 'skills');
-  if (!fs.existsSync(symlinkPath) && fs.existsSync(SKILLS_DIR)) {
-    fs.mkdirSync(symlinkDir, { recursive: true });
-    try {
-      fs.symlinkSync('../skills', symlinkPath);
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
 function loadState(): void {
   const statePath = path.join(DATA_DIR, 'router_state.json');
   const state = loadJson<{
@@ -175,16 +136,7 @@ function loadState(): void {
   }
   agentModels = loadJson(path.join(DATA_DIR, 'models.json'), {});
   agentEfforts = loadJson(path.join(DATA_DIR, 'efforts.json'), {});
-  const rawRegistry = loadJson<unknown>(
-    path.join(CONFIG_DIR, 'registered_agents.json'),
-    {},
-  );
-  if (!isNestedRegistry(rawRegistry)) {
-    throw new Error(
-      'registered_agents.json is in the old flat format. Run: npx tsx src/scripts/migrate-registered-agents.ts',
-    );
-  }
-  agentRegistry = rawRegistry as AgentRegistry;
+  agentRegistry = loadRegistry();
   rebuildResolved();
   logger.info(
     {
@@ -203,7 +155,7 @@ function rebuildResolved(): void {
 
 // Persist the nested registry and rebuild the resolved view.
 function persistRegistry(): void {
-  saveJson(path.join(CONFIG_DIR, 'registered_agents.json'), agentRegistry);
+  saveRegistry(agentRegistry);
   rebuildResolved();
 }
 
@@ -282,12 +234,7 @@ function registerAgent(jid: string, agent: RegisteredAgent): void {
   if (agent.containerConfig) entry.containerConfig = agent.containerConfig;
   entry.channels[channelKey] = ch;
   persistRegistry();
-
-  const persistentDir = path.join(AGENTS_DIR, folder);
-  fs.mkdirSync(persistentDir, { recursive: true });
-  fs.mkdirSync(path.join(agentVarDir(folder), 'logs'), {
-    recursive: true,
-  });
+  ensureAgentVarLayout(folder);
 
   logger.info({ jid, name: agent.name, folder }, 'Agent registered');
 }
@@ -1303,7 +1250,10 @@ async function startMessageLoop(): Promise<void> {
 }
 
 export async function main(): Promise<void> {
-  ensureLayoutDirs();
+  // The database is the source of truth; rebuild the read-only mirrors and the
+  // per-agent cwd layout before anything opens a session against them.
+  materializeAll();
+  for (const folder of listAgents()) ensureAgentVarLayout(folder);
   if (!DEFAULT_MODEL) {
     logger.warn(
       { onboarded: isOnboarded() },
@@ -1416,6 +1366,10 @@ export async function main(): Promise<void> {
     registerWebAgent: (folder: string) => {
       ensureWebAgentRegistered(folder);
     },
+    reloadRegistry: () => {
+      agentRegistry = loadRegistry();
+      rebuildResolved();
+    },
     addRegisteredAgent: (jid: string, agent: RegisteredAgent) => {
       registerAgent(jid, agent);
     },
@@ -1450,12 +1404,13 @@ export async function main(): Promise<void> {
       const entry = agentRegistry[existing.folder];
       if (entry) {
         delete entry.channels[channelKeyForJid(jid)];
-        // Drop the folder entry once its last routing channel is gone (an
-        // email-only channels map would leave a non-routable folder).
+        // Once the last routing channel is gone the folder is unwired, but the
+        // row stays: it still owns context, var/ state and a display name.
+        // (An email-only channels map would leave a non-routable folder.)
         const routingLeft = Object.keys(entry.channels).some(
           (k) => k !== 'email',
         );
-        if (!routingLeft) delete agentRegistry[existing.folder];
+        if (!routingLeft) entry.channels = {};
       }
       persistRegistry();
       logger.info({ jid }, 'Agent unwired');
@@ -1464,8 +1419,9 @@ export async function main(): Promise<void> {
       const removed = Object.keys(registeredAgents).filter(
         (jid) => registeredAgents[jid].folder === folder,
       );
-      delete agentRegistry[folder];
-      if (removed.length > 0) persistRegistry();
+      const entry = agentRegistry[folder];
+      if (entry) entry.channels = {};
+      persistRegistry();
       logger.info({ folder, count: removed.length }, 'Agent removed (jids)');
       return removed;
     },

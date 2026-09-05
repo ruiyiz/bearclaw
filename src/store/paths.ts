@@ -5,9 +5,13 @@ import path from 'node:path';
 // var, derives the rest, and never throws — bootstrap imports it before
 // anything else, so it must stay free of side effects.
 
-export const BEARCLAW_HOME = path.resolve(
-  process.env.BEARCLAW_HOME || path.join(os.homedir(), '.bearclaw'),
-);
+function resolveHome(): string {
+  return path.resolve(
+    process.env.BEARCLAW_HOME || path.join(os.homedir(), '.bearclaw'),
+  );
+}
+
+export const BEARCLAW_HOME = resolveHome();
 
 export const CONFIG_DB_PATH = path.join(BEARCLAW_HOME, 'bearclaw.db');
 
@@ -22,5 +26,16 @@ export const TMP_DIR = path.join(VAR_DIR, 'tmp');
 export const AUTH_DIR = path.join(VAR_DIR, 'auth');
 export const AGENTS_VAR_DIR = path.join(VAR_DIR, 'agents');
 
+export const MAIN_AGENT_FOLDER = 'main';
+
+// Late-bound variants. BEARCLAW_HOME is fixed for the life of a real process,
+// but tests re-point it after these modules are already imported, so anything
+// that touches the mirrors resolves its paths per call instead of at import.
+export const varDir = (): string => path.join(resolveHome(), 'var');
+export const cacheDir = (): string => path.join(varDir(), 'cache');
+export const contextCacheDir = (): string => path.join(cacheDir(), 'context');
+export const skillsCacheDir = (): string => path.join(cacheDir(), 'skills');
+export const agentsVarDir = (): string => path.join(varDir(), 'agents');
+
 export const agentVarDir = (folder: string): string =>
-  path.join(AGENTS_VAR_DIR, folder);
+  path.join(agentsVarDir(), folder);

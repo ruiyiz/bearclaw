@@ -4,18 +4,20 @@ import os from 'os';
 import path from 'path';
 
 import {
-  AGENTS_DIR,
-  AGENTS_VAR_DIR,
   CONFIG_DIR,
-  CONTEXT_DIR,
   DATA_DIR,
-  MAIN_AGENT_FOLDER,
   SKILLS_DIR as BEARCLAW_SKILLS_DIR,
-  agentDir,
 } from '../config.js';
-import { isNestedRegistry, resolveRegistry } from '../agent-registry.js';
+import { resolveRegistry } from '../agent-registry.js';
+import {
+  agentExists,
+  createAgent,
+  deleteAgent,
+  listAgents,
+  loadRegistry,
+} from '../store/agents.js';
 import { loadJson } from '../utils/json.js';
-import type { AgentRegistry, EventRecord, RegisteredAgent } from '../types.js';
+import type { EventRecord, RegisteredAgent } from '../types.js';
 
 const DB_PATH = path.join(DATA_DIR, 'messages.db');
 
@@ -51,18 +53,11 @@ export function getEventsByType(type: string, limit = 200): EventRecord[] {
 
 // ─── Agents ─────────────────────────────────────────────────────────────────
 
-const REGISTERED_AGENTS_PATH = path.join(CONFIG_DIR, 'registered_agents.json');
-const AGENT_FOLDER_RE = /^[A-Za-z0-9._-]+$/;
-
-// Resolve the nested on-disk registry to the flat jid-keyed view. (The running
-// process keeps this view in memory; admin/data reads the file directly for
+// Resolve the nested registry to the flat jid-keyed view. (The running process
+// keeps this view in memory; admin/data reads the database directly for
 // out-of-band tools and health checks.)
 function loadRegisteredAgents(): Record<string, RegisteredAgent> {
-  const raw = loadJson<unknown>(REGISTERED_AGENTS_PATH, {});
-  if (isNestedRegistry(raw)) {
-    return resolveRegistry(raw as AgentRegistry);
-  }
-  return {};
+  return resolveRegistry(loadRegistry());
 }
 
 export function getRegisteredAgents(): RegisteredAgent[] {
@@ -147,17 +142,8 @@ export function getAvailableChannels(): AvailableChannel[] {
 }
 
 // ─── Agent folder management ────────────────────────────────────────────────
-
-function validateFolder(folder: string): void {
-  if (!folder || !AGENT_FOLDER_RE.test(folder)) {
-    throw new Error(
-      'invalid folder (allowed: letters, digits, dot, dash, underscore)',
-    );
-  }
-}
-
-const DEFAULT_IDENTITY = (name: string): string =>
-  `# ${name}\n\nDescribe this agent's identity, role, and behaviour here.\n`;
+// Thin wrappers over store/agents: the `agents` table is the registry, and an
+// agent's markdown lives in context_files, so there is no folder to create.
 
 export interface CreateAgentFolderOpts {
   folder: string;
@@ -166,66 +152,24 @@ export interface CreateAgentFolderOpts {
 }
 
 export function agentFolderExists(folder: string): boolean {
-  try {
-    return fs.statSync(agentDir(folder)).isDirectory();
-  } catch {
-    return false;
-  }
+  return agentExists(folder);
 }
 
 export function listAgentFolders(): string[] {
-  if (!fs.existsSync(AGENTS_DIR)) return [];
-  return fs
-    .readdirSync(AGENTS_DIR, { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name)
-    .sort((a, b) => a.localeCompare(b));
+  return listAgents();
 }
 
 export function createAgentFolder(opts: CreateAgentFolderOpts): void {
-  validateFolder(opts.folder);
-  if (opts.templateFolder) validateFolder(opts.templateFolder);
-  const dest = agentDir(opts.folder);
-  if (fs.existsSync(dest)) {
-    throw new Error(`agent folder already exists: ${opts.folder}`);
-  }
-  fs.mkdirSync(dest, { recursive: true });
-  if (opts.templateFolder) {
-    const src = agentDir(opts.templateFolder);
-    if (!fs.existsSync(src)) {
-      throw new Error(`template folder not found: ${opts.templateFolder}`);
-    }
-    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      if (!entry.name.toLowerCase().endsWith('.md')) continue;
-      fs.copyFileSync(path.join(src, entry.name), path.join(dest, entry.name));
-    }
-  } else {
-    fs.writeFileSync(
-      path.join(dest, 'IDENTITY.md'),
-      DEFAULT_IDENTITY(opts.displayName),
-    );
-  }
+  createAgent(opts.folder, opts.displayName, {
+    template: opts.templateFolder,
+  });
 }
 
 export function deleteAgentFolderDir(
   folder: string,
   opts: { includeVar?: boolean } = {},
 ): void {
-  validateFolder(folder);
-  if (folder === MAIN_AGENT_FOLDER) {
-    throw new Error('cannot delete main agent folder');
-  }
-  const dest = agentDir(folder);
-  if (fs.existsSync(dest)) {
-    fs.rmSync(dest, { recursive: true, force: true });
-  }
-  if (opts.includeVar) {
-    const varDest = path.join(AGENTS_VAR_DIR, folder);
-    if (fs.existsSync(varDest)) {
-      fs.rmSync(varDest, { recursive: true, force: true });
-    }
-  }
+  deleteAgent(folder, opts);
 }
 
 // Shape of an in-place patch for a registered agent entry. The runtime owns
@@ -655,139 +599,6 @@ export function readSkillContent(skillPath: string): string {
   } catch {
     return '(unable to read file)';
   }
-}
-
-// ─── Context files ──────────────────────────────────────────────────────────
-
-export type ContextScope = 'shared' | 'agent';
-
-export interface ContextFile {
-  scope: ContextScope;
-  folder: string | null; // null for shared
-  name: string;
-  path: string;
-  size: number;
-  modifiedAt: string;
-}
-
-export interface ContextListing {
-  shared: ContextFile[];
-  agents: Array<{ folder: string; files: ContextFile[] }>;
-}
-
-const NAME_RE = /^[A-Za-z0-9._-]+\.md$/;
-const FOLDER_RE = /^[A-Za-z0-9._-]+$/;
-
-function statContextFile(
-  scope: ContextScope,
-  folder: string | null,
-  name: string,
-  full: string,
-): ContextFile {
-  const st = fs.statSync(full);
-  return {
-    scope,
-    folder,
-    name,
-    path: full,
-    size: st.size,
-    modifiedAt: st.mtime.toISOString(),
-  };
-}
-
-function listMarkdownIn(dir: string): string[] {
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md'))
-    .map((e) => e.name)
-    .sort((a, b) => a.localeCompare(b));
-}
-
-export function listContextFiles(): ContextListing {
-  const shared = listMarkdownIn(CONTEXT_DIR).map((n) =>
-    statContextFile('shared', null, n, path.join(CONTEXT_DIR, n)),
-  );
-  const agents: Array<{ folder: string; files: ContextFile[] }> = [];
-  if (fs.existsSync(AGENTS_DIR)) {
-    const entries = fs
-      .readdirSync(AGENTS_DIR, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .sort((a, b) => a.name.localeCompare(b.name));
-    for (const e of entries) {
-      const agentDir = path.join(AGENTS_DIR, e.name);
-      const files = listMarkdownIn(agentDir).map((n) =>
-        statContextFile('agent', e.name, n, path.join(agentDir, n)),
-      );
-      agents.push({ folder: e.name, files });
-    }
-  }
-  return { shared, agents };
-}
-
-function resolveContextPath(
-  scope: ContextScope,
-  folder: string | null,
-  name: string,
-): string {
-  if (!NAME_RE.test(name)) throw new Error('invalid filename');
-  if (scope === 'shared') {
-    return path.join(CONTEXT_DIR, name);
-  }
-  if (!folder || !FOLDER_RE.test(folder)) throw new Error('invalid folder');
-  const agentDir = path.join(AGENTS_DIR, folder);
-  if (!fs.existsSync(agentDir) || !fs.statSync(agentDir).isDirectory()) {
-    throw new Error('agent folder not found');
-  }
-  return path.join(agentDir, name);
-}
-
-export function readContextFile(
-  scope: ContextScope,
-  folder: string | null,
-  name: string,
-): { content: string; modifiedAt: string } {
-  const full = resolveContextPath(scope, folder, name);
-  const st = fs.statSync(full);
-  const content = fs.readFileSync(full, 'utf-8');
-  return { content, modifiedAt: st.mtime.toISOString() };
-}
-
-export function writeContextFile(
-  scope: ContextScope,
-  folder: string | null,
-  name: string,
-  content: string,
-): { modifiedAt: string } {
-  const full = resolveContextPath(scope, folder, name);
-  const dir = path.dirname(full);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${full}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, content, 'utf-8');
-  fs.renameSync(tmp, full);
-  const st = fs.statSync(full);
-  return { modifiedAt: st.mtime.toISOString() };
-}
-
-export function createContextFile(
-  scope: ContextScope,
-  folder: string | null,
-  name: string,
-  content = '',
-): { modifiedAt: string } {
-  const full = resolveContextPath(scope, folder, name);
-  if (fs.existsSync(full)) throw new Error('file already exists');
-  return writeContextFile(scope, folder, name, content);
-}
-
-export function deleteContextFile(
-  scope: ContextScope,
-  folder: string | null,
-  name: string,
-): void {
-  const full = resolveContextPath(scope, folder, name);
-  if (!fs.existsSync(full)) throw new Error('file not found');
-  fs.unlinkSync(full);
 }
 
 // ─── Heartbeat ──────────────────────────────────────────────────────────────

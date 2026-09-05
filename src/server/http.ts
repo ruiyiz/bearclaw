@@ -10,7 +10,6 @@ import {
   CONFIG_DIR,
   DATA_DIR,
   MAIN_AGENT_FOLDER,
-  agentDir,
   agentVarDir,
 } from '../config.js';
 import { logger } from '../logger.js';
@@ -79,28 +78,33 @@ import {
   getAvailableSkillsForSource,
   getInstalledSkills,
   getRecentEvents,
-  createContextFile,
-  deleteContextFile,
   installSkill,
   listAgentFolders,
-  listContextFiles,
   normalizeChannelJid,
-  readContextFile,
   runHealthChecks,
   syncInstalledSkills,
   uninstallSkill,
-  writeContextFile,
   type AgentEntryPatch,
-  type ContextScope,
 } from '../admin/data.js';
+import {
+  createContextFile,
+  deleteContextFile,
+  listContextFiles,
+  readContextFile,
+  writeContextFile,
+  type ContextScope,
+} from '../store/context.js';
 import type { RegisteredAgent } from '../types.js';
 
 export interface HttpServerOpts {
   webChannel: WebChannel;
   registeredAgents: () => Record<string, RegisteredAgent>;
   registerWebAgent: (folder: string) => void;
-  // Admin-driven mutations. Each callback persists to registered_agents.json
-  // and updates the in-memory router map.
+  // Re-read the registry from the config database, for routes that change the
+  // `agents` table behind the router's back (deleting a folder).
+  reloadRegistry: () => void;
+  // Admin-driven mutations. Each callback persists the registry to the config
+  // database and updates the in-memory router map.
   addRegisteredAgent: (jid: string, agent: RegisteredAgent) => void;
   updateRegisteredAgent: (
     jid: string,
@@ -403,6 +407,7 @@ add(
     if (deleteFiles) {
       try {
         deleteAgentFolderDir(folder, { includeVar: deleteVar });
+        opts.reloadRegistry();
         filesDeleted = true;
       } catch (err) {
         return json(res, 200, {
@@ -417,7 +422,7 @@ add(
       ok: true,
       unwired: removed,
       filesDeleted,
-      folderPath: agentDir(folder),
+      folderPath: agentVarDir(folder),
     });
   },
 );

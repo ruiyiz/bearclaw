@@ -21,6 +21,12 @@ import {
 import { generateImage } from './image-gen.js';
 import { queryRecall, syncRecallIndex } from './recall-index.js';
 import { createWorkflowTools } from './workflow-tools.js';
+import {
+  contextList,
+  contextRead,
+  contextWrite,
+  type ContextToolCtx,
+} from './context-tools.js';
 import { logger } from '../logger.js';
 
 interface IpcMcpContext {
@@ -74,10 +80,27 @@ function injectSettingsHooks(
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
 }
 
+function textResult(text: string) {
+  return { content: [{ type: 'text' as const, text }] };
+}
+
+function errorResult(err: unknown) {
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: err instanceof Error ? err.message : String(err),
+      },
+    ],
+    isError: true,
+  };
+}
+
 export function createIpcMcp(ctx: IpcMcpContext) {
   const { chatJid, agentFolder, isMain, ipcDir, onSendMessage } = ctx;
   const messagesDir = path.join(ipcDir, 'messages');
   const tasksDir = path.join(ipcDir, 'tasks');
+  const toolCtx: ContextToolCtx = { agentFolder, isMain };
 
   return createSdkMcpServer({
     name: 'bearclaw',
@@ -601,6 +624,61 @@ and line range so follow-up Read calls can pull more context.`,
               { type: 'text', text: header + '\n' + blocks.join('\n\n') },
             ],
           };
+        },
+      ),
+
+      tool(
+        'context_list',
+        'List the context documents stored for this assistant: the shared files (AGENTS.md, CONTEXT.md, SOUL.md, USER.md, …) and the per-agent files (IDENTITY.md, …). These are injected into your system prompt at session start; read-only copies are mirrored at context/ in your working directory.',
+        {},
+        async () => textResult(contextList(toolCtx)),
+      ),
+
+      tool(
+        'context_read',
+        'Read one context document from the store. Use it before rewriting a file so you edit the current text rather than what was injected at session start.',
+        {
+          scope: z
+            .enum(['shared', 'agent'])
+            .describe('shared = everyone; agent = one agent folder'),
+          name: z
+            .string()
+            .describe('File name, e.g. "USER.md" or "IDENTITY.md"'),
+          folder: z
+            .string()
+            .optional()
+            .describe('Agent folder for scope="agent". Defaults to your own.'),
+        },
+        async (args) => {
+          try {
+            return textResult(contextRead(toolCtx, args));
+          } catch (err) {
+            return errorResult(err);
+          }
+        },
+      ),
+
+      tool(
+        'context_write',
+        `Write a context document. This is the ONLY way to change context — the files under context/ in your working directory are regenerated copies and edits to them are discarded.
+
+Use mode="append" to add a note or a newly learned fact (the common case), mode="replace" to rewrite a document wholesale. Shared files may only be written by the main agent; other agents write their own folder.`,
+        {
+          scope: z.enum(['shared', 'agent']),
+          name: z.string().describe('File name, e.g. "USER.md"'),
+          content: z.string().describe('Text to append, or the new full text'),
+          folder: z
+            .string()
+            .optional()
+            .describe('Agent folder for scope="agent". Defaults to your own.'),
+          mode: z.enum(['replace', 'append']).optional().default('append'),
+        },
+        async (args) => {
+          try {
+            return textResult(contextWrite(toolCtx, args));
+          } catch (err) {
+            return errorResult(err);
+          }
         },
       ),
 

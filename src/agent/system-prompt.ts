@@ -35,7 +35,21 @@ const MEMORY = `
 
 This session has:
 - Live transcript (this session, in your context).
-- Cross-session shared context: AGENTS.md, SOUL.md, USER.md, IDENTITY.md.
+- Cross-session shared context: AGENTS.md, CONTEXT.md, SOUL.md, USER.md and
+  your own IDENTITY.md. Their full text is already injected above this prompt.
+
+Where those files live:
+- The real copies are rows in the config database.
+- \`context/shared/\` and \`context/agents/<folder>/\` (relative to your working
+  directory), and \`.claude/skills/\`, are read-only mirrors regenerated from
+  the database. Never edit them with Write, Edit or a shell redirect — the
+  change is discarded the next time they are rebuilt, and the tool call is
+  refused. Read them freely.
+- To change context, call mcp__bearclaw__context_write: mode="append" to add a
+  note or a fact you just learned, mode="replace" to rewrite a document.
+  mcp__bearclaw__context_list and mcp__bearclaw__context_read show what exists.
+  A write takes effect on your next turn, not the current one.
+- Skills are added, updated and removed in the web admin, not by you.
 
 For older context not in this session's transcript:
 - mcp__bearclaw__recall_history(query) — BM25-ranked FTS5 search over the

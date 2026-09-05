@@ -21,12 +21,13 @@ import {
 import {
   AGENT_TIMEOUT,
   RUN_DIR,
-  agentDir as agentPersistentDir,
   agentVarDir,
   requireModel,
 } from '../config.js';
 import { logger } from '../logger.js';
+import { ensureAgentVarLayout } from '../store/materialize.js';
 import { RegisteredAgent } from '../types.js';
+import { createCacheGuardHook } from './hooks.js';
 import { createIpcMcp } from './ipc-mcp.js';
 import { loadUserMcpServers } from './mcp-config.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
@@ -195,9 +196,7 @@ export class AgentSession {
   start(): void {
     if (this.query || this.closed) return;
 
-    const persistentDir = agentPersistentDir(this.agent.folder);
-    fs.mkdirSync(persistentDir, { recursive: true });
-    fs.mkdirSync(this.varDir, { recursive: true });
+    ensureAgentVarLayout(this.agent.folder);
 
     const agentIpcDir = path.join(RUN_DIR, 'ipc', this.agent.folder);
     fs.mkdirSync(path.join(agentIpcDir, 'messages'), { recursive: true });
@@ -270,6 +269,7 @@ export class AgentSession {
               hooks: [createSessionStartHook(this.agent.folder, this.imJids)],
             },
           ],
+          PreToolUse: [{ hooks: [createCacheGuardHook()] }],
         },
       },
     });

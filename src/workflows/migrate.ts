@@ -1,12 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { AGENTS_DIR, CONFIG_DIR, TIMEZONE, VAR_DIR } from '../config.js';
+import { TIMEZONE, VAR_DIR } from '../config.js';
 import { getAllHandlers } from '../db.js';
 import { logger } from '../logger.js';
-import type { AgentRegistry, Handler } from '../types.js';
+import { loadRegistry, saveRegistry } from '../store/agents.js';
+import { getContextFile } from '../store/context.js';
+import { setSetting } from '../store/settings.js';
+import type { Handler } from '../types.js';
 import { intervalToCron } from '../utils/time.js';
-import { loadJson, saveJson } from '../utils/json.js';
+import { saveJson } from '../utils/json.js';
 import { ensureBuiltinWorkflows } from './builtins.js';
 import { getWorkflowRow } from './db.js';
 import { parseDefinition, type WorkflowDefinition } from './schema.js';
@@ -75,12 +78,7 @@ function handlerToDefinition(handler: Handler): WorkflowDefinition {
 }
 
 function heartbeatBrief(folder: string): string {
-  const file = path.join(AGENTS_DIR, folder, 'HEARTBEAT.md');
-  try {
-    return fs.readFileSync(file, 'utf-8').trim();
-  } catch {
-    return '';
-  }
+  return getContextFile('agent', folder, 'HEARTBEAT.md')?.trim() ?? '';
 }
 
 function checkinDefinition(
@@ -200,8 +198,8 @@ export function migrateHandlersToWorkflows(force = false): MigrationReport {
     }
   }
 
-  const registryPath = path.join(CONFIG_DIR, 'registered_agents.json');
-  const registry = loadJson<AgentRegistry>(registryPath, {} as AgentRegistry);
+  const registry = loadRegistry();
+  const registryBefore = JSON.stringify(registry);
   let registryChanged = false;
   const handlerStatus = new Map(getAllHandlers().map((h) => [h.id, h.status]));
 
@@ -223,14 +221,16 @@ export function migrateHandlersToWorkflows(force = false): MigrationReport {
     }
   }
   if (registryChanged) {
-    // The registry is hand-edited config; keep a copy before dropping the
-    // heartbeat blocks out of it.
+    // Keep the pre-migration registry before dropping the heartbeat blocks
+    // out of it.
     try {
-      fs.copyFileSync(registryPath, `${registryPath}.pre-workflows.bak`);
+      setSetting('bearclaw.registry_pre_workflows', registryBefore, {
+        secret: false,
+      });
     } catch (err) {
       logger.warn({ err }, 'workflow migration: registry backup failed');
     }
-    saveJson(registryPath, registry);
+    saveRegistry(registry);
   }
 
   saveJson(MARKER(), { migrated_at: new Date().toISOString(), ...report });

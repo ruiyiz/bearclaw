@@ -4,27 +4,18 @@ import path from 'node:path';
 
 import { resolveRegistry } from '../agent-registry.js';
 import { runContainerAgent } from '../agent/runner.js';
-import {
-  CONFIG_DIR,
-  DATA_DIR,
-  MAIN_AGENT_FOLDER,
-  PUBLIC_URL,
-  RUN_DIR,
-  WORKFLOWS_DIR,
-  agentDir,
-} from '../config.js';
+import { DATA_DIR, MAIN_AGENT_FOLDER, PUBLIC_URL, RUN_DIR } from '../config.js';
 import { emitEvent, getDb } from '../db.js';
 import { logger } from '../logger.js';
 import { signActionToken } from '../server/auth.js';
-import type { AgentRegistry, RegisteredAgent } from '../types.js';
+import { loadRegistry } from '../store/agents.js';
+import { getContextFile } from '../store/context.js';
+import type { RegisteredAgent } from '../types.js';
 import { loadJson, saveJson } from '../utils/json.js';
 import type { EngineDeps, MatchedEvent, ShellRunResult } from './runtime.js';
 
 function agentForFolder(folder: string): RegisteredAgent {
-  const registry = loadJson<AgentRegistry>(
-    path.join(CONFIG_DIR, 'registered_agents.json'),
-    {} as AgentRegistry,
-  );
+  const registry = loadRegistry();
   try {
     const resolved = resolveRegistry(registry);
     const matches = Object.entries(resolved).filter(
@@ -204,13 +195,12 @@ export const defaultDeps: EngineDeps = {
   },
 
   readTemplateFile(file, folder) {
-    const candidates = [
-      path.resolve(WORKFLOWS_DIR, file),
-      path.resolve(agentDir(folder), file),
-    ];
-    for (const candidate of candidates)
-      if (fs.existsSync(candidate)) return fs.readFileSync(candidate, 'utf-8');
-    throw new Error(`template file not found: ${file}`);
+    const content =
+      getContextFile('agent', folder, file) ??
+      getContextFile('shared', '', file);
+    if (content === undefined)
+      throw new Error(`template file not found: ${file}`);
+    return content;
   },
 
   approvalLink(waitId, action, ttlMs) {

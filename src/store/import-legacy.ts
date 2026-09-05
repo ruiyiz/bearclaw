@@ -9,6 +9,7 @@ import {
   parseDefinition,
 } from '../workflows/schema.js';
 import { getConfigDb, initConfigDb } from './config-db.js';
+import { materializeAll } from './materialize.js';
 import { BEARCLAW_HOME } from './paths.js';
 import {
   PASSWORD_HASH_KEY,
@@ -213,6 +214,8 @@ export function importLegacyFs(opts: ImportOptions = {}): ImportReport {
   } catch (err) {
     if (err !== ROLLBACK) throw err;
   }
+
+  if (!resolved.dryRun) materializeAll(home);
 
   planRuntimeFileMoves(home, report);
   if (!resolved.dryRun && !resolved.keepFiles) {
