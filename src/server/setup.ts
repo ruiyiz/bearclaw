@@ -15,6 +15,13 @@ import {
   isOnboarded,
 } from '../store/settings.js';
 
+// The public password route is the only unauthenticated write in the API. It
+// exists for an install with no password at all and nothing else: once a
+// password is stored, even an unfinished wizard goes through login first.
+export function passwordRouteOpen(): boolean {
+  return !isOnboarded() && !hasPassword();
+}
+
 // Everything the first-run wizard needs to decide which steps to show. The
 // status route is public — a browser hits it before any password exists — so
 // nothing here may return a secret value, only whether one is present.

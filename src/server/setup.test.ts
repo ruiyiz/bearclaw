@@ -23,6 +23,7 @@ const { setOnboarded, setPassword, setSetting } =
 const {
   MIN_PASSWORD_LENGTH,
   buildSetupStatus,
+  passwordRouteOpen,
   validateNewPassword,
   validateSettingKey,
 } = await import('./setup.js');
@@ -78,6 +79,15 @@ test('templates render with the configured assistant name', () => {
   assert.ok(!s.templates.IDENTITY.includes('{{ASSISTANT_NAME}}'));
   assert.ok(s.templates.USER.length > 0);
   assert.ok(s.templates.SOUL.length > 0);
+});
+
+test('password route closes as soon as a password exists', () => {
+  assert.equal(passwordRouteOpen(), true);
+  setPassword('first-password');
+  assert.equal(passwordRouteOpen(), false);
+  assert.equal(buildSetupStatus().onboarded, false);
+  setOnboarded();
+  assert.equal(passwordRouteOpen(), false);
 });
 
 test('onboarded flag flips once setup completes', () => {

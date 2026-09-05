@@ -47,7 +47,13 @@ export async function middleware(req: NextRequest) {
   if (!onboarded) {
     // Only pages are herded to the wizard. API traffic passes through — the
     // backend still enforces its own auth, and the wizard needs it.
-    if (pathname === '/setup' || pathname.startsWith('/api/')) {
+    // /login stays reachable: an install that has a password but never
+    // finished the wizard needs the owner to sign in before resuming it.
+    if (
+      pathname === '/setup' ||
+      pathname === '/login' ||
+      pathname.startsWith('/api/')
+    ) {
       return NextResponse.next();
     }
     const url = req.nextUrl.clone();

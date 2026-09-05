@@ -57,6 +57,7 @@ import {
 import {
   buildSetupStatus,
   validateNewPassword,
+  passwordRouteOpen,
   validateSettingKey,
 } from './setup.js';
 import {
@@ -241,10 +242,11 @@ add('GET', /^\/api\/setup\/status$/, (_req, res) => {
   json(res, 200, buildSetupStatus());
 });
 
-// Public, but only until onboarding finishes: this is the one door into a
-// brand-new install, and it closes for good once a password exists.
+// Public, but only for an install that has no password at all: this is the
+// one door into a brand-new install, and it closes for good once a password
+// exists. An install with a password but unfinished onboarding logs in first.
 add('POST', /^\/api\/setup\/password$/, async (req, res) => {
-  if (isOnboarded()) return notFound(res);
+  if (!passwordRouteOpen()) return notFound(res);
   const body = (await readBody(req)) as { password?: string };
   const problem = validateNewPassword(body.password);
   if (problem) return json(res, 400, { error: problem });

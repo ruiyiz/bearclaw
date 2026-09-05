@@ -95,7 +95,16 @@ export function SetupWizard() {
           SOUL: s.templates.SOUL,
           IDENTITY: s.templates.IDENTITY,
         });
-        if (s.hasPassword) setStepId('assistant');
+        if (s.hasPassword) {
+          // The password step is closed once one exists; the rest of the
+          // wizard is owner-only, so an anonymous visitor signs in first.
+          void fetch('/api/auth/me', { credentials: 'same-origin' })
+            .then((r) => r.json() as Promise<{ authed?: boolean }>)
+            .then((me) => {
+              if (me.authed) setStepId('assistant');
+              else window.location.replace('/login?next=%2Fsetup');
+            });
+        }
       })
       .catch((e: Error) => setLoadError(String(e)));
   }, []);
