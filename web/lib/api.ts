@@ -276,6 +276,50 @@ export interface TranscriptMessage {
   content: string;
 }
 
+export interface SetupModel {
+  id: string;
+  alias: string;
+  short?: string;
+  label: string;
+  contextWindow: number;
+}
+
+export interface SetupStatus {
+  onboarded: boolean;
+  hasPassword: boolean;
+  hasClaudeAuth: boolean;
+  hasModel: boolean;
+  assistantName: string;
+  timezone: string;
+  model: string;
+  models: SetupModel[];
+  whatsapp: { paired: boolean };
+  telegram: { configured: boolean };
+  templates: { USER: string; SOUL: string; IDENTITY: string };
+}
+
+export interface SettingRow {
+  key: string;
+  value: string;
+  secret: boolean;
+  updatedAt: string;
+}
+
+export interface McpServer {
+  name: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  updatedAt: string;
+}
+
+export interface InstallConfig {
+  home: string;
+  configDb: string | null;
+  varDir: string;
+  cacheDir: string;
+  onboarded: boolean;
+}
+
 export type ContextScope = 'shared' | 'agent';
 
 export interface ContextFile {
@@ -495,6 +539,9 @@ export const api = {
     name?: string;
     trigger?: string;
     primary?: boolean;
+    // email channel only
+    address?: string;
+    interval?: string;
   }) =>
     send<{ ok: boolean; jid: string; agent: RegisteredAgent }>(
       '/api/admin/agents/wire',
@@ -595,6 +642,35 @@ export const api = {
     );
   },
   health: () => get<{ checks: HealthCheck[] }>('/api/admin/health'),
+  installConfig: () => get<InstallConfig>('/api/admin/config'),
+
+  // setup + settings
+  setupStatus: () => get<SetupStatus>('/api/setup/status'),
+  setupPassword: (password: string) =>
+    send<{ ok: boolean }>('/api/setup/password', 'POST', { password }),
+  setupComplete: () =>
+    send<{ ok: boolean; restarting: boolean }>('/api/setup/complete', 'POST'),
+  restart: () =>
+    send<{ ok: boolean; restarting: boolean }>('/api/admin/restart', 'POST'),
+  settingsList: () => get<{ settings: SettingRow[] }>('/api/admin/settings'),
+  settingsPut: (values: Record<string, string | null>, secret?: string[]) =>
+    send<{ ok: boolean; changed: string[]; restartRequired: boolean }>(
+      '/api/admin/settings',
+      'PUT',
+      { values, ...(secret?.length ? { secret } : {}) },
+    ),
+  mcpList: () => get<{ servers: McpServer[] }>('/api/admin/mcp'),
+  mcpPut: (name: string, config: Record<string, unknown>, enabled = true) =>
+    send<{ ok: boolean; server: McpServer; restartRequired: boolean }>(
+      '/api/admin/mcp',
+      'PUT',
+      { name, config, enabled },
+    ),
+  mcpDelete: (name: string) =>
+    send<{ ok: boolean; restartRequired: boolean }>(
+      `/api/admin/mcp?name=${encodeURIComponent(name)}`,
+      'DELETE',
+    ),
 
   // workflows
   workflows: () => get<{ workflows: WorkflowSummary[] }>('/api/workflows'),

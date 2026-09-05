@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 export function LoginForm() {
@@ -48,6 +49,15 @@ export function LoginForm() {
         className="w-full bg-[color:var(--card)] border border-[color:var(--border)] rounded-md px-3 py-2 text-sm focus:outline-none focus:border-[color:var(--accent)]"
       />
       {err && <div className="text-sm text-red-500">{err}</div>}
+      {err === 'setup required' && (
+        <div className="text-sm text-[color:var(--muted)]">
+          This install has no password yet.{' '}
+          <Link href="/setup" className="text-[color:var(--accent)] underline">
+            Finish setup
+          </Link>
+          .
+        </div>
+      )}
       <button
         type="submit"
         disabled={busy || !password}

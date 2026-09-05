@@ -8,6 +8,11 @@ const TILES = [
     desc: 'Registered agents per channel',
   },
   {
+    href: '/admin/settings',
+    label: 'Settings',
+    desc: 'Environment values and MCP servers',
+  },
+  {
     href: '/admin/health',
     label: 'Health',
     desc: 'Process / DB / channel status',

@@ -6,9 +6,12 @@ import { URL } from 'node:url';
 import { listSessions } from '@anthropic-ai/claude-agent-sdk';
 
 import {
+  BEARCLAW_HOME,
   CACHE_DIR,
   DATA_DIR,
+  EMAIL_DEFAULT_INTERVAL,
   MAIN_AGENT_FOLDER,
+  VAR_DIR,
   agentVarDir,
 } from '../config.js';
 import { logger } from '../logger.js';
@@ -48,8 +51,24 @@ import {
   handleLogin,
   handleLogout,
   initAuth,
+  issueSession,
   verifyActionToken,
 } from './auth.js';
+import {
+  buildSetupStatus,
+  validateNewPassword,
+  validateSettingKey,
+} from './setup.js';
+import {
+  deleteSetting,
+  isOnboarded,
+  isSecretKey,
+  listSettings,
+  setOnboarded,
+  setPassword,
+  setSetting,
+} from '../store/settings.js';
+import { deleteMcpServer, listMcpServers, putMcpServer } from '../store/mcp.js';
 import { loadParsedTranscript } from '../agent/runner.js';
 import { commands as slashCommands } from '../commands/registry.js';
 import {
@@ -159,6 +178,11 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
+function notFound(res: http.ServerResponse): void {
+  res.writeHead(404);
+  res.end('not found');
+}
+
 async function readBody(req: http.IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
@@ -209,7 +233,114 @@ add('GET', /^\/api\/auth\/me$/, (req, res) => {
   json(res, 200, { authed: ctx.authed });
 });
 
+// ─── First-run setup ────────────────────────────────────────────────────────
+
+// Public. Booleans only — never a secret value.
+add('GET', /^\/api\/setup\/status$/, (_req, res) => {
+  json(res, 200, buildSetupStatus());
+});
+
+// Public, but only until onboarding finishes: this is the one door into a
+// brand-new install, and it closes for good once a password exists.
+add('POST', /^\/api\/setup\/password$/, async (req, res) => {
+  if (isOnboarded()) return notFound(res);
+  const body = (await readBody(req)) as { password?: string };
+  const problem = validateNewPassword(body.password);
+  if (problem) return json(res, 400, { error: problem });
+  setPassword(body.password as string);
+  issueSession(req, res);
+  json(res, 200, { ok: true });
+});
+
+// Authed. Import-time constants only pick up settings on boot, so the wizard
+// finishes by restarting the process; launchd brings it straight back.
+add('POST', /^\/api\/setup\/complete$/, (_req, res) => {
+  setOnboarded();
+  json(res, 200, { ok: true, restarting: true });
+  scheduleRestart();
+});
+
+add('POST', /^\/api\/admin\/restart$/, (_req, res) => {
+  json(res, 200, { ok: true, restarting: true });
+  scheduleRestart();
+});
+
+function scheduleRestart(): void {
+  logger.info('Restart requested from the web UI — exiting');
+  setTimeout(() => process.exit(0), 300).unref();
+}
+
 // ─── Admin routes ───────────────────────────────────────────────────────────
+
+add('GET', /^\/api\/admin\/settings$/, (_req, res) => {
+  const settings = listSettings({ redact: true }).map((r) => ({
+    key: r.key,
+    value: r.value,
+    secret: r.secret,
+    updatedAt: r.updated_at,
+  }));
+  json(res, 200, { settings });
+});
+
+// Batch write: a null value deletes the key. `secret` names keys that must be
+// stored redacted even when the name does not look like a credential.
+add('PUT', /^\/api\/admin\/settings$/, async (req, res) => {
+  const body = (await readBody(req)) as {
+    values?: Record<string, string | null>;
+    secret?: string[];
+  };
+  const values = body.values;
+  if (!values || typeof values !== 'object')
+    return json(res, 400, { error: 'missing values' });
+  const forceSecret = new Set(body.secret ?? []);
+  for (const key of Object.keys(values)) {
+    const problem = validateSettingKey(key);
+    if (problem) return json(res, 400, { error: problem });
+  }
+  const changed: string[] = [];
+  for (const [key, value] of Object.entries(values)) {
+    if (value === null) {
+      if (deleteSetting(key)) changed.push(key);
+      continue;
+    }
+    if (typeof value !== 'string')
+      return json(res, 400, { error: `value for ${key} must be a string` });
+    setSetting(key, value, {
+      secret: forceSecret.has(key) || isSecretKey(key),
+    });
+    changed.push(key);
+  }
+  json(res, 200, { ok: true, changed, restartRequired: true });
+});
+
+add('GET', /^\/api\/admin\/mcp$/, (_req, res) => {
+  json(res, 200, { servers: listMcpServers() });
+});
+
+add('PUT', /^\/api\/admin\/mcp$/, async (req, res) => {
+  const body = (await readBody(req)) as {
+    name?: string;
+    config?: unknown;
+    enabled?: boolean;
+  };
+  const name = (body.name || '').trim();
+  if (!name) return json(res, 400, { error: 'missing name' });
+  const config = body.config;
+  if (!config || typeof config !== 'object' || Array.isArray(config))
+    return json(res, 400, { error: 'config must be an object' });
+  const server = putMcpServer(name, config as Record<string, unknown>, {
+    enabled: body.enabled,
+  });
+  json(res, 200, { ok: true, server, restartRequired: true });
+});
+
+add('DELETE', /^\/api\/admin\/mcp$/, (_req, res, url) => {
+  const name = (url.searchParams.get('name') || '').trim();
+  if (!name) return json(res, 400, { error: 'missing name' });
+  if (!deleteMcpServer(name))
+    return json(res, 404, { error: 'unknown server' });
+  json(res, 200, { ok: true, restartRequired: true });
+});
 
 add('GET', /^\/api\/admin\/skills$/, (_req, res) => {
   json(res, 200, { skills: getInstalledSkills() });
@@ -383,6 +514,9 @@ interface WireAgentBody {
   name?: string;
   trigger?: string;
   primary?: boolean;
+  // email channel only
+  address?: string;
+  interval?: string;
 }
 
 add('POST', /^\/api\/admin\/agents\/wire$/, async (req, res, _url, opts) => {
@@ -417,6 +551,15 @@ add('POST', /^\/api\/admin\/agents\/wire$/, async (req, res, _url, opts) => {
     added_at: new Date().toISOString(),
     ...(body.primary ? { primary: true } : {}),
   };
+  if (jid.startsWith('email:')) {
+    const address = (body.address || '').trim();
+    if (!address) return json(res, 400, { error: 'missing address' });
+    agent.trigger = '';
+    agent.email = {
+      address,
+      interval: (body.interval || '').trim() || EMAIL_DEFAULT_INTERVAL,
+    };
+  }
   opts.addRegisteredAgent(jid, agent);
   json(res, 201, { ok: true, jid, agent });
 });
@@ -580,18 +723,15 @@ add('PUT', /^\/api\/admin\/context\/file$/, async (req, res, url) => {
   }
 });
 
+// Where this install lives. Configuration values are their own resource, at
+// /api/admin/settings, so nothing here can leak one.
 add('GET', /^\/api\/admin\/config$/, (_req, res) => {
   json(res, 200, {
-    home: process.env.HOME,
+    home: BEARCLAW_HOME,
     configDb: configDbPath(),
-    dataDir: DATA_DIR,
+    varDir: VAR_DIR,
     cacheDir: CACHE_DIR,
-    env: {
-      ASSISTANT_NAME: process.env.ASSISTANT_NAME ?? 'Andy',
-      TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN ? 'set' : 'unset',
-      TELEGRAM_ONLY: process.env.TELEGRAM_ONLY === 'true',
-      IMESSAGE_ENABLED: process.env.IMESSAGE_ENABLED === 'true',
-    },
+    onboarded: isOnboarded(),
   });
 });
 
@@ -1500,6 +1640,10 @@ const PUBLIC_API: Array<RegExp> = [
   /^\/api\/auth\/login$/,
   /^\/api\/auth\/me$/,
   /^\/api\/auth\/logout$/,
+  // First-run setup. Status is always readable; the password route serves the
+  // install that has no password yet and 404s once onboarding is done.
+  /^\/api\/setup\/status$/,
+  /^\/api\/setup\/password$/,
   // Webhook triggers and approval links carry their own capability token.
   /^\/api\/hooks\/[^/]+$/,
   /^\/r\/[^/]+$/,

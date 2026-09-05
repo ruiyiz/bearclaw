@@ -97,14 +97,16 @@ function classifyJid(jid: string): ChannelKind | null {
 }
 
 // Validates a manually-entered channel jid. Accepts the shapes the router
-// knows how to route: tg:<id>, imsg:<id>, web:<folder>, <id>@g.us,
-// <id>@s.whatsapp.net. Returns the trimmed jid or null when malformed.
+// knows how to route: tg:<id>, imsg:<id>, web:<folder>, email:<folder>,
+// <id>@g.us, <id>@s.whatsapp.net. Returns the trimmed jid or null when
+// malformed.
 export function normalizeChannelJid(raw: string): string | null {
   const jid = raw.trim();
   if (!jid) return null;
   if (/^tg:-?\d+$/.test(jid)) return jid;
   if (/^imsg:.+$/.test(jid)) return jid;
   if (/^web:[A-Za-z0-9._-]+$/.test(jid)) return jid;
+  if (/^email:[A-Za-z0-9._-]+$/.test(jid)) return jid;
   if (/^\d+@g\.us$/.test(jid)) return jid;
   if (/^\d+@s\.whatsapp\.net$/.test(jid)) return jid;
   return null;

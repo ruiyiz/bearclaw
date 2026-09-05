@@ -217,13 +217,20 @@ function registerAgent(jid: string, agent: RegisteredAgent): void {
   const channelKey = channelKeyForJid(jid);
 
   const ch: StoredChannel = { added_at: agent.added_at };
-  // Web threads never trigger — omit the trigger entirely. Other channels keep
-  // their trigger (including the empty string = "respond to everything").
-  if (channelKey !== 'web') ch.trigger = agent.trigger ?? '';
+  // Web and email threads never trigger — omit the trigger entirely. Other
+  // channels keep theirs (including the empty string = "respond to everything").
+  if (channelKey !== 'web' && channelKey !== 'email')
+    ch.trigger = agent.trigger ?? '';
   if (agent.requiresTrigger !== undefined)
     ch.requiresTrigger = agent.requiresTrigger;
   if (agent.primary) ch.primary = true;
   if (agent.activeHours) ch.activeHours = agent.activeHours;
+  // The email channel routes by folder; its address and poll interval are the
+  // only things that make the row usable.
+  if (channelKey === 'email' && agent.email) {
+    ch.address = agent.email.address;
+    if (agent.email.interval) ch.interval = agent.email.interval;
+  }
 
   let entry: StoredAgent = agentRegistry[folder];
   if (!entry) {

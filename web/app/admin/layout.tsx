@@ -16,6 +16,7 @@ export default function AdminLayout({
           { href: '/admin/skills', label: 'Skills' },
           { href: '/admin/agents', label: 'Agents' },
           { href: '/admin/context', label: 'Context' },
+          { href: '/admin/settings', label: 'Settings' },
           { href: '/admin/health', label: 'Health' },
           { href: '/admin/transcripts', label: 'Transcripts' },
         ]}

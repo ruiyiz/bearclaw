@@ -20,6 +20,7 @@ const MODULES: Entry[] = [
   { label: 'Admin · Agents', hint: 'module', href: '/admin/agents' },
   { label: 'Admin · Skills', hint: 'module', href: '/admin/skills' },
   { label: 'Admin · Context', hint: 'module', href: '/admin/context' },
+  { label: 'Admin · Settings', hint: 'module', href: '/admin/settings' },
 ];
 
 // Search is a jump, not a query language: the modules plus every workflow, by

@@ -188,6 +188,20 @@ export interface LoginResult {
   error?: string;
 }
 
+// Mint a session + CSRF cookie pair. Used by login and by the first-run
+// wizard, which logs the owner in the moment they choose a password.
+export function issueSession(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): void {
+  const csrf = crypto.randomBytes(24).toString('base64url');
+  const token = sign({ exp: nowS() + SESSION_TTL_S, csrf, role: 'owner' });
+  setCookies(res, req, [
+    { name: SESSION_COOKIE, value: token, httpOnly: true },
+    { name: CSRF_COOKIE, value: csrf, httpOnly: false },
+  ]);
+}
+
 export function handleLogin(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -199,12 +213,7 @@ export function handleLogin(
   if (!verifyPassword(body.password || '')) {
     return { ok: false, error: 'bad password' };
   }
-  const csrf = crypto.randomBytes(24).toString('base64url');
-  const token = sign({ exp: nowS() + SESSION_TTL_S, csrf, role: 'owner' });
-  setCookies(res, req, [
-    { name: SESSION_COOKIE, value: token, httpOnly: true },
-    { name: CSRF_COOKIE, value: csrf, httpOnly: false },
-  ]);
+  issueSession(req, res);
   return { ok: true };
 }
 
