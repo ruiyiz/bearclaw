@@ -1,6 +1,6 @@
 # BearClaw Specification
 
-A personal Claude assistant accessible via chat platforms (WhatsApp, Telegram, iMessage) and Gmail, with persistent per-agent state, scheduled and event-driven workflows, and shared context. Long-term memory is delegated to a separate **gbrain** process exposed over MCP.
+A personal Claude assistant accessible via chat platforms (WhatsApp, Telegram, iMessage) and Gmail, with persistent per-agent state, scheduled and event-driven workflows, and shared context.
 
 This document describes design and architecture decisions. Not a code reference; for that, follow the source from `src/index.ts`.
 
@@ -43,9 +43,7 @@ This document describes design and architecture decisions. Not a code reference;
 │              │           Agent Runner (in-process)        │        │
 │              │   query() → Claude Agent SDK               │        │
 │              │   tools: Bash, Read/Write/Edit, Web*,      │        │
-│              │          mcp__bearclaw__*, mcp__gbrain__*  │        │
-│              │   gbrain mutating tools blocked at         │        │
-│              │   SDK boundary (disallowedTools)           │        │
+│              │          mcp__bearclaw__*, user MCPs       │        │
 │              └────────────────────────────────────────────┘        │
 │                                                                    │
 │              ┌────────────────────────────────────────────┐        │
@@ -72,46 +70,33 @@ This document describes design and architecture decisions. Not a code reference;
 │              └────────────────────────────────────────────┘        │
 │                                                                    │
 └────────────────────────────────────────────────────────────────────┘
-
-       (separate process, separate launchd plists)
-
-┌────────────────────────────────────────────────────────────────────┐
-│   gbrain (~/.bun/bin/gbrain)                                       │
-│   - stdio MCP, spawned per agent session                           │
-│   - PGLite store at ~/.gbrain/brain.pglite                         │
-│   - sources: main, coco (synced from conversation archives)        │
-│   - cron: sync (15m), dream-cycle (02:00), doctor (Mon 06:00)      │
-└────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Technology Stack
 
-| Component | Technology                            | Purpose                                |
-| --------- | ------------------------------------- | -------------------------------------- |
-| WhatsApp  | `@whiskeysockets/baileys`             | WhatsApp Web protocol                  |
-| Telegram  | `grammy`                              | Bot API + agent-swarm bot pool         |
-| iMessage  | `imsg` CLI + file tail                | macOS Messages                         |
-| Email     | `gog` CLI                             | Gmail polling and sending              |
-| Storage   | `better-sqlite3`                      | Messages, workflow state, event bus    |
-| Long-term | gbrain (PGLite + pgvector + tsvector) | Out-of-process knowledge base over MCP |
-| Agent     | `@anthropic-ai/claude-agent-sdk`      | In-process Claude execution            |
-| TUI       | `ink` + `react`                       | Status terminal UI                     |
-| Runtime   | Node.js 20+                           | Single host process                    |
-
-BearClaw never imports gbrain code. The boundary is a single MCP entry in `~/.bearclaw/config/mcp.json`. Drop the entry and the agent still boots, falling back to the warm-start window.
+| Component | Technology                       | Purpose                             |
+| --------- | -------------------------------- | ----------------------------------- |
+| WhatsApp  | `@whiskeysockets/baileys`        | WhatsApp Web protocol               |
+| Telegram  | `grammy`                         | Bot API + agent-swarm bot pool      |
+| iMessage  | `imsg` CLI + file tail           | macOS Messages                      |
+| Email     | `gog` CLI                        | Gmail polling and sending           |
+| Storage   | `better-sqlite3`                 | Messages, workflow state, event bus |
+| Agent     | `@anthropic-ai/claude-agent-sdk` | In-process Claude execution         |
+| TUI       | `ink` + `react`                  | Status terminal UI                  |
+| Runtime   | Node.js 20+                      | Single host process                 |
 
 ---
 
 ## Folder Structure
 
-BearClaw separates source repo, runtime config (`~/.bearclaw/config/`), and runtime state (`~/.bearclaw/var/`). Stable user content lives at the top level (`agents/`, `context/`, `skills/`); volatile state is namespaced under `var/`. gbrain owns its own home at `~/.gbrain/`.
+BearClaw separates source repo, runtime config (`~/.bearclaw/config/`), and runtime state (`~/.bearclaw/var/`). Stable user content lives at the top level (`agents/`, `context/`, `skills/`); volatile state is namespaced under `var/`.
 
 ```
 ~/.bearclaw/
 ├── .env                              # Auth tokens, integration keys
 ├── config/                           # Stable, user-edited
 │   ├── registered_agents.json
-│   ├── mcp.json                      # gbrain stdio MCP entry + user-added MCPs
+│   ├── mcp.json                      # user-added MCP servers
 │   └── ...
 ├── context/                          # Stable shared context
 │   ├── AGENTS.md                     # Operating manual (manual)
@@ -132,12 +117,6 @@ BearClaw separates source repo, runtime config (`~/.bearclaw/config/`), and runt
         ├── conversations/{date}.md   # One file per day per agent (daily flush)
         ├── checkpoints/{sessionId}.md   # Live transcript checkpoints
         └── logs/agent-*.log
-
-~/.gbrain/                            # gbrain process home
-├── config.json                       # database_path
-├── brain.pglite/                     # PGLite store
-├── .cron/                            # wrapper scripts (sync, dream-cycle, doctor)
-└── .logs/                            # cron run logs
 ```
 
 `agents/{folder}/` (stable, user-meaningful) vs `var/agents/{folder}/` (volatile, system-meaningful) is deliberate: `agents/` is what the user backs up, edits, or manually inspects; `var/` is what BearClaw owns and may rewrite.
@@ -153,7 +132,7 @@ BearClaw separates source repo, runtime config (`~/.bearclaw/config/`), and runt
 ```bash
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...   # Subscription, OR
 ANTHROPIC_API_KEY=sk-ant-api03-...         # Pay-per-use
-OPENAI_API_KEY=sk-...                      # image_generate + gbrain embeddings
+OPENAI_API_KEY=sk-...                      # image_generate
 ```
 
 ### Channels (optional)
@@ -175,18 +154,18 @@ OPENAI_API_KEY=sk-...                      # image_generate + gbrain embeddings
 BearClaw's memory layers are designed around two principles:
 
 1. **Files are authoritative; the database is auxiliary.** Conversations and context files live as markdown on disk. SQLite carries channel state, event bus, and workflow bookkeeping — no curated content.
-2. **In-process layers stay simple; long-term memory lives elsewhere.** BearClaw owns checkpoints + daily conversations + manual context files. Anything richer (semantic search, timeline reasoning, cross-conversation graph) is delegated to gbrain over MCP. BearClaw works without gbrain — falls back to the warm-start window.
+2. **Every layer is a file the user can open.** Checkpoints, daily conversations and manual context files are the whole of memory; recall over them is keyword search, not a second system to keep in sync. Nothing curated lives outside `~/.bearclaw/`.
 
-| Layer                  | Location                                         | Owner            | Purpose                                         |
-| ---------------------- | ------------------------------------------------ | ---------------- | ----------------------------------------------- |
-| **Operating manual**   | `context/AGENTS.md`                              | User (manual)    | Behavior rules, tool conventions                |
-| **Persona**            | `context/SOUL.md`                                | User (manual)    | Voice, style, character                         |
-| **User profile**       | `context/USER.md`                                | User (manual)    | Durable facts about the user                    |
-| **Domain knowledge**   | `context/CONTEXT.md`                             | User (manual)    | Lasting world / project / domain knowledge      |
-| **Per-agent identity** | `agents/{folder}/IDENTITY.md`                    | User (manual)    | Per-agent role / personality                    |
-| **Conversations**      | `var/agents/{folder}/conversations/{date}.md`    | Daily flush      | One file per day per agent (full-fidelity)      |
-| **Checkpoints**        | `var/agents/{folder}/checkpoints/{sessionId}.md` | Periodic flusher | Crash-safety: live in-flight transcript         |
-| **Long-term memory**   | gbrain (out-of-process)                          | gbrain sync cron | Hybrid keyword+vector recall over conversations |
+| Layer                  | Location                                         | Owner            | Purpose                                    |
+| ---------------------- | ------------------------------------------------ | ---------------- | ------------------------------------------ |
+| **Operating manual**   | `context/AGENTS.md`                              | User (manual)    | Behavior rules, tool conventions           |
+| **Persona**            | `context/SOUL.md`                                | User (manual)    | Voice, style, character                    |
+| **User profile**       | `context/USER.md`                                | User (manual)    | Durable facts about the user               |
+| **Domain knowledge**   | `context/CONTEXT.md`                             | User (manual)    | Lasting world / project / domain knowledge |
+| **Per-agent identity** | `agents/{folder}/IDENTITY.md`                    | User (manual)    | Per-agent role / personality               |
+| **Conversations**      | `var/agents/{folder}/conversations/{date}.md`    | Daily flush      | One file per day per agent (full-fidelity) |
+| **Checkpoints**        | `var/agents/{folder}/checkpoints/{sessionId}.md` | Periodic flusher | Crash-safety: live in-flight transcript    |
+| **Recall**             | `mcp__bearclaw__recall_history`                  | SQLite FTS5      | BM25 search over this agent's archives     |
 
 ### Conversation checkpoint
 
@@ -201,19 +180,17 @@ When a new session starts, the agent's SessionStart hook injects, in this order,
 
 Cross-session shared context (AGENTS.md, SOUL.md, USER.md, IDENTITY.md) is appended to the system prompt — separate path, not part of the warm-start budget.
 
-### Long-term memory (gbrain)
+### Recall beyond the warm-start window
 
-For anything older than the warm-start window, the agent calls `mcp__gbrain__query`, `mcp__gbrain__get_page`, `mcp__gbrain__traverse_graph`, etc. gbrain runs as a separate stdio MCP process spawned by the SDK per session. Its store is at `~/.gbrain/brain.pglite`; the brain is populated by a 15-minute cron that snapshots `var/agents/*/conversations/` into a git repo, runs `gbrain sync --all`, then `gbrain embed --stale`.
-
-The agent only sees gbrain's read-only operations. Mutating tools (`put_page`, `delete_page`, `add_link`, `sync_brain`, …) are blocked at the SDK boundary via `disallowedTools` in `src/agent/runner.ts`. The CLI / cron jobs retain full access.
+For anything older, the agent calls `mcp__bearclaw__recall_history`: FTS5 with BM25 ranking over its own `conversations/*.md` and `checkpoints/*.md`. Chunks are indexed lazily and reindexed on first call after a file changes, so there is no sync job to fall behind. Results carry file path and line range, so the agent can Read for more context.
 
 ### Multi-agent boundaries
 
-| Action                               | `main`     | Non-main   |
-| ------------------------------------ | ---------- | ---------- |
-| Read own conversations + checkpoints | yes        | yes        |
-| Read other agents' conversations     | via gbrain | via gbrain |
-| `register_agent`, IPC fan-out        | yes        | no         |
+| Action                               | `main` | Non-main |
+| ------------------------------------ | ------ | -------- |
+| Read own conversations + checkpoints | yes    | yes      |
+| Read other agents' conversations     | no     | no       |
+| `register_agent`, IPC fan-out        | yes    | no       |
 
 Manual context files in `~/.bearclaw/context/` are visible to every agent. Per-agent identity is isolated to `agents/{folder}/IDENTITY.md`.
 
@@ -259,7 +236,7 @@ The conversation checkpoint provides crash safety; the daily flush prevents `che
      resume: sessionId
      systemPrompt: claude_code preset + context/{AGENTS,CONTEXT,SOUL,USER}.md
                  + IDENTITY.md + SYSTEM_PROMPT
-     mcpServers: { bearclaw: ipcMcp, ...userMcpServers }   # gbrain in userMcpServers
+     mcpServers: { bearclaw: ipcMcp, ...userMcpServers }
      SessionStart hook: warm-start budget (today's checkpoint + last N days)
 5. The agent streams output. Channel side effects (send_message, register_agent, …)
    are written to var/run/ipc/{folder}/ and dispatched by the IPC watcher; the
@@ -337,31 +314,22 @@ Per-call MCP server with the agent's identity. Tools:
 | `subprocess_*`                                     | PTY subprocess driver                                  |
 | `image_generate`                                   | OpenAI gpt-image / Google nano-banana image generation |
 
-The previous `memory_search` / `memory_write` tools are removed. The agent uses gbrain MCP for retrieval.
-
-### `gbrain` MCP (external, configured in `~/.bearclaw/config/mcp.json`)
-
-stdio entry: `command: /Users/<user>/.bun/bin/gbrain`, `args: ["serve"]`. Spawned by the SDK per session. Exposes the full gbrain operations set; mutating ops are denied at BearClaw's `disallowedTools` boundary, so only read tools (`query`, `get_page`, `list_pages`, `traverse_graph`, `get_timeline`, `get_stats`, …) reach the model.
-
-HTTP MCP exists in gbrain (`gbrain serve --http`) but the OAuth setup is Postgres-only on PGLite engines, so the persistent HTTP option is currently deferred. Each session pays a stdio cold-start (~50–200 ms) but otherwise the agent sees the full gbrain feature set.
+The previous `memory_search` / `memory_write` tools are removed. Retrieval goes through `recall_history`.
 
 ### User MCP servers
 
-`~/.bearclaw/config/mcp.json` is merged into every agent's `mcpServers` config. Users add Notion, GitHub, etc. there without editing source. The gbrain entry lives there too, by convention.
+`~/.bearclaw/config/mcp.json` is merged into every agent's `mcpServers` config. Users add Notion, GitHub, etc. there without editing source.
 
 ---
 
 ## Deployment
 
-BearClaw runs as a single macOS launchd service (`~/Library/LaunchAgents/com.bearclaw.plist`). gbrain crons are separate launchd plists owned by BearClaw setup but logically independent.
+BearClaw runs as a single macOS launchd service (`~/Library/LaunchAgents/com.bearclaw.plist`).
 
 ```
 ~/Library/LaunchAgents/
 ├── com.bearclaw.plist                # main agent runner
-├── com.bearclaw.imsg-watcher.plist   # iMessage tail
-├── com.bearclaw.gbrain.sync.plist    # 15min: snapshot conversations → gbrain sync + embed
-├── com.bearclaw.gbrain.dream.plist   # daily 02:00: gbrain dream
-└── com.bearclaw.gbrain.doctor.plist  # weekly Mon 06:00: gbrain doctor
+└── com.bearclaw.imsg-watcher.plist   # iMessage tail
 ```
 
 ### Startup sequence
@@ -384,8 +352,6 @@ launchctl unload ~/Library/LaunchAgents/com.bearclaw.plist
 launchctl kickstart -k gui/$(id -u)/com.bearclaw
 ```
 
-Same pattern for the gbrain plists.
-
 ---
 
 ## Security Considerations
@@ -396,8 +362,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model. Highlights:
 - **Per-agent `cwd`.** Each agent's working directory is its own `var/agents/{folder}/`.
 - **IPC authorization.** The IPC watcher rejects cross-agent operations from non-main agents (sending to other chats, managing workflows owned by other agents, calling `register_agent` / `refresh_agents`).
 - **Trigger gate.** Non-main agents only fire on messages matching their configured trigger.
-- **gbrain is read-only at the agent boundary.** Mutating ops are denied via `disallowedTools` in `runner.ts`. The cron jobs and the operator's CLI retain full write access.
-- **Manual context applies; no auto-write.** `~/.bearclaw/context/` is never written by BearClaw or by gbrain. The user holds the commit button — agents propose changes via chat, the user replies with instructions, the agent edits via Read/Edit.
+- **Manual context applies; no auto-write.** `~/.bearclaw/context/` is never written by BearClaw. The user holds the commit button — agents propose changes via chat, the user replies with instructions, the agent edits via Read/Edit.
 - **Credentials.** Loaded from `~/.bearclaw/.env` into `process.env`. Agents can read them via Bash; this is a known limitation of the in-process model.
 
 ```bash

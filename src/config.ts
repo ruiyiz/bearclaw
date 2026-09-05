@@ -106,8 +106,8 @@ if (!process.env.DEFAULT_MODEL && process.env.NODE_ENV !== 'test') {
 }
 export const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'test-model';
 
-// OpenAI key — used by image_generate (gpt-image-2). Long-term memory lives
-// in gbrain (separate process); bearclaw doesn't embed anything itself.
+// OpenAI key — used by image_generate (gpt-image-2). bearclaw does not embed
+// anything itself.
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
 // Google AI (Gemini) — image generation via gemini-2.5-flash-image (nano-banana)

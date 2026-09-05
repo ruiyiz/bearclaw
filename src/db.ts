@@ -251,9 +251,9 @@ function migrateWebSessions(): void {
 }
 
 function dropLegacyMemoryAndDreamTables(): void {
-  // Long-term memory now lives in gbrain. Drop the FTS/vector/dream tables
-  // that the old in-process pipeline owned. Idempotent: every drop guards
-  // on IF EXISTS so re-runs are no-ops.
+  // Drop the FTS/vector/dream tables the old in-process memory pipeline owned;
+  // recall_history searches the conversation archives on disk instead.
+  // Idempotent: every drop guards on IF EXISTS so re-runs are no-ops.
   db.exec(`
     DROP TABLE IF EXISTS memory_vec;
     DROP TABLE IF EXISTS memory_chunks;

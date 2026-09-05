@@ -1,7 +1,7 @@
 /**
  * Daily rollover: at 01:00 local each day, (1) flush yesterday's messages to
- * `var/agents/{folder}/conversations/{date}.md` for gbrain ingestion, then
- * (2) reset folder-keyed IM/email SDK sessions so the next message starts a
+ * `var/agents/{folder}/conversations/{date}.md` for recall_history to search,
+ * then (2) reset folder-keyed IM/email SDK sessions so the next message starts a
  * fresh session with warm-start re-injection. Bounds daily token growth.
  *
  * Web sessions (`web:<folder>:<sessionId>`) are not reset here — users manage

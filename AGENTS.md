@@ -35,34 +35,32 @@ web/               # Next.js 15 + PWA. Talks to HTTP server via /api/* rewrite.
 └── public/sw.js             service worker
 ```
 
-Long-term memory lives in **gbrain**, spawned as a stdio MCP per agent session
-(entry in `~/.bearclaw/config/mcp.json`). gbrain's PGLite store + cron wrappers
-live at `~/.gbrain/`. BearClaw never imports gbrain code — coupling is the
-mcp.json entry only. Drop the entry and the agent still boots, falling back to
-checkpoint + last-N-days conversation window. Mutating gbrain ops are denied
-at the SDK boundary in `runner.ts`, so the agent sees a read-only view; cron
-jobs and the operator's CLI retain full write access.
+Memory is all in-process and file-backed. A session's live transcript is
+checkpointed for crash safety, the 1am rollover flushes each day to
+`var/agents/{name}/conversations/{date}.md`, and the agent reaches anything
+older through `mcp__bearclaw__recall_history` — BM25 search over those
+archives plus the checkpoints. There is no external knowledge base; user-held
+facts live in `~/.bearclaw/context/`, which BearClaw never writes on its own.
 
 ## Key Files
 
-| File                                           | Purpose                                                              |
-| ---------------------------------------------- | -------------------------------------------------------------------- |
-| `src/index.ts`                                 | Main app: channel wiring, message routing, IPC watcher               |
-| `src/config.ts`                                | Env vars, paths, trigger pattern, intervals                          |
-| `src/agent/runner.ts`                          | Runs the Codex Agent SDK in-process; warm-start hook                 |
-| `src/agent/ipc-mcp.ts`                         | MCP tools for agent ↔ host communication                             |
-| `src/agent/conversation-checkpoint.ts`         | Periodic transcript checkpoint + session-end conversation archive    |
-| `src/agent/image-gen.ts`                       | Image generation client (OpenAI gpt-image-2 + Google nano-banana)    |
-| `src/events/bus.ts`                            | Event dispatch + handler runner                                      |
-| `src/events/scheduler.ts`                      | Cron handler firing                                                  |
-| `src/integrations/email.ts`                    | Gmail polling and reply primitive                                    |
-| `src/db.ts`                                    | SQLite operations (messages, chats, events, handlers)                |
-| `~/.bearclaw/context/`                         | Shared context: AGENTS.md, CONTEXT.md, SOUL.md, USER.md              |
-| `~/.bearclaw/agents/{name}/IDENTITY.md`        | Per-agent identity                                                   |
-| `~/.bearclaw/var/agents/{name}/conversations/` | Daily conversation archives (`YYYY-MM-DD.md`, written by 1am flush)  |
-| `~/.bearclaw/var/agents/{name}/checkpoints/`   | Live transcript checkpoint per session (crash safety)                |
-| `~/.bearclaw/skills/`                          | Skill definitions (SKILL.md per skill)                               |
-| `~/.gbrain/`                                   | gbrain PGLite store + cron wrappers + logs; populated by gbrain sync |
+| File                                           | Purpose                                                             |
+| ---------------------------------------------- | ------------------------------------------------------------------- |
+| `src/index.ts`                                 | Main app: channel wiring, message routing, IPC watcher              |
+| `src/config.ts`                                | Env vars, paths, trigger pattern, intervals                         |
+| `src/agent/runner.ts`                          | Runs the Codex Agent SDK in-process; warm-start hook                |
+| `src/agent/ipc-mcp.ts`                         | MCP tools for agent ↔ host communication                            |
+| `src/agent/conversation-checkpoint.ts`         | Periodic transcript checkpoint + session-end conversation archive   |
+| `src/agent/image-gen.ts`                       | Image generation client (OpenAI gpt-image-2 + Google nano-banana)   |
+| `src/events/bus.ts`                            | Event dispatch + handler runner                                     |
+| `src/events/scheduler.ts`                      | Cron handler firing                                                 |
+| `src/integrations/email.ts`                    | Gmail polling and reply primitive                                   |
+| `src/db.ts`                                    | SQLite operations (messages, chats, events, handlers)               |
+| `~/.bearclaw/context/`                         | Shared context: AGENTS.md, CONTEXT.md, SOUL.md, USER.md             |
+| `~/.bearclaw/agents/{name}/IDENTITY.md`        | Per-agent identity                                                  |
+| `~/.bearclaw/var/agents/{name}/conversations/` | Daily conversation archives (`YYYY-MM-DD.md`, written by 1am flush) |
+| `~/.bearclaw/var/agents/{name}/checkpoints/`   | Live transcript checkpoint per session (crash safety)               |
+| `~/.bearclaw/skills/`                          | Skill definitions (SKILL.md per skill)                              |
 
 ## Skills
 

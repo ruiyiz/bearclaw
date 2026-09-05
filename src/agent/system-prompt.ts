@@ -53,14 +53,8 @@ For older context not in this session's transcript:
   If first call returns 0 hits, automatically retry once with an expanded
   query before telling the user you can't find it.
 
-- If long-term memory tools are present (mcp__gbrain__query, mcp__gbrain__get_page,
-  mcp__gbrain__graph_query), use them BEFORE answering about people, companies,
-  prior decisions, or recurring topics. The brain has structured pages with
-  timelines and provenance.
-
 When the user asks about something you don't see in the live transcript, search
-recall_history (recent dialogue) and gbrain (curated facts) before saying you
-don't remember.
+recall_history before saying you don't remember.
 `;
 
 const VOICE = `
