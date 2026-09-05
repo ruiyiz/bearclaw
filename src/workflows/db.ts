@@ -28,8 +28,6 @@ export interface WorkflowIndexRow {
   name: string;
   owner: string;
   enabled: boolean;
-  file_path: string | null;
-  file_hash: string | null;
   definition: WorkflowDefinition;
   last_run_id: string | null;
   last_status: string | null;
@@ -128,26 +126,21 @@ export function upsertWorkflowIndex(row: {
   name: string;
   owner: string;
   enabled?: boolean;
-  file_path?: string | null;
-  file_hash?: string | null;
   definition: WorkflowDefinition;
 }): void {
   getDb()
     .prepare(
-      `INSERT INTO workflows (slug, name, owner, enabled, file_path, file_hash, definition, updated_at)
-       VALUES (@slug, @name, @owner, @enabled, @file_path, @file_hash, @definition, @updated_at)
+      `INSERT INTO workflows (slug, name, owner, enabled, definition, updated_at)
+       VALUES (@slug, @name, @owner, @enabled, @definition, @updated_at)
        ON CONFLICT(slug) DO UPDATE SET
-         name = excluded.name, owner = excluded.owner, file_path = excluded.file_path,
-         file_hash = excluded.file_hash, definition = excluded.definition,
-         updated_at = excluded.updated_at`,
+         name = excluded.name, owner = excluded.owner,
+         definition = excluded.definition, updated_at = excluded.updated_at`,
     )
     .run({
       slug: row.slug,
       name: row.name,
       owner: row.owner,
       enabled: row.enabled === false ? 0 : 1,
-      file_path: row.file_path ?? null,
-      file_hash: row.file_hash ?? null,
       definition: JSON.stringify(row.definition),
       updated_at: new Date().toISOString(),
     });
@@ -160,8 +153,6 @@ function toIndexRow(raw: Record<string, unknown>): WorkflowIndexRow {
     name: String(r.name),
     owner: String(r.owner),
     enabled: Number(r.enabled) === 1,
-    file_path: (r.file_path as string) ?? null,
-    file_hash: (r.file_hash as string) ?? null,
     definition: p(r.definition, {} as WorkflowDefinition),
     last_run_id: (r.last_run_id as string) ?? null,
     last_status: (r.last_status as string) ?? null,

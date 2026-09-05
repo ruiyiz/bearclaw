@@ -280,7 +280,7 @@ test('a file-declared trigger cannot be deleted through the API', () => {
   syncFileTriggers(def);
   assert.throws(
     () => deleteTrigger('filebound:cron'),
-    /declared in the workflow file/,
+    /declared by the workflow/,
   );
 
   const runtime = createTrigger({ slug: 'filebound', type: 'manual' });

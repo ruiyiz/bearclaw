@@ -207,7 +207,7 @@ export function deleteTrigger(id: string): void {
   if (!trigger) return;
   if (trigger.source === 'file')
     throw new TriggerError(
-      `trigger ${id} is declared in the workflow file; edit the file instead`,
+      `trigger ${id} is declared by the workflow; edit the definition instead`,
     );
   deleteTriggerRow(id);
 }

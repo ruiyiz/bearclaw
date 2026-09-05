@@ -1,10 +1,10 @@
-import { createHash } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-
-import { WORKFLOWS_DIR } from '../config.js';
 import { advise, formatIssue } from './checks.js';
 import { logger } from '../logger.js';
+import {
+  deleteWorkflowDefinition,
+  listWorkflowDefinitions,
+  putWorkflowDefinition,
+} from '../store/workflows.js';
 import {
   deleteTriggersForSlug,
   deleteWorkflowRow,
@@ -20,14 +20,6 @@ import {
 } from './schema.js';
 import { syncFileTriggers } from './triggers.js';
 
-export function workflowFilePath(slug: string): string {
-  return path.join(WORKFLOWS_DIR, `${slug}.json`);
-}
-
-function hashOf(text: string): string {
-  return createHash('sha256').update(text).digest('hex').slice(0, 16);
-}
-
 export interface LoadReport {
   loaded: string[];
   removed: string[];
@@ -35,13 +27,12 @@ export interface LoadReport {
   orphanTriggers: string[];
   /** Advisory issues per slug: saved, but worth someone's attention. */
   warnings: { slug: string; issues: string[] }[];
-  errors: { file: string; issues: string[] }[];
+  errors: { slug: string; issues: string[] }[];
 }
 
-// Files are the source of truth: the owner and the agent edit them with
-// ordinary file tools, they diff in git, and the index table is a cache.
-export function syncWorkflowFiles(): LoadReport {
-  fs.mkdirSync(WORKFLOWS_DIR, { recursive: true });
+// The config database is the source of truth: `workflow_definitions` holds the
+// definitions, the `workflows` table in messages.db is a runtime index.
+export function syncWorkflowDefinitions(): LoadReport {
   const report: LoadReport = {
     loaded: [],
     removed: [],
@@ -51,23 +42,13 @@ export function syncWorkflowFiles(): LoadReport {
   };
   const seen = new Set<string>();
 
-  for (const file of fs.readdirSync(WORKFLOWS_DIR)) {
-    if (!file.endsWith('.json')) continue;
-    const filePath = path.join(WORKFLOWS_DIR, file);
-    let raw: string;
+  for (const row of listWorkflowDefinitions()) {
     try {
-      raw = fs.readFileSync(filePath, 'utf-8');
-    } catch (err) {
-      report.errors.push({ file, issues: [String(err)] });
-      continue;
-    }
-    try {
-      const def = parseDefinition(JSON.parse(raw));
-      const expected = `${def.slug}.json`;
-      if (file !== expected) {
+      const def = parseDefinition(JSON.parse(row.definition));
+      if (def.slug !== row.slug) {
         report.errors.push({
-          file,
-          issues: [`slug "${def.slug}" does not match filename`],
+          slug: row.slug,
+          issues: [`slug "${def.slug}" does not match the row key`],
         });
         continue;
       }
@@ -75,8 +56,6 @@ export function syncWorkflowFiles(): LoadReport {
         slug: def.slug,
         name: def.name,
         owner: def.owner,
-        file_path: filePath,
-        file_hash: hashOf(raw),
         definition: def,
       });
       syncFileTriggers(def);
@@ -93,20 +72,19 @@ export function syncWorkflowFiles(): LoadReport {
         err instanceof WorkflowValidationError
           ? err.issues
           : [err instanceof Error ? err.message : String(err)];
-      report.errors.push({ file, issues });
+      report.errors.push({ slug: row.slug, issues });
     }
   }
 
   for (const row of listWorkflowRows()) {
-    if (!row.file_path || seen.has(row.slug)) continue;
+    if (seen.has(row.slug)) continue;
     deleteTriggersForSlug(row.slug);
     deleteWorkflowRow(row.slug);
     report.removed.push(row.slug);
   }
 
-  // A trigger whose workflow row went first is unreachable: the API refuses to
-  // delete a file-sourced row ("edit the file instead") and there is no file
-  // left to edit. Sweep by slug so the pair can never drift apart.
+  // A trigger whose workflow row went first is unreachable. Sweep by slug so
+  // the pair can never drift apart.
   const orphans = new Set(
     listTriggerRows()
       .map((t) => t.slug)
@@ -136,19 +114,15 @@ export function syncWorkflowFiles(): LoadReport {
   return report;
 }
 
-export function writeWorkflowFile(def: WorkflowDefinition): WorkflowDefinition {
+export function saveWorkflowDefinition(
+  def: WorkflowDefinition,
+): WorkflowDefinition {
   const validated = parseDefinition(def);
-  fs.mkdirSync(WORKFLOWS_DIR, { recursive: true });
-  const filePath = workflowFilePath(validated.slug);
-  const text = `${JSON.stringify(validated, null, 2)}\n`;
-  fs.writeFileSync(`${filePath}.tmp`, text);
-  fs.renameSync(`${filePath}.tmp`, filePath);
+  putWorkflowDefinition(validated.slug, validated);
   upsertWorkflowIndex({
     slug: validated.slug,
     name: validated.name,
     owner: validated.owner,
-    file_path: filePath,
-    file_hash: hashOf(text),
     definition: validated,
   });
   syncFileTriggers(validated);
@@ -156,10 +130,9 @@ export function writeWorkflowFile(def: WorkflowDefinition): WorkflowDefinition {
 }
 
 export function deleteWorkflow(slug: string): boolean {
-  const row = getWorkflowRow(slug);
-  if (!row) return false;
-  if (row.file_path && fs.existsSync(row.file_path))
-    fs.unlinkSync(row.file_path);
+  const hadRow = Boolean(getWorkflowRow(slug));
+  const hadDefinition = deleteWorkflowDefinition(slug);
+  if (!hadRow && !hadDefinition) return false;
   deleteTriggersForSlug(slug);
   deleteWorkflowRow(slug);
   return true;
@@ -167,29 +140,4 @@ export function deleteWorkflow(slug: string): boolean {
 
 export function getDefinition(slug: string): WorkflowDefinition | undefined {
   return getWorkflowRow(slug)?.definition;
-}
-
-// Debounced so an editor writing a file in several chunks reloads once.
-export function watchWorkflowFiles(
-  onChange?: (r: LoadReport) => void,
-): () => void {
-  fs.mkdirSync(WORKFLOWS_DIR, { recursive: true });
-  let timer: NodeJS.Timeout | undefined;
-  const watcher = fs.watch(WORKFLOWS_DIR, () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      try {
-        // Not `onChange?.(syncWorkflowFiles())`: optional call short-circuits
-        // its own arguments, so the reload would never run without a callback.
-        const report = syncWorkflowFiles();
-        onChange?.(report);
-      } catch (err) {
-        logger.error({ err }, 'workflow: reload failed');
-      }
-    }, 200);
-  });
-  return () => {
-    clearTimeout(timer);
-    watcher.close();
-  };
 }

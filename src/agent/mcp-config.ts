@@ -1,8 +1,5 @@
-import fs from 'fs';
-import path from 'path';
-
-import { CONFIG_DIR } from '../config.js';
 import { logger } from '../logger.js';
+import { listMcpServers } from '../store/mcp.js';
 
 const ENV_VAR_PATTERN = /\$\{([A-Z_][A-Z0-9_]*)\}/g;
 
@@ -32,32 +29,25 @@ function expandEnv(value: unknown, missing: Set<string>): unknown {
 }
 
 /**
- * Load mcpServers from ~/.bearclaw/config/mcp.json with ${VAR} env-var
- * expansion across all string leaves. Missing env vars do not throw —
- * they expand to "" and are logged at WARN so the rest of the config
- * still loads. Returns {} on missing/invalid file.
+ * Build mcpServers from the enabled rows in the config database, with ${VAR}
+ * env-var expansion across all string leaves. Missing env vars do not throw —
+ * they expand to "" and are logged at WARN so the rest of the config still
+ * loads. Returns {} when no server is configured.
  */
 export function loadUserMcpServers(): Record<string, unknown> {
-  const mcpConfigPath = path.join(CONFIG_DIR, 'mcp.json');
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
-  } catch {
-    return {};
-  }
-  const servers =
-    raw && typeof raw === 'object' && 'mcpServers' in raw
-      ? (raw as { mcpServers?: unknown }).mcpServers
-      : undefined;
-  if (!servers || typeof servers !== 'object') return {};
+  const rows = listMcpServers().filter((row) => row.enabled);
+  if (rows.length === 0) return {};
 
   const missing = new Set<string>();
-  const expanded = expandEnv(servers, missing) as Record<string, unknown>;
+  const servers: Record<string, unknown> = {};
+  for (const row of rows) {
+    servers[row.name] = expandEnv(row.config, missing);
+  }
   if (missing.size > 0) {
     logger.warn(
-      { missing: [...missing], path: mcpConfigPath },
-      'mcp.json references env vars that are not set; values expanded to empty string',
+      { missing: [...missing] },
+      'mcp servers reference env vars that are not set; values expanded to empty string',
     );
   }
-  return expanded;
+  return servers;
 }

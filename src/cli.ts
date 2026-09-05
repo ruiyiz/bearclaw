@@ -6,10 +6,10 @@ import { bootstrap } from './store/bootstrap.js';
 const USAGE = `bearclaw <command> [options]
 
 Commands:
-  migrate-fs [--dry-run] [--force] [--no-keep-files]
+  migrate-fs [--dry-run] [--force] [--keep-files]
       Import ~/.bearclaw's files (.env, context, agents, skills, workflows,
-      config) into the config database. Files stay where they are unless
-      --no-keep-files moves them aside to legacy-YYYYMMDD/.
+      config) into the config database, then move the originals aside to
+      legacy-YYYYMMDD/. --keep-files leaves them where they are.
 
   config list [--secret]        List settings (secrets redacted unless --secret)
   config get <key>              Print one setting
@@ -17,6 +17,19 @@ Commands:
                                 Write a setting (keys matching
                                 TOKEN/KEY/PASSWORD/SECRET are stored secret)
   config unset <key>            Remove a setting
+  config mcp list               List MCP servers
+  config mcp set <name> <json>  Write one MCP server definition
+  config mcp rm <name>          Remove an MCP server
+  config mcp enable|disable <name>
+                                Toggle an MCP server
+  config catalog show           Print the model catalog
+  config catalog import <file>  Replace the model catalog from a JSON file
+
+  workflows list                List workflow definitions
+  workflows export <slug> [file]
+                                Write one definition to a file, or stdout
+  workflows import <file> [--replace]
+                                Add a definition from a file
 
   whatsapp-auth                 Pair WhatsApp by QR code
 
@@ -35,8 +48,7 @@ async function cmdMigrateFs(argv: string[]): Promise<number> {
     options: {
       'dry-run': { type: 'boolean', default: false },
       force: { type: 'boolean', default: false },
-      'keep-files': { type: 'boolean', default: true },
-      'no-keep-files': { type: 'boolean', default: false },
+      'keep-files': { type: 'boolean', default: false },
     },
     allowPositionals: false,
   });
@@ -45,7 +57,7 @@ async function cmdMigrateFs(argv: string[]): Promise<number> {
   const report = importLegacyFs({
     dryRun: values['dry-run'],
     force: values.force,
-    keepFiles: values['keep-files'] && !values['no-keep-files'],
+    keepFiles: values['keep-files'],
   });
 
   const lines: string[] = [];
@@ -82,6 +94,14 @@ async function cmdMigrateFs(argv: string[]): Promise<number> {
   for (const err of report.errors) {
     lines.push(`  error ${err.source}: ${err.issues.join('; ')}`);
   }
+  if (!report.dryRun && !report.keepFiles) {
+    lines.push('');
+    if (report.detected.includes('.git')) {
+      lines.push(`${report.home} is no longer a git repository.`);
+      lines.push(`Its history is kept at ${report.legacyDir}/.git.`);
+    }
+    lines.push('`bearclaw export` is the backup path from here on.');
+  }
   console.log(lines.join('\n'));
   return 0;
 }
@@ -94,6 +114,8 @@ async function cmdConfig(argv: string[]): Promise<number> {
   });
   const [action, key, value] = positionals;
   bootstrap();
+  if (action === 'mcp') return cmdConfigMcp(positionals.slice(1));
+  if (action === 'catalog') return cmdConfigCatalog(positionals.slice(1));
   const settings = await import('./store/settings.js');
 
   switch (action) {
@@ -134,6 +156,180 @@ async function cmdConfig(argv: string[]): Promise<number> {
   }
 }
 
+async function cmdConfigMcp(argv: string[]): Promise<number> {
+  const [action, name, body] = argv;
+  const mcp = await import('./store/mcp.js');
+
+  switch (action) {
+    case undefined:
+    case 'list': {
+      const rows = mcp.listMcpServers();
+      if (rows.length === 0) {
+        console.log('(no mcp servers)');
+        return 0;
+      }
+      for (const row of rows) {
+        console.log(
+          `${row.name}${row.enabled ? '' : ' (disabled)'}  ${JSON.stringify(row.config)}`,
+        );
+      }
+      return 0;
+    }
+    case 'set': {
+      if (!name || !body) return fail('config mcp set <name> <json>');
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch (err) {
+        return fail(
+          `invalid JSON: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        return fail('the server definition must be a JSON object');
+      mcp.putMcpServer(name, parsed as Record<string, unknown>);
+      console.log(`${name} set (restart BearClaw to pick it up)`);
+      return 0;
+    }
+    case 'rm': {
+      if (!name) return fail('config mcp rm <name>');
+      if (!mcp.deleteMcpServer(name)) return fail(`${name} is not configured`);
+      console.log(`${name} removed (restart BearClaw to pick it up)`);
+      return 0;
+    }
+    case 'enable':
+    case 'disable': {
+      if (!name) return fail(`config mcp ${action} <name>`);
+      if (!mcp.setMcpServerEnabled(name, action === 'enable'))
+        return fail(`${name} is not configured`);
+      console.log(`${name} ${action}d (restart BearClaw to pick it up)`);
+      return 0;
+    }
+    default:
+      return fail(`Unknown config mcp action: ${action}`);
+  }
+}
+
+async function cmdConfigCatalog(argv: string[]): Promise<number> {
+  const [action, file] = argv;
+  const models = await import('./store/models.js');
+
+  switch (action) {
+    case undefined:
+    case 'show': {
+      const catalog = models.getModelCatalog();
+      console.log(
+        catalog
+          ? JSON.stringify(catalog, null, 2)
+          : '(no catalog stored — the built-in lineup is in use)',
+      );
+      return 0;
+    }
+    case 'import': {
+      if (!file) return fail('config catalog import <file>');
+      const fs = await import('node:fs');
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      } catch (err) {
+        return fail(
+          `cannot read ${file}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        !Array.isArray((parsed as { models?: unknown }).models)
+      )
+        return fail('the catalog needs a "models" array');
+      models.setModelCatalog(parsed as object);
+      console.log('model catalog imported (restart BearClaw to pick it up)');
+      return 0;
+    }
+    default:
+      return fail(`Unknown config catalog action: ${action}`);
+  }
+}
+
+async function cmdWorkflows(argv: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: { replace: { type: 'boolean', default: false } },
+    allowPositionals: true,
+  });
+  const [action, target, out] = positionals;
+  bootstrap();
+  const store = await import('./store/workflows.js');
+  const { parseDefinition, WorkflowValidationError } =
+    await import('./workflows/schema.js');
+
+  const describe = (err: unknown): string =>
+    err instanceof WorkflowValidationError
+      ? `${err.message}: ${err.issues.join('; ')}`
+      : err instanceof Error
+        ? err.message
+        : String(err);
+
+  switch (action) {
+    case undefined:
+    case 'list': {
+      const rows = store.listWorkflowDefinitions();
+      if (rows.length === 0) {
+        console.log('(no workflows)');
+        return 0;
+      }
+      const width = Math.max(...rows.map((r) => r.slug.length));
+      for (const row of rows) {
+        let label = '(unparseable)';
+        try {
+          const def = JSON.parse(row.definition) as { name?: string };
+          label = def.name ?? '';
+        } catch {
+          // keep the placeholder
+        }
+        console.log(`${row.slug.padEnd(width)}  ${label}`);
+      }
+      return 0;
+    }
+    case 'export': {
+      if (!target) return fail('workflows export <slug> [file]');
+      const row = store.getWorkflowDefinition(target);
+      if (!row) return fail(`Unknown workflow: ${target}`);
+      let text: string;
+      try {
+        text = `${JSON.stringify(JSON.parse(row.definition), null, 2)}\n`;
+      } catch {
+        text = row.definition;
+      }
+      if (!out) {
+        process.stdout.write(text);
+        return 0;
+      }
+      const fs = await import('node:fs');
+      fs.writeFileSync(out, text);
+      console.log(`${target} written to ${out}`);
+      return 0;
+    }
+    case 'import': {
+      if (!target) return fail('workflows import <file> [--replace]');
+      const fs = await import('node:fs');
+      let def;
+      try {
+        def = parseDefinition(JSON.parse(fs.readFileSync(target, 'utf-8')));
+      } catch (err) {
+        return fail(describe(err));
+      }
+      if (!values.replace && store.getWorkflowDefinition(def.slug))
+        return fail(`${def.slug} already exists (pass --replace to overwrite)`);
+      store.putWorkflowDefinition(def.slug, def);
+      console.log(`${def.slug} imported (restart BearClaw to pick it up)`);
+      return 0;
+    }
+    default:
+      return fail(`Unknown workflows action: ${action}`);
+  }
+}
+
 async function run(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   if (
@@ -150,6 +346,8 @@ async function run(argv: string[]): Promise<number> {
       return cmdMigrateFs(rest);
     case 'config':
       return cmdConfig(rest);
+    case 'workflows':
+      return cmdWorkflows(rest);
     case 'whatsapp-auth': {
       bootstrap();
       const { runWhatsappAuth } = await import('./cli/whatsapp-auth.js');

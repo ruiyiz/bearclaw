@@ -14,7 +14,7 @@ import {
 import { cancelRun, resolveWait } from '../workflows/engine.js';
 import { advise, formatIssue } from '../workflows/checks.js';
 import { WorkflowValidationError } from '../workflows/schema.js';
-import { deleteWorkflow, writeWorkflowFile } from '../workflows/store.js';
+import { deleteWorkflow, saveWorkflowDefinition } from '../workflows/store.js';
 import {
   TriggerError,
   createTrigger,
@@ -58,7 +58,7 @@ export function createWorkflowTools(ctx: WorkflowToolContext) {
     tool(
       'workflow_list',
       `List workflows with their tags, triggers, next run, last status and open human waits.
-A workflow is a small flowchart of typed nodes stored at ~/.bearclaw/workflows/<slug>.json.`,
+A workflow is a small flowchart of typed nodes stored in the config database.`,
       {
         slug: z
           .string()
@@ -125,7 +125,7 @@ Templates use {{ }} over { inputs, nodes, trigger, run, env }.`,
         const denied = assertOwnership(ctx, owner);
         if (denied) return err(denied);
         try {
-          const def = writeWorkflowFile({
+          const def = saveWorkflowDefinition({
             ...(args.definition as Record<string, unknown>),
             owner,
           } as never);
@@ -152,7 +152,7 @@ Templates use {{ }} over { inputs, nodes, trigger, run, env }.`,
 
     tool(
       'workflow_delete',
-      'Delete a workflow definition and its file.',
+      'Delete a workflow definition.',
       { slug: z.string() },
       async (args) => {
         const row = getWorkflowRow(args.slug);

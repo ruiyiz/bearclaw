@@ -182,6 +182,19 @@ export function initDatabase(
   );
 
   initWorkflowTables(db);
+
+  // Definitions moved into the config database; the index keeps only runtime
+  // state. Both drops are no-ops on a database created after that change.
+  try {
+    db.exec(`ALTER TABLE workflows DROP COLUMN file_path`);
+  } catch {
+    /* column already gone */
+  }
+  try {
+    db.exec(`ALTER TABLE workflows DROP COLUMN file_hash`);
+  } catch {
+    /* column already gone */
+  }
 }
 
 // One-shot web-channel migration: pre-session web rows live under chat_jid =

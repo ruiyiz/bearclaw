@@ -408,7 +408,7 @@ export async function runContainerAgent(
     },
   });
 
-  // Load user-configured MCP servers from ~/.bearclaw/config/mcp.json
+  // Load user-configured MCP servers from the config database
   const userMcpServers = loadUserMcpServers();
 
   let result: string | null = null;

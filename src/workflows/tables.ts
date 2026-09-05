@@ -7,8 +7,6 @@ export function initWorkflowTables(db: Database.Database): void {
       name        TEXT NOT NULL,
       owner       TEXT NOT NULL,
       enabled     INTEGER NOT NULL DEFAULT 1,
-      file_path   TEXT,
-      file_hash   TEXT,
       definition  TEXT NOT NULL,
       last_run_id TEXT,
       last_status TEXT,

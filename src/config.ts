@@ -1,5 +1,3 @@
-import path from 'path';
-
 import {
   AGENTS_VAR_DIR,
   AUTH_DIR,
@@ -42,23 +40,11 @@ export const POLL_INTERVAL = 30000; // Recovery sweep interval; normal dispatch 
 export const SCHEDULER_POLL_INTERVAL = 60000;
 export const EVENT_POLL_INTERVAL = 5000;
 
-// Persistent (tracked) — removed in a later phase once the config DB owns them.
-export const CONFIG_DIR = path.resolve(BEARCLAW_HOME, 'config');
-export const CONTEXT_DIR = path.resolve(BEARCLAW_HOME, 'context');
-export const AGENTS_DIR = path.resolve(BEARCLAW_HOME, 'agents');
-export const SKILLS_DIR = path.resolve(BEARCLAW_HOME, 'skills');
-export const WORKFLOWS_DIR = path.resolve(
-  process.env.BEARCLAW_WORKFLOWS_DIR || path.join(BEARCLAW_HOME, 'workflows'),
-);
-
 // Origin used to build links the owner clicks from a chat message. Point it at
 // the tunnel hostname when the UI is reachable from outside.
 export const PUBLIC_URL = (
   process.env.BEARCLAW_PUBLIC_URL || 'http://127.0.0.1:3030'
 ).replace(/\/$/, '');
-
-export const agentDir = (folder: string): string =>
-  path.join(AGENTS_DIR, folder);
 
 export const AGENT_TIMEOUT = parseInt(
   process.env.AGENT_TIMEOUT || '300000',

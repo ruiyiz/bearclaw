@@ -103,7 +103,7 @@ export interface RegisteredAgent {
 }
 
 // ─── On-disk registry (nested: folder-outer, channels-inner) ────────────────
-// Source of truth for registered_agents.json. Agent-level fields live once on
+// Source of truth for the `agents` table. Agent-level fields live once on
 // the StoredAgent; per-channel routing config lives on each StoredChannel.
 
 export interface StoredChannel {

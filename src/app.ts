@@ -91,7 +91,7 @@ let lastTimestamp = '';
 let sessions: Session = {};
 let agentModels: Record<string, string> = {};
 let agentEfforts: Record<string, string> = {};
-// Nested, folder-keyed source of truth (mirrors registered_agents.json).
+// Nested, folder-keyed source of truth (mirrors the `agents` table).
 let agentRegistry: AgentRegistry = {};
 // Flat, jid-keyed view derived from `agentRegistry`. Rebuilt on every mutation;
 // this is what the router, channels, bus and heartbeat consume.

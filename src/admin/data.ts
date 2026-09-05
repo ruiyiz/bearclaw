@@ -22,7 +22,7 @@ import {
   removeSkill,
   skillMirrorPath,
 } from '../store/skills.js';
-import { skillsCacheDir } from '../store/paths.js';
+import { CONFIG_DB_PATH, skillsCacheDir } from '../store/paths.js';
 import type { EventRecord, RegisteredAgent } from '../types.js';
 
 const DB_PATH = path.join(DATA_DIR, 'messages.db');
@@ -194,22 +194,35 @@ export interface HealthCheck {
   detail: string;
 }
 
+// Process check plus everything runDbHealthChecks covers. The doctor command
+// runs out of process, where the PID check means nothing, so it calls
+// runDbHealthChecks directly.
 export function runHealthChecks(): HealthCheck[] {
+  // This code executes inside the main process, so the host is by definition
+  // up. Report PID + uptime instead of pgrep'ing.
+  const uptimeS = Math.round(process.uptime());
+  return [
+    {
+      name: 'Process',
+      status: 'ok',
+      detail: `pid ${process.pid}, up ${formatUptime(uptimeS)}`,
+    },
+    ...runDbHealthChecks(),
+  ];
+}
+
+export function runDbHealthChecks(): HealthCheck[] {
   const checks: HealthCheck[] = [];
 
-  // 1. Process running — this code executes inside the main process, so the
-  // host is by definition up. Report PID + uptime instead of pgrep'ing.
-  const uptimeS = Math.round(process.uptime());
-  checks.push({
-    name: 'Process',
-    status: 'ok',
-    detail: `pid ${process.pid}, up ${formatUptime(uptimeS)}`,
-  });
-
-  // 2. Database accessible
-  if (!fs.existsSync(DB_PATH)) {
-    checks.push({ name: 'Database', status: 'fail', detail: 'File not found' });
-    return checks;
+  // 1. Database files present
+  const missing = [DB_PATH, CONFIG_DB_PATH].filter((f) => !fs.existsSync(f));
+  if (missing.length > 0) {
+    checks.push({
+      name: 'Database',
+      status: 'fail',
+      detail: `Not found: ${missing.map((f) => path.basename(f)).join(', ')}`,
+    });
+    if (!fs.existsSync(DB_PATH)) return checks;
   }
 
   let db: Database.Database;

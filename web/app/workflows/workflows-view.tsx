@@ -318,8 +318,7 @@ export function WorkflowsView() {
         </div>
         {rows.length === 0 && (
           <p className="px-4 py-6 text-sm text-[color:var(--muted)]">
-            No workflows yet. Definitions live in{' '}
-            <code>~/.bearclaw/workflows/</code>.
+            No workflows yet. Create one, or import a definition.
           </p>
         )}
         {rows.length > 0 && shown.length === 0 && (

@@ -1,24 +1,23 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { after, test } from 'node:test';
 
-// Exercises the real file loader, the real trigger table and the real shell
-// executor end to end. Only the workflows directory is redirected.
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bearclaw-wf-e2e-'));
-process.env.BEARCLAW_WORKFLOWS_DIR = tmpDir;
+// Exercises the real definition loader, the real trigger table and the real
+// shell executor end to end against in-memory databases.
 process.env.NODE_ENV = 'test';
+
+const { closeConfigDb, initConfigDb } = await import('../store/config-db.js');
+initConfigDb(':memory:');
+const { putWorkflowDefinition } = await import('../store/workflows.js');
 
 const { initDatabase } = await import('../db.js');
 initDatabase(':memory:');
 
 const { getRun, listRuns, listSteps, listTriggerRows } =
   await import('./db.js');
-const { syncWorkflowFiles } = await import('./store.js');
+const { syncWorkflowDefinitions } = await import('./store.js');
 const { runManually, scanDueTriggers } = await import('./triggers.js');
 
-after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+after(() => closeConfigDb());
 
 const DIGEST = {
   $schema: 'bearclaw://workflow/v1',
@@ -64,12 +63,9 @@ const DIGEST = {
   ],
 };
 
-test('a definition file loads, indexes and declares its triggers', () => {
-  fs.writeFileSync(
-    path.join(tmpDir, 'digest.json'),
-    JSON.stringify(DIGEST, null, 2),
-  );
-  const report = syncWorkflowFiles();
+test('a definition row loads, indexes and declares its triggers', () => {
+  putWorkflowDefinition('digest', DIGEST);
+  const report = syncWorkflowDefinitions();
   assert.deepEqual(report.loaded, ['digest']);
   assert.deepEqual(report.errors, []);
 
@@ -102,19 +98,16 @@ test('inputs passed at run time override the schema default', async () => {
 });
 
 test('a shell failure fails the run with the command output', async () => {
-  fs.writeFileSync(
-    path.join(tmpDir, 'broken.json'),
-    JSON.stringify({
-      name: 'Broken',
-      slug: 'broken',
-      owner: 'main',
-      nodes: {
-        boom: { type: 'shell', cmd: 'echo bad >&2; exit 3' },
-      },
-      edges: [],
-    }),
-  );
-  syncWorkflowFiles();
+  putWorkflowDefinition('broken', {
+    name: 'Broken',
+    slug: 'broken',
+    owner: 'main',
+    nodes: {
+      boom: { type: 'shell', cmd: 'echo bad >&2; exit 3' },
+    },
+    edges: [],
+  });
+  syncWorkflowDefinitions();
   const result = await runManually('broken', {}, 'test');
   const run = getRun(result.runId!)!;
   assert.equal(run.status, 'failed');

@@ -1,12 +1,11 @@
-import fs from 'fs';
-import path from 'path';
-
-import { CONFIG_DIR } from './config.js';
+import { getModelCatalog } from './store/models.js';
 
 // Model catalog — the single source of truth for selectable models, their
 // aliases, and context-window sizes. Ships with a built-in lineup and can be
-// overridden by ~/.bearclaw/config/model-catalog.json (same shape as
-// DEFAULT_CATALOG below). Missing or malformed file falls back to the default.
+// overridden by the model_catalog row in the config database (same shape as
+// DEFAULT_CATALOG below). A missing or malformed row falls back to the
+// default. Read at import time, so a process that has not opened the config
+// database yet gets the built-in lineup.
 
 export interface ModelSpec {
   alias: string; // canonical alias, e.g. 'opus'
@@ -70,20 +69,13 @@ const DEFAULT_CATALOG: ModelCatalog = {
 };
 
 function loadCatalog(): ModelCatalog {
-  const file = path.join(CONFIG_DIR, 'model-catalog.json');
-  try {
-    const parsed = JSON.parse(
-      fs.readFileSync(file, 'utf8'),
-    ) as Partial<ModelCatalog>;
-    if (Array.isArray(parsed.models) && parsed.models.length > 0) {
-      return {
-        models: parsed.models,
-        largeContextPrefixes:
-          parsed.largeContextPrefixes ?? DEFAULT_CATALOG.largeContextPrefixes,
-      };
-    }
-  } catch {
-    // No file or malformed — use the built-in lineup.
+  const parsed = getModelCatalog() as Partial<ModelCatalog> | undefined;
+  if (parsed && Array.isArray(parsed.models) && parsed.models.length > 0) {
+    return {
+      models: parsed.models,
+      largeContextPrefixes:
+        parsed.largeContextPrefixes ?? DEFAULT_CATALOG.largeContextPrefixes,
+    };
   }
   return DEFAULT_CATALOG;
 }

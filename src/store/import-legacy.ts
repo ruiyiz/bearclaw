@@ -29,7 +29,7 @@ export interface ImportOptions {
   home?: string;
   force?: boolean;
   dryRun?: boolean;
-  /** P1-P3 default: leave the legacy files where they are. */
+  /** Opt out of retiring the imported files to legacy-YYYYMMDD/. */
   keepFiles?: boolean;
 }
 
@@ -145,7 +145,7 @@ export function importLegacyFs(opts: ImportOptions = {}): ImportReport {
   const resolved = {
     force: opts.force ?? false,
     dryRun: opts.dryRun ?? false,
-    keepFiles: opts.keepFiles ?? true,
+    keepFiles: opts.keepFiles ?? false,
   };
   const report = emptyReport(home, resolved);
   report.detected = detectLegacyPaths(home);

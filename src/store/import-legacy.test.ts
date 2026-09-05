@@ -134,7 +134,7 @@ test('dry run reports without writing', () => {
 });
 
 test('import fills every table', () => {
-  report = importLegacyFs({ home });
+  report = importLegacyFs({ home, keepFiles: true });
   const db = getConfigDb();
 
   // Settings: .env minus the location vars and the password.
@@ -246,7 +246,7 @@ test('keep-files leaves the tree alone but still reports the moves', () => {
 });
 
 test('a second run imports nothing', () => {
-  const again = importLegacyFs({ home });
+  const again = importLegacyFs({ home, keepFiles: true });
   assert.deepEqual(again.settings, []);
   assert.deepEqual(again.agents, []);
   assert.deepEqual(again.contextFiles, []);
@@ -259,7 +259,7 @@ test('a second run imports nothing', () => {
 });
 
 // Runs last: it repoints the shared connection at a second temp home.
-test('without keep-files the legacy tree is moved aside, never deleted', () => {
+test('by default the legacy tree is moved aside, never deleted', () => {
   fs.mkdirSync(path.join(retireHome, 'agents', 'coco'), { recursive: true });
   fs.writeFileSync(path.join(retireHome, '.env'), 'ASSISTANT_NAME=Andy\n');
   fs.writeFileSync(
@@ -272,7 +272,9 @@ test('without keep-files the legacy tree is moved aside, never deleted', () => {
   );
   fs.mkdirSync(path.join(retireHome, '.git'), { recursive: true });
 
-  const moved = importLegacyFs({ home: retireHome, keepFiles: false });
+  // No keepFiles flag: retiring the tree is the default.
+  const moved = importLegacyFs({ home: retireHome });
+  assert.equal(moved.keepFiles, false);
   assert.ok(moved.legacyDir);
   assert.equal(path.basename(moved.legacyDir!).startsWith('legacy-'), true);
 

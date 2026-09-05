@@ -3,7 +3,7 @@ import { logger } from '../logger.js';
 import { ensureBuiltinWorkflows } from './builtins.js';
 import { recover, tick } from './engine.js';
 import { migrateHandlersToWorkflows } from './migrate.js';
-import { syncWorkflowFiles, watchWorkflowFiles } from './store.js';
+import { syncWorkflowDefinitions } from './store.js';
 import {
   checkMissedRuns,
   dispatchEvents,
@@ -27,8 +27,7 @@ export async function startWorkflowService(): Promise<void> {
 
   ensureBuiltinWorkflows();
   migrateHandlersToWorkflows();
-  syncWorkflowFiles();
-  watchWorkflowFiles();
+  syncWorkflowDefinitions();
 
   await recover();
 

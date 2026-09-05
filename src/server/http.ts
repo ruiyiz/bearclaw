@@ -7,7 +7,6 @@ import { listSessions } from '@anthropic-ai/claude-agent-sdk';
 
 import {
   CACHE_DIR,
-  CONFIG_DIR,
   DATA_DIR,
   MAIN_AGENT_FOLDER,
   agentVarDir,
@@ -34,7 +33,7 @@ import {
 } from '../workflows/db.js';
 import { cancelRun, forkRun, resolveWait } from '../workflows/engine.js';
 import { WorkflowValidationError } from '../workflows/schema.js';
-import { deleteWorkflow, writeWorkflowFile } from '../workflows/store.js';
+import { deleteWorkflow, saveWorkflowDefinition } from '../workflows/store.js';
 import {
   createTrigger,
   deleteTrigger,
@@ -92,6 +91,8 @@ import {
   listSkillFiles,
   putSkillFile,
 } from '../store/skills.js';
+import { configDbPath } from '../store/config-db.js';
+import { getWorkflowDefinition } from '../store/workflows.js';
 import {
   createContextFile,
   deleteContextFile,
@@ -582,7 +583,7 @@ add('PUT', /^\/api\/admin\/context\/file$/, async (req, res, url) => {
 add('GET', /^\/api\/admin\/config$/, (_req, res) => {
   json(res, 200, {
     home: process.env.HOME,
-    configDir: CONFIG_DIR,
+    configDb: configDbPath(),
     dataDir: DATA_DIR,
     cacheDir: CACHE_DIR,
     env: {
@@ -1189,6 +1190,42 @@ add('GET', /^\/api\/workflows$/, (_req, res) => {
   json(res, 200, { workflows: listWorkflowRows().map(workflowSummary) });
 });
 
+// Export/import move a definition between installs without touching files.
+add('POST', /^\/api\/workflows\/import$/, async (req, res, url) => {
+  const body = (await readBody(req)) as { definition?: unknown };
+  if (!body.definition) return json(res, 400, { error: 'missing definition' });
+  const replace = url.searchParams.get('replace') === '1';
+  const slug = (body.definition as { slug?: unknown }).slug;
+  if (typeof slug !== 'string' || !slug)
+    return json(res, 400, { error: 'definition has no slug' });
+  if (!replace && (getWorkflowDefinition(slug) || getWorkflowRow(slug)))
+    return json(res, 409, { error: `workflow "${slug}" already exists` });
+  try {
+    const def = saveWorkflowDefinition(body.definition as never);
+    webBroker.publishWorkflow({
+      type: 'workflow.changed',
+      slug: def.slug,
+      ts: Date.now(),
+    });
+    json(res, 200, { ok: true, definition: def });
+  } catch (err) {
+    json(res, 400, { error: describeError(err) });
+  }
+});
+
+add('GET', /^\/api\/workflows\/[^/]+\/export$/, (_req, res, url) => {
+  const slug = decodeURIComponent(url.pathname.split('/')[3]);
+  const row = getWorkflowRow(slug);
+  if (!row) return json(res, 404, { error: 'unknown workflow' });
+  const payload = `${JSON.stringify(row.definition, null, 2)}\n`;
+  res.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-disposition': `attachment; filename=${slug}.json`,
+    'content-length': Buffer.byteLength(payload),
+  });
+  res.end(payload);
+});
+
 add('GET', /^\/api\/workflows\/[^/]+$/, (_req, res, url) => {
   const slug = decodeURIComponent(url.pathname.split('/').pop()!);
   const row = getWorkflowRow(slug);
@@ -1196,7 +1233,6 @@ add('GET', /^\/api\/workflows\/[^/]+$/, (_req, res, url) => {
   json(res, 200, {
     workflow: workflowSummary(row),
     definition: row.definition,
-    filePath: row.file_path,
     runs: listRuns(slug, 20).map(runSummary),
   });
 });
@@ -1206,7 +1242,7 @@ add('PUT', /^\/api\/workflows\/[^/]+$/, async (req, res, url) => {
   const body = (await readBody(req)) as { definition?: unknown };
   if (!body.definition) return json(res, 400, { error: 'missing definition' });
   try {
-    const def = writeWorkflowFile(body.definition as never);
+    const def = saveWorkflowDefinition(body.definition as never);
     if (def.slug !== slug)
       return json(res, 400, { error: 'slug does not match the path' });
     webBroker.publishWorkflow({
@@ -1309,7 +1345,8 @@ add('PATCH', /^\/api\/triggers\/[^/]+$/, async (req, res, url) => {
     if (body.config || body.args) {
       if (trigger.source === 'file')
         return json(res, 400, {
-          error: 'this trigger is declared in the workflow file; edit the file',
+          error:
+            'this trigger is declared by the workflow; edit the definition',
         });
       updateTriggerRow(id, {
         ...(body.config ? { config: body.config } : {}),

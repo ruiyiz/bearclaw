@@ -94,6 +94,21 @@ export function WorkflowDetail({ slug }: { slug: string }) {
     }
   };
 
+  const exportJson = async () => {
+    setError(null);
+    try {
+      const blob = await api.exportWorkflow(slug);
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = `${slug}.json`;
+      a.click();
+      URL.revokeObjectURL(href);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const runNow = async () => {
     setError(null);
     try {
@@ -117,16 +132,30 @@ export function WorkflowDetail({ slug }: { slug: string }) {
         title={summary.name}
         subtitle={`${summary.slug}${summary.enabled ? '' : ' · paused'}`}
         actions={
-          <button
-            type="button"
-            onClick={runNow}
-            className="flex items-center gap-1.5 rounded-md bg-[color:var(--accent)] px-3 py-1.5 text-[12px] font-semibold text-[color:var(--on-accent)]"
-          >
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
-              <path d="M8 5.5v13l11-6.5z" />
-            </svg>
-            Run {summary.name}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={exportJson}
+              className="rounded-md border border-[color:var(--border)] px-2.5 py-1.5 text-[12px] text-[color:var(--muted)] hover:text-[color:var(--fg)]"
+            >
+              Export
+            </button>
+            <button
+              type="button"
+              onClick={runNow}
+              className="flex items-center gap-1.5 rounded-md bg-[color:var(--accent)] px-3 py-1.5 text-[12px] font-semibold text-[color:var(--on-accent)]"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="12"
+                height="12"
+                fill="currentColor"
+              >
+                <path d="M8 5.5v13l11-6.5z" />
+              </svg>
+              Run {summary.name}
+            </button>
+          </div>
         }
       />
 

@@ -602,9 +602,26 @@ export const api = {
     get<{
       workflow: WorkflowSummary;
       definition: WorkflowDefinition;
-      filePath: string | null;
       runs: WorkflowRun[];
     }>(`/api/workflows/${encodeURIComponent(slug)}`),
+  exportWorkflow: async (slug: string): Promise<Blob> => {
+    const res = await fetch(
+      `/api/workflows/${encodeURIComponent(slug)}/export`,
+      { cache: 'no-store' },
+    );
+    if (res.status === 401) {
+      bounceToLogin();
+      throw new Error('unauthorized');
+    }
+    if (!res.ok) throw new Error(`${res.status} export ${slug}`);
+    return res.blob();
+  },
+  importWorkflow: (definition: unknown, replace = false) =>
+    send<{ ok: boolean; definition: WorkflowDefinition }>(
+      `/api/workflows/import${replace ? '?replace=1' : ''}`,
+      'POST',
+      { definition },
+    ),
   saveWorkflow: (slug: string, definition: unknown) =>
     send<{ ok: boolean; definition: WorkflowDefinition }>(
       `/api/workflows/${encodeURIComponent(slug)}`,

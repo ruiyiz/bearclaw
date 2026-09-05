@@ -13,7 +13,7 @@ import { saveJson } from '../utils/json.js';
 import { ensureBuiltinWorkflows } from './builtins.js';
 import { getWorkflowRow } from './db.js';
 import { parseDefinition, type WorkflowDefinition } from './schema.js';
-import { writeWorkflowFile } from './store.js';
+import { saveWorkflowDefinition } from './store.js';
 import { createTrigger, nextCronRun } from './triggers.js';
 
 const MARKER = () => path.join(VAR_DIR, 'workflows-migrated.json');
@@ -187,7 +187,7 @@ export function migrateHandlersToWorkflows(force = false): MigrationReport {
         report.skipped.push(handler.id);
         continue;
       }
-      writeWorkflowFile(def);
+      saveWorkflowDefinition(def);
       report.workflows.push(def.slug);
     } catch (err) {
       logger.warn(
@@ -211,7 +211,7 @@ export function migrateHandlersToWorkflows(force = false): MigrationReport {
     try {
       const def = checkinDefinition(folder, heartbeat, enabled);
       if (!getWorkflowRow(def.slug)) {
-        writeWorkflowFile(def);
+        saveWorkflowDefinition(def);
         report.heartbeats.push(def.slug);
       }
       delete registry[folder].heartbeat;

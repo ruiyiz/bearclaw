@@ -1,7 +1,4 @@
-import fs from 'fs';
-import path from 'path';
-
-import { CONFIG_DIR } from '../config.js';
+import { listMcpServers } from '../store/mcp.js';
 import { SlashCommand } from './types.js';
 
 interface McpServer {
@@ -11,40 +8,28 @@ interface McpServer {
   type?: string;
 }
 
-interface McpConfig {
-  mcpServers?: Record<string, McpServer>;
-}
-
-function loadMcpConfig(): McpConfig {
-  const configPath = path.join(CONFIG_DIR, 'mcp.json');
-  if (!fs.existsSync(configPath)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(configPath, 'utf-8')) as McpConfig;
-  } catch {
-    return {};
-  }
-}
-
-function describeServer(name: string, s: McpServer): string {
-  if (s.url) return `\`${name}\` — http \`${s.url}\``;
+function describeServer(name: string, s: McpServer, enabled: boolean): string {
+  const suffix = enabled ? '' : ' (disabled)';
+  if (s.url) return `\`${name}\` — http \`${s.url}\`${suffix}`;
   const parts = [s.command, ...(s.args || [])].filter(Boolean) as string[];
   const cmd = parts.join(' ');
   const trimmed = cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd;
-  return `\`${name}\` — stdio \`${trimmed}\``;
+  return `\`${name}\` — stdio \`${trimmed}\`${suffix}`;
 }
 
 export const mcpCommand: SlashCommand = {
   name: 'mcp',
   description: 'List configured MCP servers',
   handler: async ({ reply }) => {
-    const cfg = loadMcpConfig();
-    const servers = cfg.mcpServers || {};
-    const names = Object.keys(servers).sort();
-    const lines = [`**MCP servers (${names.length + 1})**`, ''];
+    const rows = listMcpServers();
+    const lines = [`**MCP servers (${rows.length + 1})**`, ''];
     lines.push('• `bearclaw` — built-in IPC (host ↔ agent)');
-    for (const n of names) lines.push(`• ${describeServer(n, servers[n])}`);
+    for (const row of rows)
+      lines.push(
+        `• ${describeServer(row.name, row.config as McpServer, row.enabled)}`,
+      );
     lines.push('');
-    lines.push(`Config: \`${path.join(CONFIG_DIR, 'mcp.json')}\``);
+    lines.push('Config: `bearclaw config mcp list`');
     await reply(lines.join('\n'));
   },
 };
