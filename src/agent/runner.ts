@@ -393,7 +393,10 @@ export async function runContainerAgent(
       imJids: input.imJids,
     });
     try {
-      const turn = await session.runTurn(input.prompt, {
+      const prompt = input.outputSchema
+        ? `${input.prompt}\n\nReturn only a JSON value that validates against this JSON Schema:\n${JSON.stringify(input.outputSchema)}`
+        : input.prompt;
+      const turn = await session.runTurn(prompt, {
         onText: input.onText,
         onActivity: input.onActivity,
       });

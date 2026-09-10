@@ -167,6 +167,7 @@ export class PiAgentSession implements StreamingAgentSession {
         'ls',
         'send_message',
         'emit_event',
+        'register_agent',
         'recall_history',
         'context_list',
         'context_read',

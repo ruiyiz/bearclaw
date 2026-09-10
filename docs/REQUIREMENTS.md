@@ -65,11 +65,11 @@ Skills to add or switch to different messaging platforms:
 
 ## Vision
 
-A personal Claude assistant accessible via chat platforms, with minimal custom code.
+A personal AI assistant accessible via chat platforms, with minimal custom code.
 
 **Core components:**
 
-- **Claude Agent SDK** as the core agent, running directly on the host
+- **Agent backend** running directly on the host: Pi (including ChatGPT Codex authentication) or the Claude Agent SDK
 - **Channels** (WhatsApp, Telegram, iMessage) as I/O surfaces
 - **Integrations** (Gmail) as event sources
 - **Persistent memory** per agent and shared across all agents
@@ -78,7 +78,7 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 **Implementation approach:**
 
-- Use existing tools (WhatsApp connector, Claude Agent SDK, MCP servers)
+- Use existing tools (channel connectors, Pi or Claude Agent SDK, MCP servers)
 - Minimal glue code
 - One SQLite config database (`~/.bearclaw/bearclaw.db`) for everything durable the user owns, mirrored to files under `~/.bearclaw/var/cache/` where the SDK needs real files; `~/.bearclaw/var/` for runtime state
 
@@ -104,13 +104,13 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 
 ### Session Management
 
-- Each agent maintains a conversation session (via Claude Agent SDK)
+- Each agent maintains a conversation session through the selected backend
 - Daily reset hour and idle reset minutes are configurable via `SESSION_RESET_HOUR` and `SESSION_IDLE_MINUTES`
 - Sessions auto-compact when context gets too long, preserving critical information
 
 ### Agent Execution
 
-- Agents run via the Claude Agent SDK directly in the host process
+- Agents run through the selected agent backend directly in the host process
 - Each agent invocation calls `query()` with the agent's directory as `cwd`
 - No OS-level filesystem isolation between agents — agents have host filesystem access
 - Session isolation is per-agent (each has its own `cwd` and session ID)
@@ -171,7 +171,7 @@ A personal Claude assistant accessible via chat platforms, with minimal custom c
 ### Web Access
 
 - Built-in WebSearch and WebFetch tools
-- Standard Claude Agent SDK capabilities
+- Backend-provided capabilities, plus BearClaw host tools
 
 ---
 

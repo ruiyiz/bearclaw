@@ -3,14 +3,14 @@
 </p>
 
 <p align="center">
-  My personal Claude assistant. Lightweight and built to be understood and customized for your own needs.
+  My personal AI assistant. Lightweight and built to be understood and customized for your own needs.
 </p>
 
 ## Why I Built This
 
 [OpenClaw](https://github.com/openclaw/openclaw) is an impressive project with a great vision. But I can't sleep well running software I don't understand with access to my life. OpenClaw has 52+ modules, 8 config management files, 45+ dependencies, and abstractions for 15 channel providers. Security is application-level (allowlists, pairing codes) rather than OS isolation. Everything runs in one Node process with shared memory.
 
-BearClaw gives you the same core functionality in a codebase you can understand in 8 minutes. One process. A handful of files. Agents run via the Claude Agent SDK directly on your machine.
+BearClaw gives you the same core functionality in a codebase you can understand in 8 minutes. One process. A handful of files. Agents run through a selectable agent backend directly on your machine.
 
 ## Quick Start
 
@@ -21,7 +21,7 @@ npm install
 npm run setup
 ```
 
-`npm run setup` asks for a Claude token, a model, an assistant name and a web
+`npm run setup` asks for an agent-backend credential, a default model tier, an assistant name and a web
 password, writes them to the config database at `~/.bearclaw/bearclaw.db`, seeds
 the starter context, renders the launchd services, builds both apps and starts
 them. It is safe to rerun.
@@ -43,14 +43,14 @@ first conversation.
 
 **Skills over features.** Contributors shouldn't add features (e.g. support for Telegram) to the codebase. Instead, they contribute [claude code skills](https://code.claude.com/docs/en/skills) like `/add-telegram` that transform your fork. You end up with clean code that does exactly what you need.
 
-**Best harness, best model.** This runs on Claude Agent SDK, which means you're running Claude Code directly. The harness matters. A bad harness makes even smart models seem dumb, a good harness gives them superpowers. Claude Code is (IMO) the best harness available.
+**Best harness, best model.** BearClaw supports Pi with ChatGPT Codex authentication and retains Claude Agent SDK compatibility. The harness matters: a good harness gives capable models the tools and context to be useful.
 
 ## What It Supports
 
-- **WhatsApp I/O** - Message Claude from your phone
+- **WhatsApp I/O** - Message your assistant from your phone
 - **Isolated agent context** - Each agent has its own `IDENTITY.md`, working directory, memory, and conversation session
 - **Main channel** - Your private channel (self-chat) for admin control; every other agent is isolated
-- **Workflows** - Scheduled or event-driven flowcharts of typed nodes, with human approval steps, that run Claude and can message you back
+- **Workflows** - Scheduled or event-driven flowcharts of typed nodes, with human approval steps, that run an agent and can message you back
 - **Web access** - Search and fetch content
 - **Optional channels & integrations** - Add Telegram (`/add-telegram`), iMessage (`/add-imessage`), Gmail (`/add-gmail`), and more via skills
 

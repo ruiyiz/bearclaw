@@ -1,6 +1,6 @@
 # BearClaw Specification
 
-A personal Claude assistant accessible via chat platforms (WhatsApp, Telegram, iMessage) and Gmail, with persistent per-agent state, scheduled and event-driven workflows, and shared context.
+A personal AI assistant accessible via chat platforms (WhatsApp, Telegram, iMessage) and Gmail, with persistent per-agent state, scheduled and event-driven workflows, and shared context.
 
 This document describes design and architecture decisions. Not a code reference; for that, follow the source from `src/index.ts` into `src/app.ts`.
 
@@ -41,7 +41,7 @@ This document describes design and architecture decisions. Not a code reference;
 │                     ▼                              ▼               │
 │              ┌────────────────────────────────────────────┐        │
 │              │           Agent Runner (in-process)        │        │
-│              │   query() → Claude Agent SDK               │        │
+│              │   selected agent backend (Pi / Claude)     │        │
 │              │   tools: Bash, Read/Write/Edit, Web*,      │        │
 │              │          mcp__bearclaw__*, user MCPs       │        │
 │              └────────────────────────────────────────────┘        │
@@ -218,7 +218,7 @@ A boot catch-up runs the flush only. The reset is deliberately not replayed on s
 
 ## Session Management
 
-Each agent maintains a Claude Agent SDK session. `var/sessions.json` maps agent folder → session id. The session is passed to `query()` via `resume`. The transcript itself lives at `~/.claude/projects/{encodedCwd}/{sessionId}.jsonl`.
+Each agent maintains a session through the selected backend. BearClaw owns durable conversation history and session routing; backend-specific session state stays under the agent runtime directory.
 
 ### Resets
 

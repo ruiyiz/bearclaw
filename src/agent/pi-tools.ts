@@ -179,6 +179,46 @@ export function createPiTools(ctx: PiToolContext) {
     },
   });
 
+  const registerAgent = defineTool({
+    name: 'register_agent',
+    label: 'Register agent',
+    description:
+      'Register an agent for a channel chat. Available only to the main agent.',
+    parameters: Type.Object({
+      jid: Type.String(),
+      name: Type.String(),
+      folder: Type.String(),
+      trigger: Type.String(),
+      active_hours_cron: Type.Optional(
+        Type.Union([Type.String(), Type.Array(Type.String())]),
+      ),
+      active_hours_reply: Type.Optional(Type.String()),
+    }),
+    async execute(_id, args) {
+      if (!ctx.isMain)
+        return result('Only the main agent can register agents.', true);
+      writeIpcFile(path.join(ctx.ipcDir, 'tasks'), {
+        type: 'register_agent',
+        jid: args.jid,
+        name: args.name,
+        folder: args.folder,
+        trigger: args.trigger,
+        timestamp: new Date().toISOString(),
+        ...(args.active_hours_cron
+          ? {
+              activeHours: {
+                cron: args.active_hours_cron,
+                ...(args.active_hours_reply
+                  ? { autoReply: args.active_hours_reply }
+                  : {}),
+              },
+            }
+          : {}),
+      });
+      return result(`Agent "${args.name}" registered.`);
+    },
+  });
+
   const recallHistory = defineTool({
     name: 'recall_history',
     label: 'Recall history',
@@ -661,6 +701,7 @@ export function createPiTools(ctx: PiToolContext) {
   const tools = [
     sendMessage,
     emitEventTool,
+    registerAgent,
     recallHistory,
     contextListTool,
     contextReadTool,
