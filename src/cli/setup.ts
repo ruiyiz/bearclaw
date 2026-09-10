@@ -159,20 +159,20 @@ async function setup(opts: SetupOptions, ask: Prompter): Promise<number> {
 
   step(5, 'Model');
   const { MODELS, resolveModelAlias } = await import('../models.js');
-  const currentModel = settings.getSetting('DEFAULT_MODEL');
+  const currentModel = settings.getSetting('DEFAULT_MODEL_TIER');
   if (currentModel) {
-    console.log(`  ok    DEFAULT_MODEL=${currentModel}`);
+    console.log(`  ok    DEFAULT_MODEL_TIER=${currentModel}`);
   } else {
     console.log(`  choices: ${MODELS.map((m) => m.alias).join(', ')}`);
-    const alias = await ask.ask('  Default model', 'sonnet');
-    const id = resolveModelAlias(alias) ?? resolveModelAlias('sonnet');
+    const alias = await ask.ask('  Default model tier', 'default');
+    const id = resolveModelAlias(alias) ?? resolveModelAlias('default');
     if (!id) {
       console.error(`  unknown model: ${alias}`);
       return 1;
     }
-    settings.setSetting('DEFAULT_MODEL', id);
-    process.env.DEFAULT_MODEL = id;
-    console.log(`  ok    DEFAULT_MODEL=${id}`);
+    settings.setSetting('DEFAULT_MODEL_TIER', id);
+    process.env.DEFAULT_MODEL_TIER = id;
+    console.log(`  ok    DEFAULT_MODEL_TIER=${id}`);
   }
 
   step(6, 'Identity');

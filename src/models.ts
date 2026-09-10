@@ -1,17 +1,16 @@
 import { getModelCatalog } from './store/models.js';
 
-// Model catalog — the single source of truth for selectable models, their
-// aliases, and context-window sizes. Ships with a built-in lineup and can be
+// Model catalog — the single source of truth for portable model tiers and
+// context-window sizes. Ships with a built-in lineup and can be
 // overridden by the model_catalog row in the config database (same shape as
 // DEFAULT_CATALOG below). A missing or malformed row falls back to the
 // default. Read at import time, so a process that has not opened the config
 // database yet gets the built-in lineup.
 
 export interface ModelSpec {
-  alias: string; // canonical alias, e.g. 'opus'
-  short?: string; // short alias, e.g. 'o'
-  id: string; // model id sent to the SDK — a family alias ('opus') resolves
-  // to the newest version of that class; a full id pins one version
+  alias: string; // portable tier, e.g. 'advanced'
+  short?: string;
+  id: string; // tier identifier; resolved to a provider model at run time
   label: string; // human-readable name
   contextWindow: number; // max input tokens
 }
@@ -28,31 +27,31 @@ interface ModelCatalog {
 const DEFAULT_CATALOG: ModelCatalog = {
   models: [
     {
-      alias: 'fable',
+      alias: 'frontier',
       short: 'f',
-      id: 'fable',
-      label: 'Claude Fable',
+      id: 'frontier',
+      label: 'Frontier',
       contextWindow: 1_000_000,
     },
     {
-      alias: 'opus',
+      alias: 'advanced',
       short: 'o',
-      id: 'opus',
-      label: 'Claude Opus',
+      id: 'advanced',
+      label: 'Advanced',
       contextWindow: 1_000_000,
     },
     {
-      alias: 'sonnet',
+      alias: 'default',
       short: 's',
-      id: 'sonnet',
-      label: 'Claude Sonnet',
+      id: 'default',
+      label: 'Default',
       contextWindow: 1_000_000,
     },
     {
-      alias: 'haiku',
+      alias: 'fast',
       short: 'h',
-      id: 'haiku',
-      label: 'Claude Haiku',
+      id: 'fast',
+      label: 'Fast',
       contextWindow: 200_000,
     },
   ],

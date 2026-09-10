@@ -47,7 +47,7 @@ test('status on a fresh install asks for everything', () => {
   assert.equal(s.whatsapp.paired, false);
   assert.equal(s.telegram.configured, false);
   assert.ok(s.models.length > 0);
-  assert.ok(s.models.some((m) => m.alias === 'sonnet'));
+  assert.ok(s.models.some((m) => m.alias === 'default'));
   assert.ok(s.timezone.length > 0);
 });
 
