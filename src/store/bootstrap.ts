@@ -7,6 +7,7 @@ import {
   BEARCLAW_HOME,
   CACHE_DIR,
   LOG_DIR,
+  PI_DIR,
   RUN_DIR,
   TMP_DIR,
   VAR_DIR,
@@ -24,6 +25,7 @@ export function ensureVarLayout(): void {
     LOG_DIR,
     TMP_DIR,
     AUTH_DIR,
+    PI_DIR,
     AGENTS_VAR_DIR,
   ]) {
     fs.mkdirSync(dir, { recursive: true });

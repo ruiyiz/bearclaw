@@ -16,11 +16,11 @@ import { TIMEZONE, agentVarDir } from '../config.js';
 import { getDb, getMessagesInRange, type StoredMessage } from '../db.js';
 import { logger } from '../logger.js';
 import type { RegisteredAgent } from '../types.js';
-import type { AgentSession } from './session.js';
+import type { StreamingAgentSession } from './session.js';
 
 export interface DailyRolloverDeps {
   registeredAgents: () => Record<string, RegisteredAgent>;
-  streamingSessions: () => Map<string, AgentSession>;
+  streamingSessions: () => Map<string, StreamingAgentSession>;
   sessions: () => Record<string, string>;
   persistSessions: () => void;
 }

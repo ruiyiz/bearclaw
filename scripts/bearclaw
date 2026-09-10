@@ -1,0 +1,21 @@
+#!/bin/sh
+# BearClaw's native SQLite dependency is built against the supported Node 24
+# runtime on this machine. Keep the global CLI independent of a newer shell
+# default Node until the dependency supports it.
+SOURCE=$0
+while [ -h "$SOURCE" ]; do
+	DIR=$(cd -P "$(dirname "$SOURCE")" && pwd)
+	SOURCE=$(readlink "$SOURCE")
+	case $SOURCE in
+	/*) ;;
+	*) SOURCE=$DIR/$SOURCE ;;
+	esac
+done
+DIR=$(cd -P "$(dirname "$SOURCE")" && pwd)
+CLI=$DIR/../dist/cli.js
+
+if [ -x /opt/homebrew/opt/node@24/bin/node ]; then
+	exec /opt/homebrew/opt/node@24/bin/node "$CLI" "$@"
+fi
+
+exec node "$CLI" "$@"

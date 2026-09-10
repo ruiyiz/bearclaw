@@ -56,6 +56,22 @@ export interface TurnResult {
   newSessionId?: string;
 }
 
+// The application and rollover code depend on this stable session contract,
+// not on a provider SDK. Claude and Pi each implement it.
+export interface StreamingAgentSession {
+  isClosed(): boolean;
+  isDraining(): boolean;
+  hasPendingTurns(): boolean;
+  getSessionId(): string | undefined;
+  markDrain(): void;
+  runTurn(prompt: string, callbacks: TurnCallbacks): Promise<TurnResult>;
+  setModel(model: string): Promise<void>;
+  setEffort(effort: EffortLevel): Promise<void>;
+  interrupt(): Promise<boolean>;
+  recentlyInterrupted(windowMs?: number): boolean;
+  close(): Promise<void>;
+}
+
 interface PendingTurn {
   resolve: (r: TurnResult) => void;
   callbacks: TurnCallbacks;
@@ -136,7 +152,7 @@ export interface SessionOptions {
   imJids?: string[];
 }
 
-export class AgentSession {
+export class AgentSession implements StreamingAgentSession {
   private readonly agent: RegisteredAgent;
   private readonly chatJid: string;
   private readonly isMain: boolean;
