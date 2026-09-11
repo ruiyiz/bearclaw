@@ -20,7 +20,7 @@ const parseMode = z.enum(['json', 'text', 'lines']);
 const agentNode = z.object({
   type: z.literal('agent'),
   prompt: z.string(),
-  model: z.string().optional(),
+  model_tier: z.enum(['fast', 'default', 'advanced', 'frontier']).optional(),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
   session: z.enum(['fresh', 'run', 'chat']).default('fresh'),
   max_turns: z.number().int().positive().optional(),

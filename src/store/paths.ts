@@ -24,6 +24,10 @@ export const RUN_DIR = path.join(VAR_DIR, 'run');
 export const LOG_DIR = path.join(VAR_DIR, 'log');
 export const TMP_DIR = path.join(VAR_DIR, 'tmp');
 export const AUTH_DIR = path.join(VAR_DIR, 'auth');
+// Pi's OAuth credentials and model cache are BearClaw-owned runtime state,
+// never global ~/.pi state. This keeps exports and permissions scoped to one
+// BearClaw installation.
+export const PI_DIR = path.join(VAR_DIR, 'pi');
 export const AGENTS_VAR_DIR = path.join(VAR_DIR, 'agents');
 
 export const MAIN_AGENT_FOLDER = 'main';
@@ -36,6 +40,7 @@ export const cacheDir = (): string => path.join(varDir(), 'cache');
 export const contextCacheDir = (): string => path.join(cacheDir(), 'context');
 export const skillsCacheDir = (): string => path.join(cacheDir(), 'skills');
 export const agentsVarDir = (): string => path.join(varDir(), 'agents');
+export const piDir = (): string => path.join(varDir(), 'pi');
 
 export const agentVarDir = (folder: string): string =>
   path.join(agentsVarDir(), folder);

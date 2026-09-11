@@ -3,6 +3,7 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  AGENT_BACKEND,
   DATA_DIR,
   DISPLAY_NAME,
   IPC_POLL_INTERVAL,
@@ -24,7 +25,10 @@ import {
   runContainerAgent,
   writeAgentsSnapshot,
 } from './agent/runner.js';
-import { AgentSession } from './agent/session.js';
+import { AgentSession, type StreamingAgentSession } from './agent/session.js';
+import { PiAgentSession } from './agent/pi-session.js';
+import { migrateModelOverrides } from './agent/backend.js';
+import { tierForModel } from './model-tiers.js';
 import type { EffortLevel } from './agent/runner.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { startTelegramChannel, TelegramChannel } from './channels/telegram.js';
@@ -80,7 +84,12 @@ import { logger } from './logger.js';
 import { initSubprocessManager } from './agent/subprocess-manager.js';
 import { startMaintenance } from './maintenance.js';
 import { startWorkflowService } from './workflows/service.js';
-import { isOnboarded } from './store/settings.js';
+import {
+  deleteSetting,
+  getSetting,
+  isOnboarded,
+  setSetting,
+} from './store/settings.js';
 import {
   describeOpenWaits,
   resolveFromCallback,
@@ -100,7 +109,7 @@ let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 let ipcWatcherRunning = false;
 const folderQueues = new Map<string, Promise<void>>();
-const streamingSessions = new Map<string, AgentSession>();
+const streamingSessions = new Map<string, StreamingAgentSession>();
 const lastAutoReply: Record<string, string> = {}; // chat_jid → ISO timestamp of last off-hours reply
 
 const channels: Channel[] = [];
@@ -134,7 +143,27 @@ function loadState(): void {
       'sessions.json migrated',
     );
   }
+  const configuredTier = getSetting('DEFAULT_MODEL_TIER');
+  const legacyDefaultModel = getSetting('DEFAULT_MODEL');
+  if (!configuredTier) {
+    const tier = tierForModel(legacyDefaultModel) ?? 'default';
+    setSetting('DEFAULT_MODEL_TIER', tier);
+    if (tierForModel(legacyDefaultModel)) deleteSetting('DEFAULT_MODEL');
+    logger.info({ tier }, 'Migrated default model to portable tier');
+  }
   agentModels = loadJson(path.join(DATA_DIR, 'models.json'), {});
+  const migratedModelFolders = migrateModelOverrides(
+    agentModels,
+    AGENT_BACKEND,
+    DEFAULT_MODEL,
+  );
+  if (migratedModelFolders.length) {
+    saveJson(path.join(DATA_DIR, 'models.json'), agentModels);
+    logger.info(
+      { folders: migratedModelFolders, model: DEFAULT_MODEL },
+      'Migrated agent model overrides to portable tiers',
+    );
+  }
   agentEfforts = loadJson(path.join(DATA_DIR, 'efforts.json'), {});
   agentRegistry = loadRegistry();
   rebuildResolved();
@@ -719,14 +748,14 @@ function imJidsForFolder(folder: string): string[] {
 function getOrCreateStreamingSession(
   agent: RegisteredAgent,
   chatJid: string,
-): AgentSession {
+): StreamingAgentSession {
   let session = streamingSessions.get(chatJid);
   if (session && (session.isClosed() || session.isDraining())) {
     streamingSessions.delete(chatJid);
     session = undefined;
   }
   if (!session) {
-    session = new AgentSession({
+    const options = {
       agent,
       chatJid,
       isMain: agent.folder === MAIN_AGENT_FOLDER,
@@ -740,7 +769,11 @@ function getOrCreateStreamingSession(
         | 'max'
         | undefined,
       imJids: imJidsForFolder(agent.folder),
-    });
+    };
+    session =
+      AGENT_BACKEND === 'pi'
+        ? new PiAgentSession(options)
+        : new AgentSession(options);
     streamingSessions.set(chatJid, session);
   }
   return session;
@@ -790,7 +823,11 @@ async function runAgent(
     // Title-gen: refresh at turn 1, 5, 20. Fire-and-forget so the user-visible
     // reply path is unaffected. setWebSessionTitleAuto rechecks `title_manual`
     // at write time so a concurrent manual rename is not overwritten.
-    if (turn.status === 'success' && isWebJid(chatJid)) {
+    if (
+      turn.status === 'success' &&
+      AGENT_BACKEND === 'claude-sdk' &&
+      isWebJid(chatJid)
+    ) {
       const folder = webFolderFromJid(chatJid);
       const sessionId = webSessionIdFromJid(chatJid);
       if (folder && sessionId) {

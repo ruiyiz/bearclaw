@@ -42,7 +42,7 @@ export const agentExecutor: Executor = async (ctx) => {
       folder,
       chatJid: '',
       prompt,
-      model: node.model,
+      model: node.model_tier,
       effort: node.effort,
       sessionId,
       outputSchema: node.output_schema,

@@ -1,5 +1,6 @@
 import { advise, formatIssue } from './checks.js';
 import { logger } from '../logger.js';
+import { tierForModel } from '../model-tiers.js';
 import {
   deleteWorkflowDefinition,
   listWorkflowDefinitions,
@@ -30,6 +31,24 @@ export interface LoadReport {
   errors: { slug: string; issues: string[] }[];
 }
 
+/** Replace provider-specific legacy node.model values with portable tiers. */
+function migrateWorkflowModelTiers(raw: Record<string, unknown>): boolean {
+  const nodes = raw.nodes;
+  if (!nodes || typeof nodes !== 'object' || Array.isArray(nodes)) return false;
+  let changed = false;
+  for (const node of Object.values(nodes as Record<string, unknown>)) {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) continue;
+    const item = node as Record<string, unknown>;
+    if (item.type !== 'agent' || typeof item.model !== 'string') continue;
+    const tier = tierForModel(item.model);
+    if (!tier) continue;
+    item.model_tier = tier;
+    delete item.model;
+    changed = true;
+  }
+  return changed;
+}
+
 // The config database is the source of truth: `workflow_definitions` holds the
 // definitions, the `workflows` table in messages.db is a runtime index.
 export function syncWorkflowDefinitions(): LoadReport {
@@ -44,7 +63,9 @@ export function syncWorkflowDefinitions(): LoadReport {
 
   for (const row of listWorkflowDefinitions()) {
     try {
-      const def = parseDefinition(JSON.parse(row.definition));
+      const raw = JSON.parse(row.definition) as Record<string, unknown>;
+      const migrated = migrateWorkflowModelTiers(raw);
+      const def = parseDefinition(raw);
       if (def.slug !== row.slug) {
         report.errors.push({
           slug: row.slug,
@@ -59,6 +80,7 @@ export function syncWorkflowDefinitions(): LoadReport {
         definition: def,
       });
       syncFileTriggers(def);
+      if (migrated) putWorkflowDefinition(def.slug, def);
       seen.add(def.slug);
       report.loaded.push(def.slug);
       const notes = advise(def);
@@ -117,7 +139,9 @@ export function syncWorkflowDefinitions(): LoadReport {
 export function saveWorkflowDefinition(
   def: WorkflowDefinition,
 ): WorkflowDefinition {
-  const validated = parseDefinition(def);
+  const raw = structuredClone(def) as Record<string, unknown>;
+  migrateWorkflowModelTiers(raw);
+  const validated = parseDefinition(raw);
   putWorkflowDefinition(validated.slug, validated);
   upsertWorkflowIndex({
     slug: validated.slug,

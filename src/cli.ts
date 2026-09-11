@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
 
 import { bootstrap } from './store/bootstrap.js';
 
@@ -50,6 +52,9 @@ Commands:
                                 Add a definition from a file
 
   whatsapp-auth                 Pair WhatsApp by QR code
+
+  pi-login                      Open Pi's login UI using BearClaw-owned
+                                credentials. Choose ChatGPT Plus/Pro (Codex).
 
 Environment:
   BEARCLAW_HOME                 Install root (default ~/.bearclaw)
@@ -208,6 +213,29 @@ async function cmdMigrateFs(argv: string[]): Promise<number> {
   }
   console.log(lines.join('\n'));
   return 0;
+}
+
+async function cmdPiLogin(argv: string[]): Promise<number> {
+  if (argv.length) return fail('pi-login takes no arguments');
+  bootstrap();
+  const { PI_DIR } = await import('./config.js');
+  const cliPath = path.join(
+    process.cwd(),
+    'node_modules',
+    '@earendil-works',
+    'pi-coding-agent',
+    'dist',
+    'cli.js',
+  );
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath], {
+      cwd: process.cwd(),
+      env: { ...process.env, PI_CODING_AGENT_DIR: PI_DIR },
+      stdio: 'inherit',
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => resolve(code ?? 1));
+  });
 }
 
 async function cmdConfig(argv: string[]): Promise<number> {
@@ -467,6 +495,8 @@ async function run(argv: string[]): Promise<number> {
       await runWhatsappAuth();
       return 0;
     }
+    case 'pi-login':
+      return cmdPiLogin(rest);
     default:
       console.error(USAGE);
       return fail(`Unknown command: ${command}`);

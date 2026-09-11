@@ -6,11 +6,13 @@ import {
   DATA_DIR,
   LOG_DIR,
   MAIN_AGENT_FOLDER,
+  PI_DIR,
   RUN_DIR,
   TMP_DIR,
   VAR_DIR,
   agentVarDir,
 } from './store/paths.js';
+import { resolveModelReference } from './model-tiers.js';
 
 export {
   AGENTS_VAR_DIR,
@@ -20,6 +22,7 @@ export {
   DATA_DIR,
   LOG_DIR,
   MAIN_AGENT_FOLDER,
+  PI_DIR,
   RUN_DIR,
   TMP_DIR,
   VAR_DIR,
@@ -86,16 +89,25 @@ export const WARM_START_BUDGET_BYTES = parseInt(
   10,
 );
 
-// Default model — used when no per-agent override is set in models.json.
+export type AgentBackend = 'claude-sdk' | 'pi';
+
+export const AGENT_BACKEND: AgentBackend =
+  process.env.AGENT_BACKEND === 'pi' ? 'pi' : 'claude-sdk';
+
+// Default model tier — used when no per-agent override is set in models.json.
 // Empty until setup writes it: the process must still boot far enough to serve
 // the setup UI, so a missing model only fails once an agent actually runs.
-export const DEFAULT_MODEL = process.env.DEFAULT_MODEL || '';
+export const DEFAULT_MODEL_TIER = process.env.DEFAULT_MODEL_TIER || 'default';
+export const DEFAULT_MODEL =
+  resolveModelReference(DEFAULT_MODEL_TIER, AGENT_BACKEND) ||
+  process.env.DEFAULT_MODEL ||
+  '';
 
 export const NO_MODEL_ERROR =
   'No model configured — finish setup at /setup or run bearclaw setup';
 
 export function requireModel(model?: string): string {
-  const resolved = model || DEFAULT_MODEL;
+  const resolved = resolveModelReference(model, AGENT_BACKEND) || DEFAULT_MODEL;
   if (!resolved) throw new Error(NO_MODEL_ERROR);
   return resolved;
 }

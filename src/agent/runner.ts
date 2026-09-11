@@ -13,6 +13,7 @@ import {
 
 import {
   AGENT_TIMEOUT,
+  AGENT_BACKEND,
   DEFAULT_MODEL,
   RUN_DIR,
   TIMEZONE,
@@ -378,6 +379,48 @@ export async function runContainerAgent(
   group: RegisteredAgent,
   input: ContainerInput,
 ): Promise<ContainerOutput> {
+  if (AGENT_BACKEND === 'pi') {
+    // Keep standalone/background and workflow runs on the selected backend as
+    // well. Pi's in-memory session is intentional here: BearClaw persists the
+    // cross-channel history and warm-starts every isolated invocation.
+    const { PiAgentSession } = await import('./pi-session.js');
+    const session = new PiAgentSession({
+      agent: group,
+      chatJid: input.chatJid,
+      model: input.model,
+      effort: input.effort,
+      isMain: input.isMain,
+      imJids: input.imJids,
+    });
+    try {
+      const prompt = input.outputSchema
+        ? `${input.prompt}\n\nReturn only a JSON value that validates against this JSON Schema:\n${JSON.stringify(input.outputSchema)}`
+        : input.prompt;
+      const turn = await session.runTurn(prompt, {
+        onText: input.onText,
+        onActivity: input.onActivity,
+      });
+      if (input.outputSchema && turn.status === 'success' && turn.result) {
+        try {
+          return {
+            ...turn,
+            structuredOutput: JSON.parse(turn.result),
+          };
+        } catch {
+          return {
+            ...turn,
+            status: 'error',
+            result: null,
+            error: 'Pi did not return valid JSON for this workflow step',
+          };
+        }
+      }
+      return turn;
+    } finally {
+      await session.close();
+    }
+  }
+
   const startTime = Date.now();
 
   const varDir = agentVarDir(group.folder);
