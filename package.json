@@ -1,6 +1,6 @@
 {
   "name": "bearclaw",
-  "version": "2026.9.10",
+  "version": "2026.9.13",
   "description": "Personal Claude assistant. Lightweight, secure, customizable.",
   "type": "module",
   "main": "dist/index.js",
@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc",
     "postbuild": "chmod +x dist/cli.js",
+    "postinstall": "sh scripts/fix-node-pty-permissions.sh",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "cli": "tsx src/cli.ts",
