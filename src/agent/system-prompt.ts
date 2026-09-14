@@ -30,6 +30,19 @@ When you run as a scheduled task (no direct user message), use mcp__bearclaw__se
 to communicate with the user. Your return value is only logged internally.
 `;
 
+const SUBPROCESSES = `
+## Running commands
+
+\`subprocess_start\` starts a command asynchronously and returns its session ID,
+not its result. For a user-facing command result:
+1. Start the command.
+2. Use \`subprocess_poll\` until it exits. Do not use \`sleep\` as a substitute.
+3. Use \`subprocess_read\` to get its output.
+4. Give the user a final text reply based on that output.
+
+Never end a turn with only subprocess tool calls when the user expects a result.
+`;
+
 const MEMORY = `
 ## Memory
 
@@ -96,6 +109,7 @@ export const SYSTEM_PROMPT = [
   RESPONSES,
   CHANNEL_FORMAT,
   SCHEDULED_TASKS,
+  SUBPROCESSES,
   MEMORY,
   VOICE,
 ]

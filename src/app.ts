@@ -699,6 +699,16 @@ async function processMessage(msg: NewMessage): Promise<void> {
           );
         }
       }
+    } else if (!sentMediaViaIpc) {
+      if (streamingMsgId && channel.deleteMessage) {
+        await channel
+          .deleteMessage(msg.chat_jid, streamingMsgId)
+          .catch(() => {});
+      }
+      await channel.sendMessage(
+        msg.chat_jid,
+        "I ran that, but couldn't produce a final reply. Please try again.",
+      );
     } else if (streamingMsgId && channel.deleteMessage) {
       await channel.deleteMessage(msg.chat_jid, streamingMsgId).catch(() => {});
     }
