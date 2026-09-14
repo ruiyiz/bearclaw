@@ -181,9 +181,8 @@ function ensureSymlink(link: string, target: string): void {
   }
 }
 
-// The agent's cwd. `context/` and `.claude/skills` are symlinks into the
-// shared mirror so every agent sees the same regenerated copies, and the SDK
-// discovers skills from the cwd rather than from ~/.bearclaw.
+// The agent's cwd. Context and provider-specific skill directories link into
+// the shared mirror so every agent sees the same regenerated copies.
 export function ensureAgentVarLayout(folder: string): void {
   const dir = agentVarDir(folder);
   fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
@@ -191,6 +190,7 @@ export function ensureAgentVarLayout(folder: string): void {
   fs.mkdirSync(skillsCacheDir(), { recursive: true });
   ensureSymlink(path.join(dir, 'context'), '../../cache/context');
   ensureSymlink(path.join(dir, '.claude', 'skills'), '../../../cache/skills');
+  ensureSymlink(path.join(dir, '.pi', 'skills'), '../../../cache/skills');
 }
 
 export function materializeAll(home?: string): void {

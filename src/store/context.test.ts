@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { after, beforeEach, test } from 'node:test';
 
+import { loadSkills } from '@earendil-works/pi-coding-agent';
+
 import { createAgent } from './agents.js';
 import { getConfigDb } from './config-db.js';
 import {
@@ -15,7 +17,7 @@ import {
   writeContextFile,
 } from './context.js';
 import { ensureAgentVarLayout, materializeContext } from './materialize.js';
-import { agentVarDir, contextCacheDir } from './paths.js';
+import { agentVarDir, contextCacheDir, skillsCacheDir } from './paths.js';
 import { withTempHome } from './testing.js';
 
 const home = withTempHome('bearclaw-context-');
@@ -24,6 +26,7 @@ after(() => home.dispose());
 beforeEach(() => {
   getConfigDb().exec('DELETE FROM agents; DELETE FROM context_files;');
   fs.rmSync(contextCacheDir(), { recursive: true, force: true });
+  fs.rmSync(skillsCacheDir(), { recursive: true, force: true });
 });
 
 const mirror = (...parts: string[]) => path.join(contextCacheDir(), ...parts);
@@ -165,6 +168,25 @@ test('the agent var layout links the mirrors into the agent cwd', () => {
     '../../../cache/skills',
   );
   assert.ok(fs.statSync(path.join(dir, '.claude', 'skills')).isDirectory());
+  assert.equal(
+    fs.readlinkSync(path.join(dir, '.pi', 'skills')),
+    '../../../cache/skills',
+  );
+  assert.ok(fs.statSync(path.join(dir, '.pi', 'skills')).isDirectory());
+
+  const summarizeSkill = path.join(skillsCacheDir(), 'summarize', 'SKILL.md');
+  fs.mkdirSync(path.dirname(summarizeSkill), { recursive: true });
+  fs.writeFileSync(
+    summarizeSkill,
+    '---\nname: summarize\ndescription: Summarize a link\n---\n',
+  );
+  const piSkills = loadSkills({
+    cwd: dir,
+    agentDir: path.join(dir, '.pi'),
+    skillPaths: [],
+    includeDefaults: true,
+  });
+  assert.ok(piSkills.skills.some((skill) => skill.name === 'summarize'));
 
   // A link left pointing somewhere else is repaired rather than kept.
   fs.unlinkSync(path.join(dir, 'context'));
