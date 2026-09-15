@@ -71,15 +71,24 @@ export const defaultDeps: EngineDeps = {
       const child = spawn('/bin/bash', ['-lc', spec.cmd], {
         cwd: spec.cwd,
         env: { ...process.env, ...spec.env },
+        detached: true,
       });
       let stdout = '';
       let stderr = '';
       let timedOut = false;
+      const killTree = () => {
+        if (!child.pid) return;
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          child.kill('SIGKILL');
+        }
+      };
       const timer = setTimeout(() => {
         timedOut = true;
-        child.kill('SIGKILL');
+        killTree();
       }, spec.timeoutMs);
-      const onAbort = () => child.kill('SIGKILL');
+      const onAbort = () => killTree();
       spec.signal.addEventListener('abort', onAbort, { once: true });
       child.stdout.on('data', (d) => (stdout += d.toString()));
       child.stderr.on('data', (d) => (stderr += d.toString()));

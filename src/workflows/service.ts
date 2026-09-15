@@ -29,7 +29,12 @@ export async function startWorkflowService(): Promise<void> {
   migrateHandlersToWorkflows();
   syncWorkflowDefinitions();
 
-  await recover();
+  // Recovery may re-run a shell or agent step that never settles. Keep that
+  // isolated from the scheduler: one orphaned run must not freeze every due
+  // trigger after a restart.
+  void recover().catch((err) => {
+    logger.error({ err }, 'workflow: recovery failed');
+  });
 
   const loop = async () => {
     try {

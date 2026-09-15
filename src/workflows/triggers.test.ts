@@ -381,7 +381,7 @@ test('on_missed alerts a stuck run but not one waiting on a person', async () =>
           on_missed: { trigger: 'schedule', expected_within: '1h' },
         },
       },
-      triggers: [{ id: 'schedule', type: 'cron', cron: '0 * * * *' }],
+      triggers: [{ id: 'schedule', type: 'cron', cron: '0 23 * * *' }],
       nodes: { step: node },
     });
 
@@ -404,6 +404,7 @@ test('on_missed alerts a stuck run but not one waiting on a person', async () =>
   assert.equal(fake.sends.length, 0);
 
   // A run still going after the window: alert.
+  fake.clock = new Date();
   const stuck = withPolicy('stuck', { type: 'transform', expr: '1' });
   syncFileTriggers(stuck);
   await fireTrigger(getTriggerRow('stuck:schedule')!);
@@ -414,4 +415,24 @@ test('on_missed alerts a stuck run but not one waiting on a person', async () =>
   await checkMissedRuns();
   assert.equal(fake.sends.length, 1);
   assert.match(fake.sends[0].text, /still running/);
+});
+
+test('on_missed does not replay a stale cron failure after a newer slot', async () => {
+  fake.clock = new Date();
+  const definition = register({
+    slug: 'stale',
+    policies: {
+      alerts: { on_missed: { trigger: 'schedule', expected_within: '1h' } },
+    },
+    triggers: [{ id: 'schedule', type: 'cron', cron: '0 * * * *' }],
+  });
+  syncFileTriggers(definition);
+  await fireTrigger(getTriggerRow('stale:schedule')!);
+  const { updateRun } = await import('./db.js');
+  updateRun(listRuns('stale')[0].id, { status: 'failed' });
+
+  fake.clock = new Date(Date.now() + 3 * 3_600_000);
+  await checkMissedRuns();
+
+  assert.equal(fake.sends.length, 0);
 });

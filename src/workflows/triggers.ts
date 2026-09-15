@@ -377,6 +377,22 @@ export async function checkMissedRuns(): Promise<void> {
 
     const run = getRun(trigger.last_run_id);
     if (!run || run.status === 'succeeded') continue;
+    if (trigger.type === 'cron' && trigger.last_fired_at) {
+      const config = trigger.config as { cron?: string; timezone?: string };
+      try {
+        if (
+          config.cron &&
+          nextCronRun(
+            config.cron,
+            new Date(trigger.last_fired_at),
+            config.timezone ?? TIMEZONE,
+          ) <= nowDate().toISOString()
+        )
+          continue;
+      } catch {
+        continue;
+      }
+    }
     // A run parked on a human step has plainly happened; its wait carries its
     // own expiry. on_missed is for slots that never got through.
     if (run.status === 'waiting') continue;
