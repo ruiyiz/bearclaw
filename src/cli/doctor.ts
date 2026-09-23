@@ -124,13 +124,20 @@ export async function collectChecks(
     );
 
     const model =
-      settings.getSetting('DEFAULT_MODEL') || process.env.DEFAULT_MODEL || '';
+      settings.getSetting('DEFAULT_MODEL_TIER') ||
+      process.env.DEFAULT_MODEL_TIER ||
+      settings.getSetting('DEFAULT_MODEL') ||
+      process.env.DEFAULT_MODEL ||
+      '';
     if (!model) {
-      add('default model', 'fail', 'DEFAULT_MODEL is not set');
+      add('default model', 'fail', 'No default model is configured');
     } else {
       const { aliasForId, resolveModelAlias } = await import('../models.js');
+      const { isModelTier } = await import('../model-tiers.js');
       const known =
-        Boolean(resolveModelAlias(model)) || aliasForId(model) !== model;
+        isModelTier(model) ||
+        Boolean(resolveModelAlias(model)) ||
+        aliasForId(model) !== model;
       add('default model', known ? 'ok' : 'warn', model);
     }
 

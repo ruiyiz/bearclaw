@@ -8,9 +8,12 @@ import {
 } from './model-tiers.js';
 
 test('maps portable tiers to the active provider', () => {
+  assert.equal(resolveModelTier('fast', 'pi'), 'pi:openai-codex/gpt-6-luna');
+  assert.equal(resolveModelTier('default', 'pi'), 'pi:openai-codex/gpt-6-sol');
+  assert.equal(resolveModelTier('advanced', 'pi'), 'pi:openai-codex/gpt-6-sol');
   assert.equal(
-    resolveModelTier('default', 'pi'),
-    'pi:openai-codex/gpt-5.6-terra',
+    resolveModelTier('frontier', 'pi'),
+    'pi:openai-codex/gpt-6-astra',
   );
   assert.equal(resolveModelTier('advanced', 'claude-sdk'), 'opus');
 });

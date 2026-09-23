@@ -109,6 +109,28 @@ describe('machineEnv', () => {
 });
 
 describe('writeLaunchAgents', () => {
+  it('uses a stable PATH link to the running Node executable', () => {
+    const bin = tempDir();
+    const nodeLink = path.join(bin, 'node');
+    fs.symlinkSync(process.execPath, nodeLink);
+    const previousPath = process.env.PATH;
+    process.env.PATH = bin;
+    try {
+      const agents = writeLaunchAgents({
+        targetDir: tempDir(),
+        home: VARS.HOME,
+        extraEnv: {},
+      });
+      for (const agent of agents) {
+        const text = fs.readFileSync(agent.target, 'utf-8');
+        assert.ok(text.includes(`<string>${nodeLink}</string>`));
+      }
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
   it('writes both plists into the target directory', () => {
     const target = tempDir();
     const agents = writeLaunchAgents({

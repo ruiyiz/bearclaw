@@ -30,6 +30,8 @@ export function getPiModelRuntime(): Promise<ModelRuntime> {
       authPath: piAuthPath(),
       modelsPath: piModelsPath(),
       modelsStorePath: piModelsStorePath(),
+      allowModelNetwork: true,
+      modelRefreshTimeoutMs: 10_000,
     });
   }
   return runtime;

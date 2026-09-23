@@ -13,9 +13,9 @@ const BUILTIN_TIER_MAPS: Record<AgentBackend, TierMap> = {
     frontier: 'fable',
   },
   pi: {
-    fast: 'pi:openai-codex/gpt-5.6-luna',
-    default: 'pi:openai-codex/gpt-5.6-terra',
-    advanced: 'pi:openai-codex/gpt-5.6-sol',
+    fast: 'pi:openai-codex/gpt-6-luna',
+    default: 'pi:openai-codex/gpt-6-sol',
+    advanced: 'pi:openai-codex/gpt-6-sol',
     frontier: 'pi:openai-codex/gpt-6-astra',
   },
 };

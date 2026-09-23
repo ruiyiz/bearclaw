@@ -325,7 +325,10 @@ async function setup(opts: SetupOptions, ask: Prompter): Promise<number> {
   step(13, 'Done');
   const ready =
     hasAuth &&
-    Boolean(settings.getSetting('DEFAULT_MODEL')) &&
+    Boolean(
+      settings.getSetting('DEFAULT_MODEL_TIER') ||
+      settings.getSetting('DEFAULT_MODEL'),
+    ) &&
     Boolean(settings.getSetting(settings.PASSWORD_HASH_KEY));
   if (ready && !settings.isOnboarded()) settings.setOnboarded();
   console.log(

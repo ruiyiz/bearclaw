@@ -88,6 +88,20 @@ export function planLaunchAgents(
   }));
 }
 
+function nodePathOnPath(): string {
+  const runningNode = fs.realpathSync(process.execPath);
+  for (const directory of (process.env.PATH ?? '').split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, 'node');
+    try {
+      if (fs.realpathSync(candidate) === runningNode) return candidate;
+    } catch {
+      // Try the next PATH entry.
+    }
+  }
+  return process.execPath;
+}
+
 export function writeLaunchAgents(
   opts: {
     targetDir?: string;
@@ -105,7 +119,7 @@ export function writeLaunchAgents(
   fs.mkdirSync(path.join(projectRoot, 'logs'), { recursive: true });
   for (const agent of agents) {
     const text = renderPlist(fs.readFileSync(agent.template, 'utf-8'), {
-      NODE_PATH: opts.nodePath ?? process.execPath,
+      NODE_PATH: opts.nodePath ?? nodePathOnPath(),
       PROJECT_ROOT: projectRoot,
       HOME: home,
       extraEnv: opts.extraEnv ?? machineEnv(home),
